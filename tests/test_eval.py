@@ -1,5 +1,5 @@
 from src.retrieval import Hit
-from scripts.eval import answer_mentions_expected_page, hit_matches_expected_page
+from scripts.eval import answer_mentions_expected_page, filter_chunks_by_doc, hit_matches_expected_page
 
 
 def test_hit_matches_expected_page_range() -> None:
@@ -12,3 +12,13 @@ def test_hit_matches_expected_page_range() -> None:
 def test_answer_mentions_expected_page() -> None:
     assert answer_mentions_expected_page("답변입니다. [출처: 제1절, p.101]", [101]) is True
     assert answer_mentions_expected_page("답변입니다. [출처: 제1절, p.101]", [100]) is False
+
+
+def test_filter_chunks_by_doc() -> None:
+    chunks = [
+        Hit(id="a", score=1.0, document="", metadata={"doc_short": "심평원"}),
+        Hit(id="b", score=1.0, document="", metadata={"doc_short": "약관"}),
+    ]
+
+    assert [chunk.id for chunk in filter_chunks_by_doc(chunks, ["약관"])] == ["b"]
+    assert filter_chunks_by_doc(chunks, None) == chunks

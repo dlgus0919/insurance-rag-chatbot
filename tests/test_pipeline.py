@@ -55,3 +55,15 @@ def test_pipeline_builds_prompt_and_returns_sources() -> None:
     assert result.answer.startswith("재진 진찰료")
     assert result.chunks[0].id == "dense"
     assert result.timing["total_ms"] >= 0
+
+
+def test_context_label_backward_compat() -> None:
+    """doc_name 없는 구 메타데이터도 context label 생성이 가능하다."""
+
+    from src.llm.prompt import _context_label
+
+    old_meta = {"page_start": 101, "page_end": 101, "volume": "제1편", "section": "재진"}
+    label = _context_label(old_meta)
+
+    assert "p.101" in label
+    assert "제1편" in label
