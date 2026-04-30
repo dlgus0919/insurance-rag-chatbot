@@ -41,6 +41,7 @@ class VectorStore:
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
         )
+        self._all_entries_cache: dict[str, Any] | None = None
 
     def upsert(
         self,
@@ -57,6 +58,7 @@ class VectorStore:
             metadatas=[_encode_metadata(metadata) for metadata in metadatas],
             documents=documents,
         )
+        self._all_entries_cache = None
 
     def query(self, query_embedding: np.ndarray, top_k: int) -> list[Hit]:
         """질의 임베딩으로 상위 검색 결과를 반환한다."""
@@ -88,3 +90,77 @@ class VectorStore:
                 )
             )
         return hits
+
+    def _all_entries(self) -> dict[str, Any]:
+        """코드 필터링용 전체 컬렉션 데이터를 캐시해 반환한다."""
+
+        if self._all_entries_cache is None:
+            self._all_entries_cache = self.collection.get(include=["documents", "metadatas", "embeddings"])
+        return self._all_entries_cache
+
+    def query_with_filter(
+        self,
+        query_embedding: np.ndarray,
+        filter_codes: list[str],
+        top_k: int,
+        prefer_non_table: bool = False,
+    ) -> list[Hit]:
+        """codes 메타데이터가 질의 코드와 정확히 일치하는 청크만 검색한다."""
+
+        if not filter_codes or top_k <= 0:
+            return []
+
+        try:
+            entries = self._all_entries()
+        except Exception:
+            return []
+
+        ids = entries.get("ids", [])
+        documents = entries.get("documents", [])
+        metadatas = entries.get("metadatas", [])
+        embeddings = entries.get("embeddings", [])
+        if not ids or embeddings is None:
+            return []
+
+        wanted_codes = {code.upper() for code in filter_codes}
+        query = np.asarray(query_embedding, dtype=np.float32)
+        if query.ndim > 1:
+            query = query.reshape(-1)
+        query_norm = np.linalg.norm(query)
+        if query_norm == 0:
+            return []
+        query = query / query_norm
+
+        candidates: list[tuple[int, dict]] = []
+        fallback_candidates: list[tuple[int, dict]] = []
+        for index, raw_meta in enumerate(metadatas):
+            metadata = _decode_metadata(raw_meta)
+            codes = {str(code).upper() for code in metadata.get("codes", [])}
+            if not codes.intersection(wanted_codes):
+                continue
+            fallback_candidates.append((index, metadata))
+            if not prefer_non_table or metadata.get("is_code_table") is not True:
+                candidates.append((index, metadata))
+
+        selected = candidates or fallback_candidates
+        if not selected:
+            return []
+
+        scored_hits: list[Hit] = []
+        for index, metadata in selected:
+            vector = np.asarray(embeddings[index], dtype=np.float32)
+            vector_norm = np.linalg.norm(vector)
+            if vector_norm == 0:
+                score = 0.0
+            else:
+                score = float(np.dot(query, vector / vector_norm))
+            scored_hits.append(
+                Hit(
+                    id=ids[index],
+                    score=score,
+                    document=documents[index] if index < len(documents) else "",
+                    metadata=metadata,
+                )
+            )
+
+        return sorted(scored_hits, key=lambda hit: hit.score, reverse=True)[:top_k]

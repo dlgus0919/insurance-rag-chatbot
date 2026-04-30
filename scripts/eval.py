@@ -16,9 +16,9 @@ from src import config
 from src.llm.prompt import SYSTEM_PROMPT, build_user_prompt
 from src.llm.ollama_client import OllamaClient
 from src.parser.chunker import Chunk
+from src.rag.pipeline import RagPipeline
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
-from src.retrieval.hybrid import rrf_fuse
 from src.retrieval.vector_store import VectorStore
 
 SMOKE_QA_PATH = ROOT / "eval" / "smoke_qa.jsonl"
@@ -64,6 +64,15 @@ def answer_mentions_expected_page(answer: str, expected_pages: list[int]) -> boo
     return False
 
 
+def answer_mentions_expected_codes(answer: str, expected_codes: list[str]) -> bool:
+    """답변 텍스트에 기대 코드가 모두 포함됐는지 확인한다."""
+
+    if not expected_codes:
+        return True
+    normalized = answer.upper()
+    return all(code.upper() in normalized for code in expected_codes)
+
+
 def filter_chunks_by_doc(chunks, doc_sources: list[str] | None):
     """doc_sources가 있으면 해당 문서 출처의 청크/검색 결과만 남긴다."""
 
@@ -93,6 +102,16 @@ def main() -> None:
     embedder = Embedder(config.EMBEDDING_MODEL)
     vector_store = VectorStore(config.CHROMA_DIR)
     bm25 = BM25Index.load(config.BM25_PATH)
+    pipeline = RagPipeline(
+        embedder=embedder,
+        vector_store=vector_store,
+        bm25=bm25,
+        llm=llm,
+        top_k_dense=config.TOP_K_DENSE,
+        top_k_bm25=config.TOP_K_BM25,
+        top_k_final=config.TOP_K_FINAL,
+        rrf_k=config.RRF_K,
+    )
     indexed_doc_sources = {metadata.get("doc_short") for metadata in bm25.metadatas if metadata.get("doc_short")}
 
     recall_hits = 0
@@ -111,10 +130,7 @@ def main() -> None:
             print(f"[{index:02d}] {item['type']} skipped({missing_label} 미인덱싱)")
             continue
 
-        query_embedding = embedder.embed_query(question)
-        dense_hits = vector_store.query(query_embedding, config.TOP_K_DENSE)
-        bm25_hits = bm25.query(question, config.TOP_K_BM25)
-        fused_hits = rrf_fuse(dense_hits, bm25_hits, top_k=8, rrf_k=config.RRF_K)
+        fused_hits = pipeline.retrieve_hits(question, top_k=8)
         fused_hits = filter_chunks_by_doc(fused_hits, doc_sources)
         chunks = [_hit_to_chunk(hit) for hit in fused_hits]
 
@@ -124,6 +140,7 @@ def main() -> None:
         prompt = build_user_prompt(question, chunks)
         answer = llm.generate(prompt, system=SYSTEM_PROMPT, temperature=0.2)
         page_ok = answer_mentions_expected_page(answer, expected_pages)
+        code_ok = answer_mentions_expected_codes(answer, item.get("expected_codes", []))
         page_hits += int(page_ok)
 
         top_pages = [
@@ -134,7 +151,8 @@ def main() -> None:
         ]
         print(
             f"[{index:02d}] {item['type']} recall={'OK' if retrieved else 'MISS'} "
-            f"page={'OK' if page_ok else 'MISS'} top_pages={top_pages}"
+            f"page={'OK' if page_ok else 'MISS'} "
+            f"code={'OK' if code_ok else 'MISS'} top_pages={top_pages}"
         )
         evaluated += 1
 

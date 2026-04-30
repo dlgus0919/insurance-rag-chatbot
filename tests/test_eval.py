@@ -1,5 +1,10 @@
 from src.retrieval import Hit
-from scripts.eval import answer_mentions_expected_page, filter_chunks_by_doc, hit_matches_expected_page
+from scripts.eval import (
+    answer_mentions_expected_codes,
+    answer_mentions_expected_page,
+    filter_chunks_by_doc,
+    hit_matches_expected_page,
+)
 
 
 def test_hit_matches_expected_page_range() -> None:
@@ -23,6 +28,11 @@ def test_answer_mentions_page_range_format() -> None:
     assert answer_mentions_expected_page("[출처: 약관, p.36-38]", [40]) is False
     assert answer_mentions_expected_page("[출처: 심평원, p.101]", [101]) is True
     assert answer_mentions_expected_page("[출처: 심평원, p.101]", [100]) is False
+
+
+def test_answer_mentions_expected_codes() -> None:
+    assert answer_mentions_expected_codes("식도조루술 코드는 q2333입니다.", ["Q2333"]) is True
+    assert answer_mentions_expected_codes("다른 코드입니다.", ["Q2333"]) is False
 
 
 def test_filter_chunks_by_doc() -> None:
