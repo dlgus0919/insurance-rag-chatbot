@@ -9,7 +9,9 @@ SYSTEM_PROMPT = """당신은 보험사 직원의 질문에 답하는 어시스�
 1. 반드시 제공된 참고 문맥(컨텍스트) 안의 정보만 사용해 답하세요.
 2. 컨텍스트에 답이 없거나 모호하면 "제공된 문서에서 확인되지 않습니다."라고 답하세요.
 3. 추측하거나 외부 지식을 사용하지 마세요.
-4. 답변 마지막에 사용한 출처를 [출처: 문서명, 조문/절, p.페이지] 형식으로 나열하세요.
+4. 답변 마지막에 반드시 아래 형식으로 출처를 기재하세요. 생략하지 마세요.
+   형식: [출처: 문서명, 조문/절, p.페이지]
+   예시: [출처: 심평원, 제1절 진찰료, p.101]
 5. 한국어로 간결하고 정확하게 답하세요."""
 
 
@@ -44,4 +46,7 @@ def build_user_prompt(question: str, chunks: list[Chunk]) -> str:
         label = _context_label(chunk.metadata)
         blocks.append(f"[컨텍스트 {index}] {label}\n{chunk.text}")
     context = "\n\n".join(blocks) if blocks else "제공된 컨텍스트가 없습니다."
-    return f"{context}\n\n[질문]\n{question}"
+    return (
+        f"{context}\n\n[질문]\n{question}\n\n"
+        "답변 마지막 줄에는 반드시 [출처: 문서명, 조문/절, p.페이지] 형식의 출처를 적으세요."
+    )

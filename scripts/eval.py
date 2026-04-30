@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -41,9 +42,26 @@ def hit_matches_expected_page(hit, expected_pages: list[int]) -> bool:
 
 
 def answer_mentions_expected_page(answer: str, expected_pages: list[int]) -> bool:
-    """답변 텍스트에 정답 페이지 번호가 언급됐는지 확인한다."""
+    """
+    답변 텍스트에 정답 페이지 번호가 언급됐는지 확인한다.
 
-    return any(f"p.{page}" in answer or f"p. {page}" in answer for page in expected_pages)
+    단일 페이지 형식(p.38)과 범위 형식(p.36-38)을 모두 인정한다.
+    범위 형식은 expected_pages 중 하나가 범위 안에 있으면 정답이다.
+    """
+
+    for page in expected_pages:
+        single_page_pattern = rf"p\.\s*{page}(?!\d)"
+        if re.search(single_page_pattern, answer):
+            return True
+
+    for match in re.finditer(r"p\.\s*(\d+)\s*-\s*(\d+)", answer):
+        range_start, range_end = int(match.group(1)), int(match.group(2))
+        if range_start > range_end:
+            range_start, range_end = range_end, range_start
+        if any(range_start <= page <= range_end for page in expected_pages):
+            return True
+
+    return False
 
 
 def filter_chunks_by_doc(chunks, doc_sources: list[str] | None):
