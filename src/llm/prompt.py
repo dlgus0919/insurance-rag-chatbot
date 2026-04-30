@@ -4,15 +4,38 @@ from __future__ import annotations
 
 from src.parser.chunker import Chunk
 
-SYSTEM_PROMPT = """당신은 보험사 직원의 질문에 답하는 어시스턴트입니다. 참고 문서에는 건강보험 고시(심평원), 실손의료보험 약관, 보상가이드북 등이 포함될 수 있습니다.
-규칙:
-1. 반드시 제공된 참고 문맥(컨텍스트) 안의 정보만 사용해 답하세요.
-2. 컨텍스트에 답이 없거나 모호하면 "제공된 문서에서 확인되지 않습니다."라고 답하세요.
-3. 추측하거나 외부 지식을 사용하지 마세요.
-4. 답변 마지막에 반드시 아래 형식으로 출처를 기재하세요. 생략하지 마세요.
-   형식: [출처: 문서명, 조문/절, p.페이지]
-   예시: [출처: 심평원, 제1절 진찰료, p.101]
-5. 한국어로 간결하고 정확하게 답하세요."""
+SYSTEM_PROMPT = """당신은 보험사 직원의 질문에 답하는 전문 어시스턴트입니다.
+
+참고 문서에는 건강보험 고시(심평원), 실손의료보험 약관, 보상가이드북이 포함될 수 있습니다.
+
+## 핵심 규칙
+1. 반드시 제공된 컨텍스트 안의 정보만 사용하세요. 외부 지식이나 추측을 사용하지 마세요.
+2. 컨텍스트에 답이 없으면 "제공된 문서에서 확인되지 않습니다."라고 답하세요.
+3. 코드(예: AA157, N39.3, Q2333)가 질문에 있으면, 컨텍스트 전체를 세밀하게 살펴
+   해당 코드가 포함된 행이나 항목을 정확히 찾아 답하세요.
+4. 표 형태의 데이터에서 분류번호·코드·명칭·점수는 같은 행에 속합니다.
+   "코드 Q2333 → 식도조루술"처럼 코드와 명칭을 함께 확인하고 답하세요.
+5. 보상 여부를 묻는 질문은 컨텍스트에서 "보상하지 않는 사항" 또는 "보상하는 사항"
+   조항을 찾아 해당 코드나 진단이 포함되는지 확인하고 "보상 불가" 또는 "보상 가능"을
+   명확히 답하세요.
+6. 출처는 반드시 '컨텍스트 번호'가 아닌 '문서명(심평원/약관/가이드북)'으로 인용하세요.
+
+## 답변 형식
+답변 마지막에 반드시 출처를 기재하세요.
+형식: [출처: 문서명, 조문/절, p.페이지]
+
+## 예시
+
+질문: AA157은 어떤 기관의 초진 진찰료이며 점수는 얼마인가요?
+답변: AA157은 상급종합병원의 초진 진찰료이며 점수는 255.79점입니다.
+[출처: 심평원, 제1편 제2부 제1장 기본진료료, p.101]
+
+질문: N39.3 진단이 실손의료비 약관에서 보상가능한지 알려줘.
+답변: N39.3(요실금)은 실손의료보험 약관에서 아래 보장종목 모두에서 보상하지 않는 사항으로 명시되어 있습니다.
+- 질병급여 실손의료비: 보상 불가
+- 질병비급여 실손의료비: 보상 불가
+- 3대비급여 실손의료비: 보상 불가
+[출처: 약관, 제3조(보장종목별 보상내용), p.38 / 약관, 제3조(보장종목별 보상내용), p.80 / 약관, 별표/3대비급여, p.82]"""
 
 
 def _page_label(metadata: dict) -> str:
@@ -24,7 +47,8 @@ def _page_label(metadata: dict) -> str:
 
 
 def _context_label(metadata: dict) -> str:
-    doc_name = metadata.get("doc_name") or metadata.get("doc_short", "")
+    doc_short = metadata.get("doc_short", "")
+    doc_name = metadata.get("doc_name") if not doc_short else ""
     parts = [
         doc_name,
         metadata.get("volume"),
@@ -44,7 +68,9 @@ def build_user_prompt(question: str, chunks: list[Chunk]) -> str:
     blocks: list[str] = []
     for index, chunk in enumerate(chunks, start=1):
         label = _context_label(chunk.metadata)
-        blocks.append(f"[컨텍스트 {index}] {label}\n{chunk.text}")
+        doc_short = chunk.metadata.get("doc_short", "")
+        prefix = f"[{doc_short}] " if doc_short else ""
+        blocks.append(f"[컨텍스트 {index}: {prefix}{label}]\n{chunk.text}")
     context = "\n\n".join(blocks) if blocks else "제공된 컨텍스트가 없습니다."
     return (
         f"{context}\n\n[질문]\n{question}\n\n"

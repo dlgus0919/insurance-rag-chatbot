@@ -38,7 +38,7 @@ class DummyLLM:
         self.prompt = ""
         self.system = ""
 
-    def generate(self, prompt: str, system: str = "", temperature: float = 0.2, num_ctx: int = 8192) -> str:
+    def generate(self, prompt: str, system: str = "", temperature: float = 0.2, num_ctx: int | None = None) -> str:
         self.prompt = prompt
         self.system = system
         return "재진 진찰료 답변입니다. [출처: 제1절 진찰료, p.88]"
@@ -51,7 +51,7 @@ def test_pipeline_builds_prompt_and_returns_sources() -> None:
     result = pipeline.answer("AA157은 무엇인가요?")
 
     assert "AA157은 무엇인가요?" in llm.prompt
-    assert "[컨텍스트 1]" in llm.prompt
+    assert "[컨텍스트 1:" in llm.prompt
     assert result.answer.startswith("재진 진찰료")
     assert result.chunks[0].id == "dense"
     assert result.timing["total_ms"] >= 0
@@ -67,3 +67,26 @@ def test_context_label_backward_compat() -> None:
 
     assert "p.101" in label
     assert "제1편" in label
+
+
+def test_context_label_prefers_doc_short_in_prompt() -> None:
+    """컨텍스트 라벨은 문서 축약명을 앞에 표시한다."""
+
+    from src.llm.prompt import build_user_prompt
+    from src.parser.chunker import Chunk
+
+    chunk = Chunk(
+        id="약관_ch_000001",
+        text="N39.3은 보상하지 않습니다.",
+        metadata={
+            "doc_short": "약관",
+            "doc_name": "신한 약관",
+            "chapter": "제3조(보장종목별 보상내용)",
+            "page_start": 38,
+            "page_end": 38,
+        },
+    )
+
+    prompt = build_user_prompt("N39.3은 보상되나요?", [chunk])
+
+    assert "[컨텍스트 1: [약관] 제3조(보장종목별 보상내용) / p.38]" in prompt

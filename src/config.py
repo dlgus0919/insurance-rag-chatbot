@@ -55,7 +55,9 @@ BM25_PATH: Path = ROOT_DIR / "data" / "index" / "bm25.pkl"
 
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "qwen2.5:3b-instruct")
+OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma3:4b")
+OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
+RERANKER_ENABLED: bool = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
 
 TOP_K_DENSE: int = int(os.getenv("TOP_K_DENSE", "12"))
 TOP_K_BM25: int = int(os.getenv("TOP_K_BM25", "12"))
