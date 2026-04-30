@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import statistics
 import sys
 import time
@@ -22,33 +23,51 @@ from src.retrieval.vector_store import VectorStore
 
 
 def build_chunks() -> None:
-    """PDF에서 chunks.jsonl을 생성한다."""
+    """PDF_SOURCES를 순회하며 통합 chunks.jsonl을 생성한다."""
 
     started = time.perf_counter()
-    print("[M1] PDF 파싱 시작")
-    pages = parse_pdf(config.PDF_PATH)
-    non_empty_pages = sum(1 for _, text in pages if text.strip())
-    print(f"[M1] PDF 파싱 완료: 전체 {len(pages)}페이지, 텍스트 {non_empty_pages}페이지")
+    all_chunks = []
+    id_offset = 0
+    doc_counts: Counter[str] = Counter()
 
-    print("[M1] 청킹 시작")
-    chunks = chunk_pages(
-        pages,
-        target_chars=config.CHUNK_TARGET_CHARS,
-        overlap_chars=config.CHUNK_OVERLAP_CHARS,
-    )
-    save_chunks(chunks, config.CHUNKS_PATH)
+    print("[M6] 멀티 문서 PDF 파싱 시작")
+    for source in config.PDF_SOURCES:
+        if not source.path.exists():
+            print(f"[M6] 파일 없음, 건너뜀: {source.path.name}")
+            continue
 
-    lengths = [chunk.metadata["char_count"] for chunk in chunks]
-    code_chunks = sum(1 for chunk in chunks if chunk.metadata["codes"])
+        print(f"[M6] PDF 파싱: {source.doc_short} ({source.path.name})")
+        pages = parse_pdf(source.path)
+        non_empty_pages = sum(1 for _, text in pages if text.strip())
+        print(f"[M6] {source.doc_short}: 전체 {len(pages)}페이지, 텍스트 {non_empty_pages}페이지")
+
+        chunks = chunk_pages(
+            pages,
+            target_chars=config.CHUNK_TARGET_CHARS,
+            overlap_chars=config.CHUNK_OVERLAP_CHARS,
+            doc_source=source,
+            id_offset=id_offset,
+        )
+        all_chunks.extend(chunks)
+        id_offset += len(chunks)
+        doc_counts[source.doc_short] = len(chunks)
+        print(f"[M6] {source.doc_short}: {len(chunks):,} 청크")
+
+    save_chunks(all_chunks, config.CHUNKS_PATH)
+
+    lengths = [chunk.metadata["char_count"] for chunk in all_chunks]
+    code_chunks = sum(1 for chunk in all_chunks if chunk.metadata["codes"])
     avg_len = statistics.mean(lengths) if lengths else 0
-    ratio = (code_chunks / len(chunks) * 100) if chunks else 0
+    ratio = (code_chunks / len(all_chunks) * 100) if all_chunks else 0
     elapsed = time.perf_counter() - started
 
-    print(f"[M1] 청킹 완료: {config.CHUNKS_PATH}")
-    print(f"[M1] 청크 수: {len(chunks):,}")
-    print(f"[M1] 평균 길이: {avg_len:.1f}자")
-    print(f"[M1] 코드 포함 청크: {code_chunks:,}개 ({ratio:.1f}%)")
-    print(f"[M1] 소요 시간: {elapsed:.1f}초")
+    print(f"[M6] 청킹 완료: {config.CHUNKS_PATH}")
+    for doc_short, count in doc_counts.items():
+        print(f"[M6] 문서별 청크 수: {doc_short}={count:,}")
+    print(f"[M6] 전체 청크 수: {len(all_chunks):,}")
+    print(f"[M6] 평균 길이: {avg_len:.1f}자")
+    print(f"[M6] 코드 포함 청크: {code_chunks:,}개 ({ratio:.1f}%)")
+    print(f"[M6] 소요 시간: {elapsed:.1f}초")
 
 
 def build_index() -> None:

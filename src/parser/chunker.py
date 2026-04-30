@@ -6,13 +6,31 @@ import json
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, TYPE_CHECKING
 
-VOLUME_RE = re.compile(r"^\s*제\s*\d+\s*편\b.*")
-PART_RE = re.compile(r"^\s*제\s*\d+\s*부\b.*")
-CHAPTER_RE = re.compile(r"^\s*제\s*\d+\s*장\b.*")
-SECTION_RE = re.compile(r"^\s*제\s*\d+\s*절\b.*")
-CODE_RE = re.compile(r"\b[A-Z]{1,3}\d{2,5}\b|\b\d{5}\b")
+if TYPE_CHECKING:
+    from src.config import PdfSource
+
+PROC_CODE_RE = re.compile(r"\b[A-Z]{1,3}\d{2,5}\b|\b\d{5}\b")
+ICD10_RE = re.compile(r"\b[A-Z]\d{2}(?:\.\d{1,2})?\b")
+
+POLICY_ACT_HEADERS = {
+    "volume": re.compile(r"^\s*제\s*\d+\s*편\b.*"),
+    "part": re.compile(r"^\s*제\s*\d+\s*부\b.*"),
+    "chapter": re.compile(r"^\s*제\s*\d+\s*장\b.*"),
+    "section": re.compile(r"^\s*제\s*\d+\s*절\b.*"),
+}
+INSURANCE_HEADERS = {
+    "volume": re.compile(r"^\s*제\s*\d+\s*관\b.*"),
+    "chapter": re.compile(r"^\s*제\s*\d+\s*조\s*[（(（].*[）)）]"),
+    "section": re.compile(r"^\s*\[?별표\s*\d*\]?\s*\S+"),
+}
+GUIDE_BOOK_HEADERS = POLICY_ACT_HEADERS
+HEADER_PATTERNS = {
+    "policy_act": POLICY_ACT_HEADERS,
+    "insurance_policy": INSURANCE_HEADERS,
+    "guide_book": GUIDE_BOOK_HEADERS,
+}
 
 
 @dataclass
@@ -54,15 +72,12 @@ def _normalize_line(line: str) -> str:
     return re.sub(r"[ \t]+", " ", line).strip()
 
 
-def _header_level(line: str) -> str | None:
-    if VOLUME_RE.match(line):
-        return "volume"
-    if PART_RE.match(line):
-        return "part"
-    if CHAPTER_RE.match(line):
-        return "chapter"
-    if SECTION_RE.match(line):
-        return "section"
+def _header_level(line: str, doc_type: str = "policy_act") -> str | None:
+    patterns = HEADER_PATTERNS.get(doc_type, POLICY_ACT_HEADERS)
+    for level in ("volume", "part", "chapter", "section"):
+        pattern = patterns.get(level)
+        if pattern is not None and pattern.match(line):
+            return level
     return None
 
 
@@ -80,13 +95,9 @@ def _update_context(context: dict, level: str, value: str) -> dict:
 
 
 def _extract_codes(text: str) -> list[str]:
-    seen: set[str] = set()
-    codes: list[str] = []
-    for code in CODE_RE.findall(text):
-        if code not in seen:
-            seen.add(code)
-            codes.append(code)
-    return codes
+    codes = set(PROC_CODE_RE.findall(text))
+    codes.update(ICD10_RE.findall(text))
+    return sorted(codes)
 
 
 def _sliding_windows(text: str, target_chars: int, overlap_chars: int) -> list[str]:
@@ -140,7 +151,14 @@ def _split_text(text: str, target_chars: int, overlap_chars: int) -> list[str]:
     return chunks
 
 
-def _make_chunk(chunk_id: str, text: str, context: dict, page_start: int, page_end: int) -> Chunk:
+def _make_chunk(
+    chunk_id: str,
+    text: str,
+    context: dict,
+    page_start: int,
+    page_end: int,
+    doc_source: "PdfSource | None" = None,
+) -> Chunk:
     metadata = {
         "page_start": page_start,
         "page_end": page_end,
@@ -151,6 +169,14 @@ def _make_chunk(chunk_id: str, text: str, context: dict, page_start: int, page_e
         "codes": _extract_codes(text),
         "char_count": len(text),
     }
+    if doc_source is not None:
+        metadata.update(
+            {
+                "doc_short": doc_source.doc_short,
+                "doc_name": doc_source.doc_name,
+                "doc_type": doc_source.doc_type,
+            }
+        )
     return Chunk(id=chunk_id, text=text, metadata=metadata)
 
 
@@ -158,16 +184,23 @@ def chunk_pages(
     pages: list[tuple[int, str]],
     target_chars: int = 800,
     overlap_chars: int = 100,
+    doc_source: "PdfSource | None" = None,
+    id_offset: int = 0,
 ) -> list[Chunk]:
     """
     페이지를 순회하며 편/부/장/절 컨텍스트를 청크 메타데이터에 전파한다.
 
+    doc_source가 주어지면 문서 유형별 헤더 패턴을 사용하고 청크
+    메타데이터에 문서 출처 정보를 포함한다. doc_source가 없으면
+    기존 policy_act 패턴과 ch_000001 형식 ID를 유지한다.
+    
     새 헤더가 나오면 기존 버퍼를 닫고 헤더 레벨에 맞게 하위 컨텍스트를
     초기화한다. 긴 청크는 빈 줄 단위로 나누고, 그래도 길면 슬라이딩
     윈도우를 적용한다.
     """
 
     chunks: list[Chunk] = []
+    doc_type = doc_source.doc_type if doc_source is not None else "policy_act"
     context: dict = {"volume": None, "part": None, "chapter": None, "section": None}
     buffer_lines: list[str] = []
     buffer_context = dict(context)
@@ -183,8 +216,11 @@ def chunk_pages(
             buffer_has_body = False
             return
         for piece in _split_text(text, target_chars, overlap_chars):
-            chunk_id = f"ch_{len(chunks) + 1:06d}"
-            chunks.append(_make_chunk(chunk_id, piece, buffer_context, page_start, page_end))
+            if doc_source is None:
+                chunk_id = f"ch_{len(chunks) + 1:06d}"
+            else:
+                chunk_id = f"{doc_source.doc_short}_ch_{id_offset + len(chunks):06d}"
+            chunks.append(_make_chunk(chunk_id, piece, buffer_context, page_start, page_end, doc_source))
         buffer_lines = []
         page_start = None
         page_end = None
@@ -199,7 +235,7 @@ def chunk_pages(
                     buffer_lines.append("")
                 continue
 
-            level = _header_level(line)
+            level = _header_level(line, doc_type)
             if level is not None:
                 if buffer_has_body:
                     flush()
