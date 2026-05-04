@@ -1,5 +1,9 @@
+import csv
+import io
+import json
+
 from src.parser.chunker import Chunk
-from src.ui.streamlit_app import _format_timing, _source_title
+from src.ui.streamlit_app import _export_csv, _export_json, _export_txt, _format_timing, _source_title, _turn_count
 
 
 def test_source_title_includes_pdf_filename_hierarchy_and_page() -> None:
@@ -40,3 +44,45 @@ def test_format_timing() -> None:
     timing = {"retrieve_ms": 12.3, "llm_ms": 456.7, "total_ms": 1234.5}
 
     assert _format_timing(timing) == "검색 12ms · 생성 457ms · 합계 1.2초"
+
+
+def test_export_helpers_include_messages_timing_and_sources() -> None:
+    chunk = Chunk(
+        id="약관_ch_000001",
+        text="본문",
+        metadata={
+            "doc_short": "약관",
+            "pdf_filename": "2.약관_신한 이지로운 실손의료보험(무배당)_20260401_0325.pdf",
+            "chapter": "제4조(보상하지 않는 사항)",
+            "page_start": 12,
+            "page_end": 12,
+        },
+    )
+    messages = [
+        {"role": "user", "content": "N39.3 보상 여부는?"},
+        {
+            "role": "assistant",
+            "content": "요실금은 보상하지 않습니다.",
+            "chunks": [chunk],
+            "timing": {"retrieve_ms": 100.4, "llm_ms": 1200.6, "total_ms": 1500.0},
+        },
+    ]
+
+    txt = _export_txt(messages, "gemma3:4b")
+    csv_text = _export_csv(messages, "gemma3:4b")
+    json_data = json.loads(_export_json(messages, "gemma3:4b"))
+
+    assert _turn_count(messages) == 1
+    assert "[Q1] N39.3 보상 여부는?" in txt
+    assert "[A1] 요실금은 보상하지 않습니다." in txt
+    assert "[약관]" in txt
+
+    rows = list(csv.reader(io.StringIO(csv_text)))
+    assert rows[0] == ["순번", "역할", "내용", "모델", "검색(ms)", "생성(ms)", "합계(초)", "주요출처"]
+    assert rows[1][:3] == ["1", "Q", "N39.3 보상 여부는?"]
+    assert rows[2][1:4] == ["A", "요실금은 보상하지 않습니다.", "gemma3:4b"]
+    assert "[약관]" in rows[2][7]
+
+    assert json_data["model"] == "gemma3:4b"
+    assert json_data["turn_count"] == 1
+    assert json_data["messages"][1]["sources"][0]["doc_short"] == "약관"
