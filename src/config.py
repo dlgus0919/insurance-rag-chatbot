@@ -47,6 +47,7 @@ PDF_SOURCES: list[PdfSource] = [
         doc_short="가이드북",
     ),
 ]
+DOC_SHORT_ORDER: list[str] = [source.doc_short for source in PDF_SOURCES]
 
 PDF_PATH: Path = PDF_SOURCES[0].path
 CHUNKS_PATH: Path = ROOT_DIR / "data" / "processed" / "chunks.jsonl"

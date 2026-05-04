@@ -85,6 +85,15 @@ def _prefer_exact_text_hits(hits: list[Hit], terms: list[str]) -> list[Hit]:
     return sorted(hits, key=lambda hit: any(term in hit.document for term in terms), reverse=True)
 
 
+def _filter_hits_by_doc(hits: list[Hit], doc_filter: list[str] | None) -> list[Hit]:
+    """선택된 문서 축약명에 해당하는 Hit만 남긴다."""
+
+    if not doc_filter:
+        return hits
+    allowed = set(doc_filter)
+    return [hit for hit in hits if hit.metadata.get("doc_short") in allowed]
+
+
 class RagPipeline:
     """Dense 검색, BM25, RRF, Ollama 생성을 순서대로 실행한다."""
 
@@ -115,7 +124,7 @@ class RagPipeline:
             enabled = config.RERANKER_ENABLED if reranker_enabled is None else reranker_enabled
             self.reranker = build_reranker(enabled=enabled)
 
-    def retrieve_hits(self, question: str, top_k: int | None = None) -> list[Hit]:
+    def retrieve_hits(self, question: str, top_k: int | None = None, doc_filter: list[str] | None = None) -> list[Hit]:
         """질문에 대한 최종 검색 후보를 반환한다."""
 
         final_top_k = top_k or self.top_k_final
@@ -132,15 +141,17 @@ class RagPipeline:
                 filter_codes=query_codes,
                 top_k=half_k,
                 prefer_non_table=True,
+                doc_filter=doc_filter,
             )
             general_top_k = half_k if code_hits else self.top_k_dense
-            general_hits = self.vector_store.query(query_embedding, general_top_k)
+            general_hits = self.vector_store.query(query_embedding, general_top_k, doc_filter=doc_filter)
             seen = {hit.id for hit in code_hits}
             dense_hits = code_hits + [hit for hit in general_hits if hit.id not in seen]
         else:
-            dense_hits = self.vector_store.query(query_embedding, self.top_k_dense)
+            dense_hits = self.vector_store.query(query_embedding, self.top_k_dense, doc_filter=doc_filter)
 
         bm25_hits = self.bm25.query(retrieval_query, self.top_k_bm25)
+        bm25_hits = _filter_hits_by_doc(bm25_hits, doc_filter)
         dense_hits = [hit for hit in dense_hits if not _is_low_value_wide_range(hit)]
         bm25_hits = [hit for hit in bm25_hits if not _is_low_value_wide_range(hit)]
         reranker_enabled = self.reranker is not None and getattr(self.reranker, "enabled", True)
@@ -161,13 +172,19 @@ class RagPipeline:
             return self.reranker.rerank(question, fused_hits, top_k=final_top_k)
         return fused_hits[:final_top_k]
 
-    def answer(self, question: str, temperature: float = 0.2, top_k: int | None = None) -> RagAnswer:
+    def answer(
+        self,
+        question: str,
+        temperature: float = 0.2,
+        top_k: int | None = None,
+        doc_filter: list[str] | None = None,
+    ) -> RagAnswer:
         """질문에 대해 답변과 사용한 청크를 반환한다."""
 
         total_started = time.perf_counter()
         retrieve_started = time.perf_counter()
 
-        fused_hits = self.retrieve_hits(question, top_k=top_k)
+        fused_hits = self.retrieve_hits(question, top_k=top_k, doc_filter=doc_filter)
         chunks = [_hit_to_chunk(hit) for hit in fused_hits]
 
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000

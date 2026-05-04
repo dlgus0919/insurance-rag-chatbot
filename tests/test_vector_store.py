@@ -22,6 +22,24 @@ def test_vector_store_upsert_and_query_roundtrip(tmp_path) -> None:
     assert hits[0].document == "재진 진찰료"
 
 
+def test_query_applies_doc_filter(tmp_path) -> None:
+    store = VectorStore(tmp_path / "chroma")
+    store.upsert(
+        ids=["hira", "policy"],
+        embeddings=np.asarray([[1.0, 0.0], [0.9, 0.1]], dtype=np.float32),
+        metadatas=[
+            {"doc_short": "심평원", "page_start": 1, "page_end": 1, "codes": ["AA157"]},
+            {"doc_short": "약관", "page_start": 2, "page_end": 2, "codes": ["N39.3"]},
+        ],
+        documents=["진찰료", "요실금 보상하지 않는 사항"],
+    )
+
+    hits = store.query(np.asarray([1.0, 0.0], dtype=np.float32), top_k=2, doc_filter=["약관"])
+
+    assert [hit.id for hit in hits] == ["policy"]
+    assert hits[0].metadata["doc_short"] == "약관"
+
+
 def test_query_with_filter_matches_codes_exactly(tmp_path) -> None:
     store = VectorStore(tmp_path / "chroma")
     store.upsert(
@@ -38,6 +56,29 @@ def test_query_with_filter_matches_codes_exactly(tmp_path) -> None:
     hits = store.query_with_filter(np.asarray([1.0, 0.0], dtype=np.float32), ["Q2333"], top_k=5)
 
     assert [hit.id for hit in hits] == ["ch_000001"]
+
+
+def test_query_with_filter_applies_doc_filter(tmp_path) -> None:
+    store = VectorStore(tmp_path / "chroma")
+    store.upsert(
+        ids=["hira", "policy"],
+        embeddings=np.asarray([[1.0, 0.0], [0.8, 0.2]], dtype=np.float32),
+        metadatas=[
+            {"doc_short": "심평원", "page_start": 1, "page_end": 1, "codes": ["AA157"]},
+            {"doc_short": "약관", "page_start": 2, "page_end": 2, "codes": ["AA157"]},
+        ],
+        documents=["AA157 상급종합병원", "AA157 관련 약관 설명"],
+    )
+
+    hits = store.query_with_filter(
+        np.asarray([1.0, 0.0], dtype=np.float32),
+        ["AA157"],
+        top_k=5,
+        doc_filter=["약관"],
+    )
+
+    assert [hit.id for hit in hits] == ["policy"]
+    assert hits[0].metadata["doc_short"] == "약관"
 
 
 def test_query_with_filter_boosts_code_row_over_range_mention(tmp_path) -> None:

@@ -44,6 +44,23 @@ def _has_code_row(document: str, codes: set[str]) -> bool:
     return False
 
 
+def _doc_filter_where(doc_filter: list[str] | None) -> dict | None:
+    """Chroma where 절에 사용할 문서 필터를 만든다."""
+
+    if not doc_filter:
+        return None
+    values = list(dict.fromkeys(doc_filter))
+    if not values:
+        return None
+    return {"doc_short": {"$in": values}}
+
+
+def _matches_doc_filter(metadata: dict, doc_filter: list[str] | None) -> bool:
+    """메타데이터가 선택 문서 필터에 포함되는지 확인한다."""
+
+    return not doc_filter or metadata.get("doc_short") in set(doc_filter)
+
+
 class VectorStore:
     """ChromaDB PersistentClient를 사용하는 벡터 저장소."""
 
@@ -83,18 +100,23 @@ class VectorStore:
         )
         self._all_entries_cache = None
 
-    def query(self, query_embedding: np.ndarray, top_k: int) -> list[Hit]:
+    def query(self, query_embedding: np.ndarray, top_k: int, doc_filter: list[str] | None = None) -> list[Hit]:
         """질의 임베딩으로 상위 검색 결과를 반환한다."""
 
         embedding = np.asarray(query_embedding, dtype=np.float32)
         if embedding.ndim == 1:
             embedding = embedding.reshape(1, -1)
 
-        result: dict[str, Any] = self.collection.query(
-            query_embeddings=embedding.tolist(),
-            n_results=top_k,
-            include=["documents", "metadatas", "distances"],
-        )
+        where = _doc_filter_where(doc_filter)
+        query_kwargs: dict[str, Any] = {
+            "query_embeddings": embedding.tolist(),
+            "n_results": top_k,
+            "include": ["documents", "metadatas", "distances"],
+        }
+        if where is not None:
+            query_kwargs["where"] = where
+
+        result: dict[str, Any] = self.collection.query(**query_kwargs)
         ids = result.get("ids", [[]])[0]
         documents = result.get("documents", [[]])[0]
         metadatas = result.get("metadatas", [[]])[0]
@@ -127,6 +149,7 @@ class VectorStore:
         filter_codes: list[str],
         top_k: int,
         prefer_non_table: bool = True,
+        doc_filter: list[str] | None = None,
     ) -> list[Hit]:
         """codes 메타데이터가 질의 코드와 정확히 일치하는 청크만 검색한다."""
 
@@ -158,6 +181,8 @@ class VectorStore:
         fallback_candidates: list[tuple[int, dict]] = []
         for index, raw_meta in enumerate(metadatas):
             metadata = _decode_metadata(raw_meta)
+            if not _matches_doc_filter(metadata, doc_filter):
+                continue
             codes = {str(code).upper() for code in metadata.get("codes", [])}
             if not codes.intersection(wanted_codes):
                 continue

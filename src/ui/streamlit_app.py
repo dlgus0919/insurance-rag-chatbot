@@ -21,10 +21,12 @@ from src import config
 from src.llm.ollama_client import OllamaClient
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.rag.pipeline import RagPipeline, _hit_to_chunk
+from src.rag.quick_code import generate_quick_code_answer, retrieve_quick_code_chunks
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
 from src.retrieval.reranker import build_reranker
 from src.retrieval.vector_store import VectorStore
+from src.ui.pdf_view import open_pdf_in_native_viewer, render_pdf_page_png
 from src.utils.logger import (
     EVENT_ANSWER,
     EVENT_APP_ACCESS,
@@ -36,6 +38,7 @@ from src.utils.logger import (
 )
 
 _DOC_SHORT_TO_FILENAME: dict[str, str] = {source.doc_short: source.path.name for source in config.PDF_SOURCES}
+SEARCH_MODES = ["일반 질의", "퀵 코드 검색", "약관 정형 검색"]
 
 
 def _source_title(chunk) -> str:
@@ -207,6 +210,82 @@ def _log_export(fmt: str, session_id: str, model: str, turn_count: int) -> None:
     log_event(EVENT_EXPORT, session_id, {"format": fmt, "model": model, "turn_count": turn_count})
 
 
+def _source_log_payload(chunks: list, limit: int = 3) -> list[dict]:
+    """감사 로그에 저장할 출처 요약을 만든다."""
+
+    return [
+        {
+            "id": chunk.id,
+            "doc_short": chunk.metadata.get("doc_short"),
+            "page_start": chunk.metadata.get("page_start"),
+            "page_end": chunk.metadata.get("page_end"),
+        }
+        for chunk in chunks[:limit]
+    ]
+
+
+def _timing_log_payload(timing: dict) -> dict:
+    """응답 시간 값을 로그용으로 반올림한다."""
+
+    return {
+        "retrieve_ms": round(timing["retrieve_ms"], 1),
+        "llm_ms": round(timing["llm_ms"], 1),
+        "total_ms": round(timing["total_ms"], 1),
+    }
+
+
+def _build_question_log_details(
+    mode: str,
+    model: str,
+    top_k: int,
+    temperature: float,
+    selected_docs: list[str],
+    question: str,
+    extra: dict | None = None,
+) -> dict:
+    """질문 이벤트 로그 상세 정보를 만든다."""
+
+    details = {
+        "mode": mode,
+        "model": model,
+        "top_k": top_k,
+        "temperature": temperature,
+        "selected_docs": selected_docs,
+        "question": question,
+    }
+    if extra:
+        details.update(extra)
+    return details
+
+
+def _build_answer_log_details(
+    mode: str,
+    model: str,
+    selected_docs: list[str],
+    answer: str,
+    timing: dict,
+    chunks: list,
+    question: str | None = None,
+    extra: dict | None = None,
+) -> dict:
+    """답변 이벤트 로그 상세 정보를 만든다."""
+
+    details = {
+        "mode": mode,
+        "model": model,
+        "selected_docs": selected_docs,
+        "answer_preview": answer[:200],
+        "timing": _timing_log_payload(timing),
+        "chunk_count": len(chunks),
+        "sources": _source_log_payload(chunks),
+    }
+    if question is not None:
+        details["question_preview"] = question[:120]
+    if extra:
+        details.update(extra)
+    return details
+
+
 @st.cache_data(ttl=30)
 def _get_available_models() -> list[str]:
     """Ollama에 설치된 권장 모델 목록을 반환한다."""
@@ -265,7 +344,7 @@ def _get_pipeline(model: str, top_k: int) -> RagPipeline:
     )
 
 
-def render_sources(chunks, timing: dict | None = None) -> None:
+def render_sources(chunks, timing: dict | None = None, key_prefix: str = "sources") -> None:
     """답변 출처 청크를 expander 안에 표시한다."""
 
     with st.expander("📄 출처 보기"):
@@ -273,6 +352,29 @@ def render_sources(chunks, timing: dict | None = None) -> None:
             st.markdown(f"**{index}. {_source_title(chunk)}**")
             preview = chunk.text[:500] + ("..." if len(chunk.text) > 500 else "")
             st.text(preview)
+
+            pdf_filename = chunk.metadata.get("pdf_filename")
+            page_start = chunk.metadata.get("page_start")
+            if pdf_filename and page_start is not None:
+                pdf_path = config.ROOT_DIR / pdf_filename
+                safe_key = f"{key_prefix}_{index}_{chunk.id}"
+                preview_key = f"_pdf_prev_{safe_key}"
+
+                col_prev, col_open = st.columns(2)
+                with col_prev:
+                    if st.button("📄 페이지 미리보기", key=f"prev_btn_{safe_key}", use_container_width=True):
+                        st.session_state[preview_key] = not st.session_state.get(preview_key, False)
+                with col_open:
+                    if st.button("📂 PDF 열기", key=f"open_btn_{safe_key}", use_container_width=True):
+                        ok, msg = open_pdf_in_native_viewer(pdf_path)
+                        (st.success if ok else st.warning)(msg)
+
+                if st.session_state.get(preview_key):
+                    try:
+                        img = render_pdf_page_png(str(pdf_path), int(page_start))
+                        st.image(img, caption=f"{pdf_filename} p.{page_start}", use_container_width=True)
+                    except Exception as exc:
+                        st.error(f"페이지를 불러올 수 없습니다: {exc}")
             st.divider()
 
 
@@ -283,13 +385,18 @@ def render_timing(timing: dict | None) -> None:
         st.caption(_format_timing(timing))
 
 
-def _stream_answer(pipeline: RagPipeline, question: str, temperature: float) -> tuple[str, list, dict]:
+def _stream_answer(
+    pipeline: RagPipeline,
+    question: str,
+    temperature: float,
+    doc_filter: list[str] | None = None,
+) -> tuple[str, list, dict]:
     """검색 후 LLM 스트리밍 답변을 렌더링하고 결과를 반환한다."""
 
     total_started = time.perf_counter()
     with st.spinner("관련 문서 검색 중..."):
         retrieve_started = time.perf_counter()
-        hits = pipeline.retrieve_hits(question)
+        hits = pipeline.retrieve_hits(question, doc_filter=doc_filter)
         chunks = [_hit_to_chunk(hit) for hit in hits]
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
 
@@ -306,6 +413,96 @@ def _stream_answer(pipeline: RagPipeline, question: str, temperature: float) -> 
     llm_ms = (time.perf_counter() - llm_started) * 1000
     total_ms = (time.perf_counter() - total_started) * 1000
     return answer, chunks, {"retrieve_ms": retrieve_ms, "llm_ms": llm_ms, "total_ms": total_ms}
+
+
+def _handle_quick_code(
+    procedure_name: str,
+    include_summary: bool,
+    include_coverage: bool,
+    pipeline: RagPipeline,
+    model: str,
+    temperature: float,
+    session_id: str,
+    selected_docs: list[str],
+) -> None:
+    """퀵 코드 검색 폼 제출을 처리한다."""
+
+    question = f"퀵 코드 검색: {procedure_name}"
+    options = {"summary": include_summary, "coverage": include_coverage}
+    st.session_state.messages.append({"role": "user", "content": question})
+    log_event(
+        EVENT_QUESTION,
+        session_id,
+        _build_question_log_details(
+            mode="quick_code",
+            model=model,
+            top_k=6,
+            temperature=0.0,
+            selected_docs=selected_docs,
+            question=procedure_name,
+            extra={"options": options},
+        ),
+    )
+
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    total_started = time.perf_counter()
+    with st.chat_message("assistant"):
+        try:
+            with st.spinner("코드 후보 검색 중..."):
+                retrieve_started = time.perf_counter()
+                chunks, applied_doc_filter = retrieve_quick_code_chunks(
+                    pipeline,
+                    procedure_name,
+                    include_coverage,
+                    selected_docs,
+                )
+                retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
+
+            llm_started = time.perf_counter()
+            answer = generate_quick_code_answer(
+                pipeline,
+                procedure_name,
+                chunks,
+                include_summary,
+                include_coverage,
+                temperature=0.0,
+            )
+            answer = append_retrieved_source_citations(answer, chunks)
+            llm_ms = (time.perf_counter() - llm_started) * 1000
+        except RuntimeError as exc:
+            st.error(str(exc))
+            return
+
+        total_ms = (time.perf_counter() - total_started) * 1000
+        timing = {"retrieve_ms": retrieve_ms, "llm_ms": llm_ms, "total_ms": total_ms}
+        st.markdown(answer)
+        render_sources(chunks, key_prefix=f"quick_{len(st.session_state.messages)}")
+        render_timing(timing)
+
+    log_event(
+        EVENT_ANSWER,
+        session_id,
+        _build_answer_log_details(
+            mode="quick_code",
+            model=model,
+            selected_docs=applied_doc_filter,
+            answer=answer,
+            timing=timing,
+            chunks=chunks,
+            question=procedure_name,
+            extra={"options": options},
+        ),
+    )
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": answer,
+            "chunks": chunks,
+            "timing": timing,
+        }
+    )
 
 
 def main() -> None:
@@ -335,6 +532,16 @@ def main() -> None:
         )
         top_k = st.slider("Top-K", min_value=4, max_value=12, value=8)
         temperature = st.slider("온도", min_value=0.0, max_value=0.7, value=0.2, step=0.1)
+
+        st.divider()
+        st.markdown("**검색 대상 문서**")
+        selected_docs = []
+        for doc_short in config.DOC_SHORT_ORDER:
+            if st.checkbox(doc_short, value=True, key=f"doc_filter_{doc_short}"):
+                selected_docs.append(doc_short)
+        if not selected_docs:
+            st.warning("최소 1개 문서를 선택해주세요.")
+
         if st.button("대화 초기화"):
             st.session_state.messages = []
             st.rerun()
@@ -382,25 +589,65 @@ def main() -> None:
         st.error(str(exc))
         pipeline = None
 
-    for message in st.session_state.messages:
+    for message_index, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             if message["role"] == "assistant":
                 if message.get("chunks"):
-                    render_sources(message["chunks"])
+                    render_sources(message["chunks"], key_prefix=f"history_{message_index}")
                 render_timing(message.get("timing"))
+
+    search_mode = st.radio("검색 모드", SEARCH_MODES, horizontal=True, key="search_mode")
+    if not selected_docs:
+        st.info("검색 대상 문서를 1개 이상 선택하면 질문할 수 있습니다.")
+        return
+
+    if search_mode == "약관 정형 검색":
+        st.info("약관 정형 검색은 M14에서 제공됩니다.")
+        return
+
+    if search_mode == "퀵 코드 검색":
+        with st.form("quick_code_form", clear_on_submit=False):
+            procedure_name = st.text_input("시술/수술명", placeholder="예: 식도조루술")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                opt_summary = st.checkbox("분류·점수·산정지침 요약", value=True)
+            with col_b:
+                opt_coverage = st.checkbox("실손 약관 기준 보상가능 여부", value=False)
+            submitted = st.form_submit_button("코드 검색", type="primary", use_container_width=True)
+
+        if submitted:
+            if not procedure_name.strip():
+                st.warning("시술/수술명을 입력해주세요.")
+                return
+            if pipeline is None:
+                st.error("검색 파이프라인을 사용할 수 없습니다.")
+                return
+            _handle_quick_code(
+                procedure_name.strip(),
+                opt_summary,
+                opt_coverage,
+                pipeline,
+                model,
+                temperature,
+                session_id,
+                selected_docs,
+            )
+        return
 
     question = st.chat_input("질문을 입력하세요")
     if question and pipeline is not None:
         log_event(
             EVENT_QUESTION,
             session_id,
-            {
-                "model": model,
-                "top_k": top_k,
-                "temperature": temperature,
-                "question": question,
-            },
+            _build_question_log_details(
+                mode="general",
+                model=model,
+                top_k=top_k,
+                temperature=temperature,
+                selected_docs=selected_docs,
+                question=question,
+            ),
         )
         st.session_state.messages.append({"role": "user", "content": question})
         with st.chat_message("user"):
@@ -408,36 +655,25 @@ def main() -> None:
 
         with st.chat_message("assistant"):
             try:
-                answer, chunks, timing = _stream_answer(pipeline, question, temperature)
+                answer, chunks, timing = _stream_answer(pipeline, question, temperature, doc_filter=selected_docs)
             except RuntimeError as exc:
                 st.error(str(exc))
                 return
-            render_sources(chunks)
+            render_sources(chunks, key_prefix=f"current_{len(st.session_state.messages)}")
             render_timing(timing)
 
         log_event(
             EVENT_ANSWER,
             session_id,
-            {
-                "model": model,
-                "question_preview": question[:120],
-                "answer_preview": answer[:200],
-                "timing": {
-                    "retrieve_ms": round(timing["retrieve_ms"], 1),
-                    "llm_ms": round(timing["llm_ms"], 1),
-                    "total_ms": round(timing["total_ms"], 1),
-                },
-                "chunk_count": len(chunks),
-                "sources": [
-                    {
-                        "id": chunk.id,
-                        "doc_short": chunk.metadata.get("doc_short"),
-                        "page_start": chunk.metadata.get("page_start"),
-                        "page_end": chunk.metadata.get("page_end"),
-                    }
-                    for chunk in chunks[:3]
-                ],
-            },
+            _build_answer_log_details(
+                mode="general",
+                model=model,
+                selected_docs=selected_docs,
+                answer=answer,
+                timing=timing,
+                chunks=chunks,
+                question=question,
+            ),
         )
         st.session_state.messages.append(
             {

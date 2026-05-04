@@ -19,25 +19,40 @@ class DummyEmbedder:
 class DummyVectorStore:
     def __init__(self):
         self.filter_calls = []
+        self.query_calls = []
 
-    def query(self, query_embedding, top_k: int):
+    def query(self, query_embedding, top_k: int, doc_filter: list[str] | None = None):
+        self.query_calls.append((top_k, doc_filter))
         return [
             Hit(
                 id="dense",
                 score=0.9,
                 document="AA157 재진 진찰료 관련 문장",
-                metadata={"page_start": 88, "page_end": 88, "section": "제1절 진찰료"},
+                metadata={"doc_short": "심평원", "page_start": 88, "page_end": 88, "section": "제1절 진찰료"},
             )
         ]
 
-    def query_with_filter(self, query_embedding, filter_codes: list[str], top_k: int, prefer_non_table: bool = True):
-        self.filter_calls.append((filter_codes, top_k, prefer_non_table))
+    def query_with_filter(
+        self,
+        query_embedding,
+        filter_codes: list[str],
+        top_k: int,
+        prefer_non_table: bool = True,
+        doc_filter: list[str] | None = None,
+    ):
+        self.filter_calls.append((filter_codes, top_k, prefer_non_table, doc_filter))
         return [
             Hit(
                 id="code",
                 score=0.95,
                 document="AA157 상급종합병원 초진 진찰료 255.79점",
-                metadata={"page_start": 101, "page_end": 101, "section": "제1절 진찰료", "codes": ["AA157"]},
+                metadata={
+                    "doc_short": "심평원",
+                    "page_start": 101,
+                    "page_end": 101,
+                    "section": "제1절 진찰료",
+                    "codes": ["AA157"],
+                },
             )
         ]
 
@@ -49,7 +64,13 @@ class DummyBM25:
                 id="dense",
                 score=3.0,
                 document="AA157 재진 진찰료 관련 문장",
-                metadata={"page_start": 88, "page_end": 88, "section": "제1절 진찰료"},
+                metadata={"doc_short": "심평원", "page_start": 88, "page_end": 88, "section": "제1절 진찰료"},
+            ),
+            Hit(
+                id="policy",
+                score=2.0,
+                document="약관 청크",
+                metadata={"doc_short": "약관", "page_start": 38, "page_end": 38},
             )
         ]
 
@@ -131,8 +152,27 @@ def test_code_query_uses_filtered_dense_hits() -> None:
 
     hits = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=8)
 
-    assert vector_store.filter_calls == [(["AA157"], 6, True)]
+    assert vector_store.filter_calls == [(["AA157"], 6, True, None)]
     assert hits[0].id == "code"
+
+
+def test_doc_filter_flows_to_vector_store_and_filters_bm25() -> None:
+    vector_store = DummyVectorStore()
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        vector_store,
+        DummyBM25(),
+        DummyLLM(),
+        top_k_dense=12,
+        top_k_final=8,
+        reranker_enabled=False,
+    )
+
+    hits = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=8, doc_filter=["심평원"])
+
+    assert vector_store.filter_calls == [(["AA157"], 6, True, ["심평원"])]
+    assert vector_store.query_calls == [(6, ["심평원"])]
+    assert all(hit.metadata.get("doc_short") == "심평원" for hit in hits)
 
 
 def test_reranker_receives_expanded_rrf_pool() -> None:

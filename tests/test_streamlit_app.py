@@ -3,7 +3,16 @@ import io
 import json
 
 from src.parser.chunker import Chunk
-from src.ui.streamlit_app import _export_csv, _export_json, _export_txt, _format_timing, _source_title, _turn_count
+from src.ui.streamlit_app import (
+    _build_answer_log_details,
+    _build_question_log_details,
+    _export_csv,
+    _export_json,
+    _export_txt,
+    _format_timing,
+    _source_title,
+    _turn_count,
+)
 
 
 def test_source_title_includes_pdf_filename_hierarchy_and_page() -> None:
@@ -86,3 +95,42 @@ def test_export_helpers_include_messages_timing_and_sources() -> None:
     assert json_data["model"] == "gemma3:4b"
     assert json_data["turn_count"] == 1
     assert json_data["messages"][1]["sources"][0]["doc_short"] == "약관"
+
+
+def test_question_log_details_include_mode_and_selected_docs() -> None:
+    details = _build_question_log_details(
+        mode="general",
+        model="gemma3:4b",
+        top_k=8,
+        temperature=0.2,
+        selected_docs=["심평원"],
+        question="AA157은?",
+    )
+
+    assert details["mode"] == "general"
+    assert details["selected_docs"] == ["심평원"]
+    assert details["question"] == "AA157은?"
+
+
+def test_answer_log_details_include_sources_and_extra_options() -> None:
+    chunk = Chunk(
+        id="심평원_ch_000001",
+        text="본문",
+        metadata={"doc_short": "심평원", "page_start": 101, "page_end": 101},
+    )
+
+    details = _build_answer_log_details(
+        mode="quick_code",
+        model="gemma3:4b",
+        selected_docs=["심평원", "약관"],
+        answer="[코드] Q2333",
+        timing={"retrieve_ms": 1.2, "llm_ms": 3.4, "total_ms": 4.6},
+        chunks=[chunk],
+        question="식도조루술",
+        extra={"options": {"summary": True, "coverage": False}},
+    )
+
+    assert details["mode"] == "quick_code"
+    assert details["question_preview"] == "식도조루술"
+    assert details["sources"][0]["doc_short"] == "심평원"
+    assert details["options"] == {"summary": True, "coverage": False}
