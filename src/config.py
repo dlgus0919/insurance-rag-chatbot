@@ -59,7 +59,9 @@ OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma3:4b")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 RERANKER_ENABLED: bool = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
 OLLAMA_CANDIDATE_MODELS: list[str] = [
+    "exaone3.5:7.8b",
     "exaone3.5:7.8b-instruct",
+    "timHan/llama3korean8B4QKM:latest",   # llama-3-Korean-Bllossom-8B Q4_K_M (커뮤니티 업로드)
     "qwen2.5:7b-instruct",
     "qwen2.5:14b-instruct",
     "gemma3:4b",
