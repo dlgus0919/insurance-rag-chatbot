@@ -20,6 +20,12 @@ if str(ROOT) not in sys.path:
 from src import config
 from src.llm.ollama_client import OllamaClient
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
+from src.rag.insurance_form import (
+    COVERAGE_TOPICS,
+    InsuranceFormInput,
+    generate_insurance_form_answer,
+    retrieve_insurance_form_chunks,
+)
 from src.rag.pipeline import RagPipeline, _hit_to_chunk
 from src.rag.quick_code import generate_quick_code_answer, retrieve_quick_code_chunks
 from src.retrieval.bm25 import BM25Index
@@ -39,6 +45,11 @@ from src.utils.logger import (
 
 _DOC_SHORT_TO_FILENAME: dict[str, str] = {source.doc_short: source.path.name for source in config.PDF_SOURCES}
 SEARCH_MODES = ["일반 질의", "퀵 코드 검색", "약관 정형 검색"]
+INSURANCE_SUB_MODES = {
+    "보상가능 여부 판정": "coverage_judgment",
+    "약관 조문 검색": "clause_lookup",
+    "키워드/시술명 검색": "keyword_search",
+}
 
 
 def _source_title(chunk) -> str:
@@ -286,6 +297,20 @@ def _build_answer_log_details(
     return details
 
 
+def _insurance_form_log_input(form: InsuranceFormInput) -> dict:
+    """약관 정형 검색 입력값을 감사 로그용으로 축약한다."""
+
+    payload = {
+        "primary": form.primary,
+        "coverage_topics": form.coverage_topics or [],
+        "article_number": form.article_number,
+        "include_appendix": form.include_appendix,
+    }
+    if form.situation_note:
+        payload["situation_note_preview"] = form.situation_note[:200]
+    return payload
+
+
 @st.cache_data(ttl=30)
 def _get_available_models() -> list[str]:
     """Ollama에 설치된 권장 모델 목록을 반환한다."""
@@ -505,6 +530,132 @@ def _handle_quick_code(
     )
 
 
+def _handle_insurance_form(
+    form: InsuranceFormInput,
+    pipeline: RagPipeline,
+    model: str,
+    session_id: str,
+    selected_docs: list[str],
+) -> None:
+    """약관 정형 검색 폼 제출을 처리한다."""
+
+    sub_mode_label = {value: key for key, value in INSURANCE_SUB_MODES.items()}[form.mode]
+    question = f"약관 정형 검색({sub_mode_label}): {form.primary}"
+    applied_doc_filter = list(dict.fromkeys(["약관"] + selected_docs))
+    log_extra = {
+        "sub_mode": form.mode,
+        "form_input": _insurance_form_log_input(form),
+    }
+
+    st.session_state.messages.append({"role": "user", "content": question})
+    log_event(
+        EVENT_QUESTION,
+        session_id,
+        _build_question_log_details(
+            mode="insurance_form",
+            model=model,
+            top_k=8,
+            temperature=0.1,
+            selected_docs=applied_doc_filter,
+            question=form.primary,
+            extra=log_extra,
+        ),
+    )
+
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    total_started = time.perf_counter()
+    with st.chat_message("assistant"):
+        try:
+            with st.spinner("약관 조항 검색 중..."):
+                retrieve_started = time.perf_counter()
+                chunks, applied_doc_filter = retrieve_insurance_form_chunks(
+                    pipeline,
+                    form,
+                    extra_doc_filter=selected_docs,
+                )
+                retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
+
+            llm_started = time.perf_counter()
+            answer = generate_insurance_form_answer(pipeline, form, chunks, temperature=0.1)
+            llm_ms = (time.perf_counter() - llm_started) * 1000
+        except RuntimeError as exc:
+            st.error(str(exc))
+            return
+
+        total_ms = (time.perf_counter() - total_started) * 1000
+        timing = {"retrieve_ms": retrieve_ms, "llm_ms": llm_ms, "total_ms": total_ms}
+        st.markdown(answer)
+        render_sources(chunks, key_prefix=f"insurance_{len(st.session_state.messages)}")
+        render_timing(timing)
+
+    log_event(
+        EVENT_ANSWER,
+        session_id,
+        _build_answer_log_details(
+            mode="insurance_form",
+            model=model,
+            selected_docs=applied_doc_filter,
+            answer=answer,
+            timing=timing,
+            chunks=chunks,
+            question=form.primary,
+            extra=log_extra,
+        ),
+    )
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": answer,
+            "chunks": chunks,
+            "timing": timing,
+        }
+    )
+
+
+def render_insurance_form_panel() -> tuple[InsuranceFormInput | None, bool]:
+    """약관 정형 검색 입력 패널을 렌더링하고 제출 값을 반환한다."""
+
+    sub_mode = st.radio("시나리오", list(INSURANCE_SUB_MODES.keys()), horizontal=True, key="insurance_sub_mode")
+    sub_key = INSURANCE_SUB_MODES[sub_mode]
+
+    with st.form("insurance_form", clear_on_submit=False):
+        coverage_topics: list[str] | None = None
+        situation_note: str | None = None
+        article_number: str | None = None
+        include_appendix = False
+
+        if sub_key == "coverage_judgment":
+            primary = st.text_input("진단코드 또는 시술명", placeholder="예: N39.3")
+            coverage_topics = st.multiselect("보장종목", COVERAGE_TOPICS, default=COVERAGE_TOPICS)
+            situation_note = st.text_area("상황 메모(옵션)", "")
+        elif sub_key == "clause_lookup":
+            primary = st.text_input("키워드", placeholder="예: 보상하지 않는 사항")
+            col_a, col_b = st.columns(2)
+            with col_a:
+                article_number = st.text_input("조문번호(옵션, 숫자만)", "")
+            with col_b:
+                include_appendix = st.checkbox("별표 포함", value=False)
+        else:
+            primary = st.text_input("키워드", placeholder="예: 도수치료")
+
+        submitted = st.form_submit_button("검색", type="primary", use_container_width=True)
+
+    if not submitted:
+        return None, False
+
+    form = InsuranceFormInput(
+        mode=sub_key,
+        primary=primary.strip(),
+        coverage_topics=coverage_topics,
+        situation_note=(situation_note or "").strip() or None,
+        article_number=(article_number or "").strip() or None,
+        include_appendix=include_appendix,
+    )
+    return form, True
+
+
 def main() -> None:
     st.set_page_config(page_title="보험 고시 문서 RAG 챗봇")
 
@@ -603,7 +754,18 @@ def main() -> None:
         return
 
     if search_mode == "약관 정형 검색":
-        st.info("약관 정형 검색은 M14에서 제공됩니다.")
+        form, submitted = render_insurance_form_panel()
+        if submitted:
+            if form is None or not form.primary:
+                st.warning("검색어를 입력해주세요.")
+                return
+            if form.mode == "coverage_judgment" and not form.coverage_topics:
+                st.warning("보장종목을 1개 이상 선택해주세요.")
+                return
+            if pipeline is None:
+                st.error("검색 파이프라인을 사용할 수 없습니다.")
+                return
+            _handle_insurance_form(form, pipeline, model, session_id, selected_docs)
         return
 
     if search_mode == "퀵 코드 검색":

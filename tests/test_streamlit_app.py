@@ -3,6 +3,7 @@ import io
 import json
 
 from src.parser.chunker import Chunk
+from src.rag.insurance_form import InsuranceFormInput
 from src.ui.streamlit_app import (
     _build_answer_log_details,
     _build_question_log_details,
@@ -10,6 +11,7 @@ from src.ui.streamlit_app import (
     _export_json,
     _export_txt,
     _format_timing,
+    _insurance_form_log_input,
     _source_title,
     _turn_count,
 )
@@ -134,3 +136,18 @@ def test_answer_log_details_include_sources_and_extra_options() -> None:
     assert details["question_preview"] == "식도조루술"
     assert details["sources"][0]["doc_short"] == "심평원"
     assert details["options"] == {"summary": True, "coverage": False}
+
+
+def test_insurance_form_log_input_truncates_situation_note() -> None:
+    form = InsuranceFormInput(
+        mode="coverage_judgment",
+        primary="N39.3",
+        coverage_topics=["질병급여"],
+        situation_note="가" * 250,
+    )
+
+    payload = _insurance_form_log_input(form)
+
+    assert payload["primary"] == "N39.3"
+    assert payload["coverage_topics"] == ["질병급여"]
+    assert len(payload["situation_note_preview"]) == 200
