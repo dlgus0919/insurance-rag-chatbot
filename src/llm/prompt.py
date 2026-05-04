@@ -60,6 +60,58 @@ def _context_label(metadata: dict) -> str:
     return " / ".join(str(part) for part in parts if part)
 
 
+def format_source_citation(metadata: dict) -> str:
+    """메타데이터를 표준 출처 표기로 변환한다."""
+
+    doc_short = metadata.get("doc_short") or metadata.get("doc_name") or "문서"
+    hierarchy = " / ".join(
+        str(part)
+        for part in [
+            metadata.get("volume"),
+            metadata.get("part"),
+            metadata.get("chapter"),
+            metadata.get("section"),
+        ]
+        if part
+    )
+    label = f"{doc_short}, {hierarchy}, {_page_label(metadata)}" if hierarchy else f"{doc_short}, {_page_label(metadata)}"
+    return f"[출처: {label}]"
+
+
+def append_retrieved_source_citations(answer: str, chunks: list[Chunk], max_sources: int = 3) -> str:
+    """LLM 답변 하단에 검색 기반 출처를 보강한다."""
+
+    citations: list[str] = []
+    seen: set[tuple] = set()
+    for chunk in chunks:
+        metadata = chunk.metadata
+        key = (
+            metadata.get("doc_short"),
+            metadata.get("volume"),
+            metadata.get("part"),
+            metadata.get("chapter"),
+            metadata.get("section"),
+            metadata.get("page_start"),
+            metadata.get("page_end"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        citation = format_source_citation(metadata)
+        if citation in answer:
+            continue
+        citations.append(citation)
+        if len(citations) >= max_sources:
+            break
+
+    if not citations:
+        return answer
+    citation_block = " ".join(citations)
+    if citation_block in answer:
+        return answer
+    return f"{answer.rstrip()}\n{citation_block}"
+
+
 def build_user_prompt(question: str, chunks: list[Chunk]) -> str:
     """
     검색 청크를 컨텍스트 블록으로 나열하고 마지막에 질문을 붙인다.

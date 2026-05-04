@@ -159,6 +159,7 @@ def _make_chunk(
     page_end: int,
     doc_source: "PdfSource | None" = None,
 ) -> Chunk:
+    codes = _extract_codes(text)
     metadata = {
         "page_start": page_start,
         "page_end": page_end,
@@ -166,7 +167,8 @@ def _make_chunk(
         "part": context.get("part"),
         "chapter": context.get("chapter"),
         "section": context.get("section"),
-        "codes": _extract_codes(text),
+        "codes": codes,
+        "is_code_table": len(codes) >= 5,
         "char_count": len(text),
     }
     if doc_source is not None:

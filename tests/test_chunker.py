@@ -30,6 +30,20 @@ def test_header_context_and_codes_are_propagated() -> None:
     assert metadata["page_start"] == 1
     assert metadata["page_end"] == 1
     assert set(metadata["codes"]) == {"AA157", "10100"}
+    assert metadata["is_code_table"] is False
+
+
+def test_code_dense_chunk_is_marked_as_code_table() -> None:
+    sample = [
+        (
+            1,
+            "AA100 항목\nAA101 항목\nAA102 항목\nAA103 항목\nAA104 항목",
+        )
+    ]
+
+    chunks = chunk_pages(sample, target_chars=500, overlap_chars=50)
+
+    assert chunks[0].metadata["is_code_table"] is True
 
 
 def test_section_change_splits_chunks_on_same_page() -> None:
@@ -101,6 +115,7 @@ def test_icd10_code_extraction() -> None:
     assert "N39.3" in codes
     assert "N39.4" in codes
     assert "R32" in codes
+    assert chunks[0].metadata["is_code_table"] is False
 
 
 def test_chunk_id_includes_doc_short() -> None:

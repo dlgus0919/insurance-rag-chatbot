@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -15,6 +16,8 @@ def _encode_metadata(metadata: dict) -> dict:
     codes = encoded.get("codes")
     if isinstance(codes, list):
         encoded["codes"] = ",".join(str(code) for code in codes)
+    if isinstance(encoded.get("is_code_table"), bool):
+        encoded["is_code_table"] = "true" if encoded["is_code_table"] else "false"
     return {key: value for key, value in encoded.items() if value is not None}
 
 
@@ -23,13 +26,28 @@ def _decode_metadata(metadata: dict | None) -> dict:
     codes = decoded.get("codes", "")
     if isinstance(codes, str):
         decoded["codes"] = [code for code in codes.split(",") if code]
+    is_code_table = decoded.get("is_code_table")
+    if isinstance(is_code_table, str):
+        decoded["is_code_table"] = is_code_table.lower() == "true"
+    elif "is_code_table" not in decoded:
+        decoded["is_code_table"] = False
     return decoded
+
+
+def _has_code_row(document: str, codes: set[str]) -> bool:
+    """코드가 표 행의 핵심 위치에 있는지 확인한다."""
+
+    for code in codes:
+        pattern = rf"(^|\n)\s*(?:[가-힣]?-?\d+(?:-\d+)?\s+)?{re.escape(code)}(?![A-Z0-9.])"
+        if re.search(pattern, document):
+            return True
+    return False
 
 
 class VectorStore:
     """ChromaDB PersistentClient를 사용하는 벡터 저장소."""
 
-    def __init__(self, persist_dir: Path, collection_name: str = "insurance"):
+    def __init__(self, persist_dir: Path, collection_name: str = "insurance", reset: bool = False):
         try:
             import chromadb
         except ImportError as exc:  # pragma: no cover - 환경 의존
@@ -37,6 +55,11 @@ class VectorStore:
 
         persist_dir.mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(path=str(persist_dir))
+        if reset:
+            try:
+                self.client.delete_collection(collection_name)
+            except Exception:
+                pass
         self.collection = self.client.get_or_create_collection(
             name=collection_name,
             metadata={"hnsw:space": "cosine"},
@@ -103,7 +126,7 @@ class VectorStore:
         query_embedding: np.ndarray,
         filter_codes: list[str],
         top_k: int,
-        prefer_non_table: bool = False,
+        prefer_non_table: bool = True,
     ) -> list[Hit]:
         """codes 메타데이터가 질의 코드와 정확히 일치하는 청크만 검색한다."""
 
@@ -154,6 +177,8 @@ class VectorStore:
                 score = 0.0
             else:
                 score = float(np.dot(query, vector / vector_norm))
+            if _has_code_row(documents[index] if index < len(documents) else "", wanted_codes):
+                score += 0.25
             scored_hits.append(
                 Hit(
                     id=ids[index],

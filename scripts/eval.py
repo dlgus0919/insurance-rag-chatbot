@@ -13,7 +13,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src import config
-from src.llm.prompt import SYSTEM_PROMPT, build_user_prompt
+from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.llm.ollama_client import OllamaClient
 from src.parser.chunker import Chunk
 from src.rag.pipeline import RagPipeline
@@ -139,6 +139,7 @@ def main() -> None:
 
         prompt = build_user_prompt(question, chunks)
         answer = llm.generate(prompt, system=SYSTEM_PROMPT, temperature=0.2)
+        answer = append_retrieved_source_citations(answer, chunks)
         page_ok = answer_mentions_expected_page(answer, expected_pages)
         code_ok = answer_mentions_expected_codes(answer, item.get("expected_codes", []))
         page_hits += int(page_ok)

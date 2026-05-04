@@ -1,6 +1,6 @@
 import numpy as np
 
-from src.rag.pipeline import RagPipeline, _extract_query_codes
+from src.rag.pipeline import RagPipeline, _expand_retrieval_query, _extract_query_codes, _is_low_value_wide_range
 from src.retrieval import Hit
 
 
@@ -23,7 +23,7 @@ class DummyVectorStore:
             )
         ]
 
-    def query_with_filter(self, query_embedding, filter_codes: list[str], top_k: int, prefer_non_table: bool = False):
+    def query_with_filter(self, query_embedding, filter_codes: list[str], top_k: int, prefer_non_table: bool = True):
         self.filter_calls.append((filter_codes, top_k, prefer_non_table))
         return [
             Hit(
@@ -78,7 +78,7 @@ def test_pipeline_builds_prompt_and_returns_sources() -> None:
     assert "AA157은 무엇인가요?" in llm.prompt
     assert "[컨텍스트 1:" in llm.prompt
     assert result.answer.startswith("재진 진찰료")
-    assert result.chunks[0].id == "dense"
+    assert result.chunks[0].id == "code"
     assert result.timing["total_ms"] >= 0
 
 
@@ -86,6 +86,13 @@ def test_extract_query_codes_preserves_order_and_deduplicates() -> None:
     codes = _extract_query_codes("AA157과 N39.3, AA157 및 q2333을 확인")
 
     assert codes == ["AA157", "N39.3", "Q2333"]
+
+
+def test_expand_retrieval_query_for_three_major_non_covered_items() -> None:
+    expanded = _expand_retrieval_query("실손의료보험 약관에서 3대비급여에 해당하는 항목은 무엇인가요?")
+
+    assert "도수치료" in expanded
+    assert "자기공명영상진단" in expanded
 
 
 def test_code_query_uses_filtered_dense_hits() -> None:
@@ -102,8 +109,8 @@ def test_code_query_uses_filtered_dense_hits() -> None:
 
     hits = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=8)
 
-    assert vector_store.filter_calls == [(["AA157"], 6, False)]
-    assert any(hit.id == "code" for hit in hits)
+    assert vector_store.filter_calls == [(["AA157"], 6, True)]
+    assert hits[0].id == "code"
 
 
 def test_reranker_receives_expanded_rrf_pool() -> None:
@@ -123,6 +130,17 @@ def test_reranker_receives_expanded_rrf_pool() -> None:
     assert reranker.calls[0][2] == 1
     assert len(reranker.calls[0][1]) == 2
     assert len(hits) == 1
+
+
+def test_low_value_wide_range_detection() -> None:
+    hit = Hit(
+        id="toc",
+        score=1.0,
+        document="목차성 짧은 청크",
+        metadata={"page_start": 8, "page_end": 31, "char_count": 168},
+    )
+
+    assert _is_low_value_wide_range(hit) is True
 
 
 def test_context_label_backward_compat() -> None:
@@ -158,3 +176,40 @@ def test_context_label_prefers_doc_short_in_prompt() -> None:
     prompt = build_user_prompt("N39.3은 보상되나요?", [chunk])
 
     assert "[컨텍스트 1: [약관] 제3조(보장종목별 보상내용) / p.38]" in prompt
+
+
+def test_append_retrieved_source_citations_adds_top_pages() -> None:
+    """검색 출처를 답변 하단에 보강한다."""
+
+    from src.llm.prompt import append_retrieved_source_citations
+    from src.parser.chunker import Chunk
+
+    chunks = [
+        Chunk(
+            id="심평원_ch_000166",
+            text="AA157 (5) 상급종합병원 255.79",
+            metadata={"doc_short": "심평원", "section": "제1절 기본진료료", "page_start": 101, "page_end": 101},
+        )
+    ]
+
+    answer = append_retrieved_source_citations("AA157 답변입니다.", chunks)
+
+    assert "[출처: 심평원, 제1절 기본진료료, p.101]" in answer
+
+
+def test_append_retrieved_source_citations_skips_existing_citation() -> None:
+    """이미 있는 출처 표기는 중복 추가하지 않는다."""
+
+    from src.llm.prompt import append_retrieved_source_citations
+    from src.parser.chunker import Chunk
+
+    chunk = Chunk(
+        id="심평원_ch_000166",
+        text="AA157 (5) 상급종합병원 255.79",
+        metadata={"doc_short": "심평원", "section": "제1절 기본진료료", "page_start": 101, "page_end": 101},
+    )
+    citation = "[출처: 심평원, 제1절 기본진료료, p.101]"
+
+    answer = append_retrieved_source_citations(f"AA157 답변입니다.\n{citation}", [chunk])
+
+    assert answer.count(citation) == 1

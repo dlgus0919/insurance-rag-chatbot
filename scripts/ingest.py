@@ -33,7 +33,10 @@ def build_chunks() -> None:
     print("[M6] 멀티 문서 PDF 파싱 시작")
     for source in config.PDF_SOURCES:
         if not source.path.exists():
-            print(f"[M6] 파일 없음, 건너뜀: {source.path.name}")
+            if source.doc_short == "가이드북":
+                print(f"[M10] 보상가이드북 파일 없음, 건너뜀: {source.path.name}")
+            else:
+                print(f"[M6] 파일 없음, 건너뜀: {source.path.name}")
             continue
 
         print(f"[M6] PDF 파싱: {source.doc_short} ({source.path.name})")
@@ -104,7 +107,7 @@ def build_index() -> None:
     print(f"[M2] 문서 임베딩 완료: {embeddings.shape} ({embed_elapsed:.1f}초)")
 
     print("[M2] ChromaDB 저장 시작")
-    vector_store = VectorStore(config.CHROMA_DIR)
+    vector_store = VectorStore(config.CHROMA_DIR, reset=True)
     vector_store.upsert(ids, embeddings, metadatas, texts)
     print(f"[M2] ChromaDB 저장 완료: {config.CHROMA_DIR}")
 

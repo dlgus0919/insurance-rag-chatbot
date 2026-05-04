@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 
 from src import config
-from src.llm.prompt import SYSTEM_PROMPT, build_user_prompt
+from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.parser.chunker import Chunk
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
@@ -44,6 +44,28 @@ def _extract_query_codes(question: str) -> list[str]:
     return codes
 
 
+def _expand_retrieval_query(question: str) -> str:
+    """검색 안정성을 위해 명세 범위의 동의어를 보강한다."""
+
+    normalized = question.replace(" ", "")
+    asks_items = any(keyword in question for keyword in ["항목", "무엇", "해당"])
+    if "3대비급여" in normalized and asks_items:
+        terms = "도수치료 체외충격파치료 증식치료 주사료 자기공명영상진단 MRI MRA 용어 정의"
+        return f"{question} {terms}"
+    return question
+
+
+def _is_low_value_wide_range(hit: Hit) -> bool:
+    """목차처럼 넓은 페이지 범위에 짧게 걸친 청크를 검색 후보에서 제외한다."""
+
+    start = hit.metadata.get("page_start")
+    end = hit.metadata.get("page_end", start)
+    if start is None or end is None:
+        return False
+    char_count = hit.metadata.get("char_count", len(hit.document))
+    return (end - start) > 10 and char_count < 300
+
+
 class RagPipeline:
     """Dense 검색, BM25, RRF, Ollama 생성을 순서대로 실행한다."""
 
@@ -78,8 +100,10 @@ class RagPipeline:
         """질문에 대한 최종 검색 후보를 반환한다."""
 
         final_top_k = top_k or self.top_k_final
-        query_embedding = self.embedder.embed_query(question)
+        retrieval_query = _expand_retrieval_query(question)
+        query_embedding = self.embedder.embed_query(retrieval_query)
         query_codes = _extract_query_codes(question)
+        code_hits: list[Hit] = []
 
         if query_codes and hasattr(self.vector_store, "query_with_filter"):
             half_k = max(1, self.top_k_dense // 2)
@@ -87,6 +111,7 @@ class RagPipeline:
                 query_embedding,
                 filter_codes=query_codes,
                 top_k=half_k,
+                prefer_non_table=True,
             )
             general_top_k = half_k if code_hits else self.top_k_dense
             general_hits = self.vector_store.query(query_embedding, general_top_k)
@@ -95,10 +120,21 @@ class RagPipeline:
         else:
             dense_hits = self.vector_store.query(query_embedding, self.top_k_dense)
 
-        bm25_hits = self.bm25.query(question, self.top_k_bm25)
+        bm25_hits = self.bm25.query(retrieval_query, self.top_k_bm25)
+        dense_hits = [hit for hit in dense_hits if not _is_low_value_wide_range(hit)]
+        bm25_hits = [hit for hit in bm25_hits if not _is_low_value_wide_range(hit)]
         reranker_enabled = self.reranker is not None and getattr(self.reranker, "enabled", True)
         rrf_top_k = final_top_k * 2 if reranker_enabled else final_top_k
         fused_hits = rrf_fuse(dense_hits, bm25_hits, top_k=rrf_top_k, rrf_k=self.rrf_k)
+        if code_hits:
+            fused_by_id = {hit.id: hit for hit in fused_hits}
+            ordered: list[Hit] = []
+            seen: set[str] = set()
+            for hit in code_hits:
+                ordered.append(fused_by_id.get(hit.id, hit))
+                seen.add(hit.id)
+            ordered.extend(hit for hit in fused_hits if hit.id not in seen)
+            fused_hits = ordered[:rrf_top_k]
         if self.reranker is not None:
             return self.reranker.rerank(question, fused_hits, top_k=final_top_k)
         return fused_hits[:final_top_k]
@@ -117,6 +153,7 @@ class RagPipeline:
 
         llm_started = time.perf_counter()
         answer = self.llm.generate(prompt, system=SYSTEM_PROMPT, temperature=temperature)
+        answer = append_retrieved_source_citations(answer, chunks)
         llm_ms = (time.perf_counter() - llm_started) * 1000
         total_ms = (time.perf_counter() - total_started) * 1000
 
