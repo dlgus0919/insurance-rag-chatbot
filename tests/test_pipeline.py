@@ -1,6 +1,13 @@
 import numpy as np
 
-from src.rag.pipeline import RagPipeline, _expand_retrieval_query, _extract_query_codes, _is_low_value_wide_range
+from src.rag.pipeline import (
+    RagPipeline,
+    _expand_retrieval_query,
+    _extract_named_code_terms,
+    _extract_query_codes,
+    _is_low_value_wide_range,
+    _prefer_exact_text_hits,
+)
 from src.retrieval import Hit
 
 
@@ -93,6 +100,21 @@ def test_expand_retrieval_query_for_three_major_non_covered_items() -> None:
 
     assert "도수치료" in expanded
     assert "자기공명영상진단" in expanded
+
+
+def test_extract_named_code_terms() -> None:
+    assert _extract_named_code_terms("식도조루술의 코드를 알려줘.") == ["식도조루술"]
+
+
+def test_prefer_exact_text_hits() -> None:
+    hits = [
+        Hit(id="generic", score=1.0, document="분류번호 및 코드 표", metadata={}),
+        Hit(id="exact", score=0.8, document="Q2333 식도조루술", metadata={}),
+    ]
+
+    ordered = _prefer_exact_text_hits(hits, ["식도조루술"])
+
+    assert [hit.id for hit in ordered] == ["exact", "generic"]
 
 
 def test_code_query_uses_filtered_dense_hits() -> None:

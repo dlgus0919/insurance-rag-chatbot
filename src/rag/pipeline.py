@@ -55,6 +55,17 @@ def _expand_retrieval_query(question: str) -> str:
     return question
 
 
+def _extract_named_code_terms(question: str) -> list[str]:
+    """'식도조루술의 코드'처럼 명칭으로 코드를 묻는 질의의 핵심 명칭을 추출한다."""
+
+    terms: list[str] = []
+    for match in re.finditer(r"([가-힣A-Za-z0-9·∙/()_-]{2,})\s*의\s*코드", question):
+        term = match.group(1).strip()
+        if term and term not in terms:
+            terms.append(term)
+    return terms
+
+
 def _is_low_value_wide_range(hit: Hit) -> bool:
     """목차처럼 넓은 페이지 범위에 짧게 걸친 청크를 검색 후보에서 제외한다."""
 
@@ -64,6 +75,14 @@ def _is_low_value_wide_range(hit: Hit) -> bool:
         return False
     char_count = hit.metadata.get("char_count", len(hit.document))
     return (end - start) > 10 and char_count < 300
+
+
+def _prefer_exact_text_hits(hits: list[Hit], terms: list[str]) -> list[Hit]:
+    """핵심 명칭이 원문에 직접 포함된 검색 결과를 앞쪽으로 정렬한다."""
+
+    if not terms:
+        return hits
+    return sorted(hits, key=lambda hit: any(term in hit.document for term in terms), reverse=True)
 
 
 class RagPipeline:
@@ -103,6 +122,7 @@ class RagPipeline:
         retrieval_query = _expand_retrieval_query(question)
         query_embedding = self.embedder.embed_query(retrieval_query)
         query_codes = _extract_query_codes(question)
+        named_code_terms = _extract_named_code_terms(question)
         code_hits: list[Hit] = []
 
         if query_codes and hasattr(self.vector_store, "query_with_filter"):
@@ -135,6 +155,8 @@ class RagPipeline:
                 seen.add(hit.id)
             ordered.extend(hit for hit in fused_hits if hit.id not in seen)
             fused_hits = ordered[:rrf_top_k]
+        else:
+            fused_hits = _prefer_exact_text_hits(fused_hits, named_code_terms)
         if self.reranker is not None:
             return self.reranker.rerank(question, fused_hits, top_k=final_top_k)
         return fused_hits[:final_top_k]

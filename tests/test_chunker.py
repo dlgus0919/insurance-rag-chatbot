@@ -133,6 +133,7 @@ def test_chunk_id_includes_doc_short() -> None:
 
     assert chunks[0].id.startswith("약관_")
     assert chunks[0].metadata["doc_short"] == "약관"
+    assert chunks[0].metadata["pdf_filename"] == "dummy.pdf"
 
 
 def test_missing_pdf_skipped(tmp_path: Path) -> None:

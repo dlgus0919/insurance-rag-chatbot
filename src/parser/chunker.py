@@ -177,6 +177,7 @@ def _make_chunk(
                 "doc_short": doc_source.doc_short,
                 "doc_name": doc_source.doc_name,
                 "doc_type": doc_source.doc_type,
+                "pdf_filename": doc_source.path.name,
             }
         )
     return Chunk(id=chunk_id, text=text, metadata=metadata)
