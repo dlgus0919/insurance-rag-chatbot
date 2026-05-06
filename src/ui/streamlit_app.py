@@ -197,10 +197,16 @@ def _turn_count(messages: list[dict]) -> int:
 def _export_txt(messages: list[dict], model: str) -> str:
     """대화 내용을 사람이 읽을 수 있는 텍스트로 변환한다."""
 
+    used_models = list(
+        dict.fromkeys(
+            m.get("model", model) for m in messages if m["role"] == "assistant"
+        )
+    )
+    model_str = ", ".join(used_models) if used_models else model
     lines = [
         "=" * 60,
         "보험 고시 문서 RAG 챗봇 - 대화 내보내기",
-        f"모델: {model}",
+        f"사용 모델: {model_str}",
         f"내보낸 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "=" * 60,
         "",
@@ -210,7 +216,8 @@ def _export_txt(messages: list[dict], model: str) -> str:
         if message["role"] == "user":
             lines.extend([f"[Q{turn}] {message['content']}", ""])
             continue
-        lines.extend([f"[A{turn}] {message['content']}", ""])
+        msg_model = message.get("model", model)
+        lines.extend([f"[A{turn}] [{msg_model}] {message['content']}", ""])
         if message.get("timing"):
             lines.append(f"  {_format_timing(message['timing'])}")
         if message.get("chunks"):
@@ -244,7 +251,7 @@ def _export_csv(messages: list[dict], model: str) -> str:
                         turn,
                         "A",
                         answer_message["content"],
-                        model,
+                        answer_message.get("model", model),
                         f"{timing.get('retrieve_ms', 0):.0f}",
                         f"{timing.get('llm_ms', 0):.0f}",
                         f"{timing.get('total_ms', 0) / 1000:.1f}",
@@ -270,6 +277,7 @@ def _export_json(messages: list[dict], model: str) -> str:
     for message in messages:
         entry: dict = {"role": message["role"], "content": message["content"]}
         if message["role"] == "assistant":
+            entry["model"] = message.get("model", model)
             if message.get("timing"):
                 entry["timing"] = message["timing"]
             if message.get("chunks"):
@@ -637,6 +645,7 @@ def _handle_quick_code(
             "content": answer,
             "chunks": chunks,
             "timing": timing,
+            "model": model,
         }
     )
 
@@ -720,6 +729,7 @@ def _handle_insurance_form(
             "content": answer,
             "chunks": chunks,
             "timing": timing,
+            "model": model,
         }
     )
 
@@ -971,6 +981,7 @@ def main() -> None:
                 "content": answer,
                 "chunks": chunks,
                 "timing": timing,
+                "model": model,
             }
         )
 

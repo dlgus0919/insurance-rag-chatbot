@@ -105,7 +105,8 @@ def test_export_helpers_include_messages_timing_and_sources() -> None:
 
     assert _turn_count(messages) == 1
     assert "[Q1] N39.3 보상 여부는?" in txt
-    assert "[A1] 요실금은 보상하지 않습니다." in txt
+    # 답변 행에 모델명이 포함되는 형식: [A1] [모델명] 내용
+    assert "[A1] [gemma3:4b] 요실금은 보상하지 않습니다." in txt
     assert "[약관]" in txt
 
     rows = list(csv.reader(io.StringIO(csv_text)))
@@ -116,7 +117,68 @@ def test_export_helpers_include_messages_timing_and_sources() -> None:
 
     assert json_data["model"] == "gemma3:4b"
     assert json_data["turn_count"] == 1
+    assert json_data["messages"][1]["model"] == "gemma3:4b"
     assert json_data["messages"][1]["sources"][0]["doc_short"] == "약관"
+
+
+def test_export_uses_per_message_model_not_current_selection() -> None:
+    """메시지마다 다른 모델을 사용했을 때 내보내기가 각 메시지의 모델을 기록해야 한다.
+    (버그 재현: 내보내기 시점의 현재 모델이 전체 행에 덮어써지던 문제)
+    """
+    messages = [
+        {"role": "user", "content": "질문1"},
+        {"role": "assistant", "content": "답변1", "chunks": [], "timing": {}, "model": "gpt-5-mini"},
+        {"role": "user", "content": "질문2"},
+        {"role": "assistant", "content": "답변2", "chunks": [], "timing": {}, "model": "gpt-5.4-mini"},
+        {"role": "user", "content": "질문3"},
+        {"role": "assistant", "content": "답변3", "chunks": [], "timing": {}, "model": "gpt-5.2-chat-latest"},
+        {"role": "user", "content": "질문4"},
+        {"role": "assistant", "content": "답변4", "chunks": [], "timing": {}, "model": "gpt-5.5"},
+    ]
+    current_model = "gpt-5.5"  # 내보내기 시점에 선택된 모델
+
+    # CSV: 각 답변 행이 저장된 모델을 사용해야 한다
+    csv_text = _export_csv(messages, current_model)
+    rows = list(csv.reader(io.StringIO(csv_text)))
+    assert rows[2][3] == "gpt-5-mini",        "A1은 gpt-5-mini 이어야 함"
+    assert rows[4][3] == "gpt-5.4-mini",      "A2는 gpt-5.4-mini 이어야 함"
+    assert rows[6][3] == "gpt-5.2-chat-latest","A3는 gpt-5.2-chat-latest 이어야 함"
+    assert rows[8][3] == "gpt-5.5",           "A4는 gpt-5.5 이어야 함"
+
+    # JSON: 각 assistant 메시지에 model 키가 있어야 한다
+    json_data = json.loads(_export_json(messages, current_model))
+    assistant_entries = [m for m in json_data["messages"] if m["role"] == "assistant"]
+    assert assistant_entries[0]["model"] == "gpt-5-mini"
+    assert assistant_entries[1]["model"] == "gpt-5.4-mini"
+    assert assistant_entries[2]["model"] == "gpt-5.2-chat-latest"
+    assert assistant_entries[3]["model"] == "gpt-5.5"
+
+    # TXT: 헤더에 사용된 모델 목록이 나열되어야 한다
+    txt = _export_txt(messages, current_model)
+    assert "gpt-5-mini" in txt
+    assert "gpt-5.4-mini" in txt
+    assert "gpt-5.2-chat-latest" in txt
+    assert "gpt-5.5" in txt
+    # 각 답변 블록에 모델명이 포함되어야 한다
+    assert "[A1] [gpt-5-mini]" in txt
+    assert "[A2] [gpt-5.4-mini]" in txt
+    assert "[A3] [gpt-5.2-chat-latest]" in txt
+    assert "[A4] [gpt-5.5]" in txt
+
+
+def test_export_falls_back_to_current_model_for_legacy_messages() -> None:
+    """model 키가 없는 구(舊) 메시지는 현재 모델을 폴백으로 사용해야 한다."""
+    messages = [
+        {"role": "user", "content": "질문"},
+        {"role": "assistant", "content": "답변", "chunks": [], "timing": {}},
+        # "model" 키 없음 — 이전 버전 세션 상태
+    ]
+    csv_text = _export_csv(messages, "gpt-5.2-chat-latest")
+    rows = list(csv.reader(io.StringIO(csv_text)))
+    assert rows[2][3] == "gpt-5.2-chat-latest"
+
+    json_data = json.loads(_export_json(messages, "gpt-5.2-chat-latest"))
+    assert json_data["messages"][1]["model"] == "gpt-5.2-chat-latest"
 
 
 def test_question_log_details_include_mode_and_selected_docs() -> None:
