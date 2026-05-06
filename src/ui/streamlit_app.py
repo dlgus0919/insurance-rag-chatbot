@@ -18,6 +18,8 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src import config
+from src.auth import users as user_store
+from src.auth.users import ROLE_ADMIN
 from src.llm.ollama_client import OllamaClient
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.rag.insurance_form import (
@@ -32,6 +34,7 @@ from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
 from src.retrieval.reranker import build_reranker
 from src.retrieval.vector_store import VectorStore
+from src.ui.admin_page import render_admin_page
 from src.ui.pdf_view import open_pdf_in_native_viewer, render_pdf_page_png
 from src.utils.logger import (
     EVENT_ANSWER,
@@ -39,8 +42,9 @@ from src.utils.logger import (
     EVENT_EXPORT,
     EVENT_LOGIN_FAILURE,
     EVENT_LOGIN_SUCCESS,
+    EVENT_LOGOUT,
     EVENT_QUESTION,
-    log_event,
+    log_event_for_user,
 )
 
 _DOC_SHORT_TO_FILENAME: dict[str, str] = {source.doc_short: source.path.name for source in config.PDF_SOURCES}
@@ -91,29 +95,64 @@ def _ensure_session_id() -> str:
     return st.session_state.session_id
 
 
-def _check_auth(session_id: str) -> bool:
-    """인증 상태를 확인하고 로그인 화면을 렌더링한다."""
+def _admin_bootstrap_message() -> str:
+    """관리자 계정 부트스트랩 안내 문구를 반환한다."""
 
-    if not config.APP_PASSWORD:
-        return True
+    return (
+        "관리자 계정이 설정되지 않았습니다.\n\n"
+        "터미널에서 `python scripts/manage_users.py init`을 실행해 첫 관리자를 생성하세요."
+    )
+
+
+def _check_auth(session_id: str) -> bool:
+    """ID·비밀번호 인증 상태를 확인하고 로그인 화면을 렌더링한다."""
+
     if st.session_state.get("authenticated"):
         return True
+
+    if not user_store.has_admin():
+        st.title("보험 고시 문서 RAG 챗봇")
+        st.error(_admin_bootstrap_message())
+        return False
 
     st.title("보험 고시 문서 RAG 챗봇")
     st.markdown("---")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         st.subheader("🔐 임직원 전용 서비스")
+        username = st.text_input("사용자명", placeholder="사용자명")
         password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
         if st.button("로그인", use_container_width=True, type="primary"):
-            if password == config.APP_PASSWORD:
-                st.session_state.authenticated = True
-                log_event(EVENT_LOGIN_SUCCESS, session_id)
-                st.rerun()
-            else:
-                st.error("비밀번호가 올바르지 않습니다.")
-                log_event(EVENT_LOGIN_FAILURE, session_id, {"reason": "wrong_password"})
+            user = user_store.authenticate(username.strip(), password)
+            if user is None:
+                st.error("사용자명 또는 비밀번호가 올바르지 않습니다.")
+                log_event_for_user(
+                    EVENT_LOGIN_FAILURE,
+                    session_id,
+                    username.strip()[:32] or None,
+                    None,
+                    {"username_attempt": username.strip()[:32], "reason": "invalid_credentials"},
+                )
+                return False
+            st.session_state.authenticated = True
+            st.session_state.user_id = user.username
+            st.session_state.user_role = user.role
+            st.session_state.user_display = user.display_name
+            log_event_for_user(EVENT_LOGIN_SUCCESS, session_id, user.username, user.role)
+            st.rerun()
     return False
+
+
+def _log(event: str, details: dict | None = None) -> None:
+    """현재 세션의 사용자 정보를 포함해 감사 로그를 기록한다."""
+
+    log_event_for_user(
+        event,
+        st.session_state.get("session_id", ""),
+        st.session_state.get("user_id"),
+        st.session_state.get("user_role"),
+        details,
+    )
 
 
 def _turn_count(messages: list[dict]) -> int:
@@ -215,10 +254,10 @@ def _export_json(messages: list[dict], model: str) -> str:
     return json.dumps(export_data, ensure_ascii=False, indent=2)
 
 
-def _log_export(fmt: str, session_id: str, model: str, turn_count: int) -> None:
+def _log_export(fmt: str, model: str, turn_count: int) -> None:
     """내보내기 이벤트를 감사 로그에 기록한다."""
 
-    log_event(EVENT_EXPORT, session_id, {"format": fmt, "model": model, "turn_count": turn_count})
+    _log(EVENT_EXPORT, {"format": fmt, "model": model, "turn_count": turn_count})
 
 
 def _source_log_payload(chunks: list, limit: int = 3) -> list[dict]:
@@ -455,9 +494,8 @@ def _handle_quick_code(
     question = f"퀵 코드 검색: {procedure_name}"
     options = {"summary": include_summary, "coverage": include_coverage}
     st.session_state.messages.append({"role": "user", "content": question})
-    log_event(
+    _log(
         EVENT_QUESTION,
-        session_id,
         _build_question_log_details(
             mode="quick_code",
             model=model,
@@ -506,9 +544,8 @@ def _handle_quick_code(
         render_sources(chunks, key_prefix=f"quick_{len(st.session_state.messages)}")
         render_timing(timing)
 
-    log_event(
+    _log(
         EVENT_ANSWER,
-        session_id,
         _build_answer_log_details(
             mode="quick_code",
             model=model,
@@ -548,9 +585,8 @@ def _handle_insurance_form(
     }
 
     st.session_state.messages.append({"role": "user", "content": question})
-    log_event(
+    _log(
         EVENT_QUESTION,
-        session_id,
         _build_question_log_details(
             mode="insurance_form",
             model=model,
@@ -590,9 +626,8 @@ def _handle_insurance_form(
         render_sources(chunks, key_prefix=f"insurance_{len(st.session_state.messages)}")
         render_timing(timing)
 
-    log_event(
+    _log(
         EVENT_ANSWER,
-        session_id,
         _build_answer_log_details(
             mode="insurance_form",
             model=model,
@@ -661,7 +696,7 @@ def main() -> None:
 
     session_id = _ensure_session_id()
     if st.session_state.get("_access_logged") is not True:
-        log_event(EVENT_APP_ACCESS, session_id)
+        _log(EVENT_APP_ACCESS)
         st.session_state._access_logged = True
 
     if not _check_auth(session_id):
@@ -673,66 +708,83 @@ def main() -> None:
     st.title("보험 고시 문서 RAG 챗봇")
 
     with st.sidebar:
-        available_models = _get_available_models()
-        default_index = available_models.index(config.OLLAMA_MODEL) if config.OLLAMA_MODEL in available_models else 0
-        model = st.selectbox(
-            "LLM 모델",
-            available_models,
-            index=default_index,
-            help="exaone3.5:7.8b-instruct 권장 (한국어 처리 최적화)",
-        )
-        top_k = st.slider("Top-K", min_value=4, max_value=12, value=8)
-        temperature = st.slider("온도", min_value=0.0, max_value=0.7, value=0.2, step=0.1)
-
-        st.divider()
-        st.markdown("**검색 대상 문서**")
-        selected_docs = []
-        for doc_short in config.DOC_SHORT_ORDER:
-            if st.checkbox(doc_short, value=True, key=f"doc_filter_{doc_short}"):
-                selected_docs.append(doc_short)
-        if not selected_docs:
-            st.warning("최소 1개 문서를 선택해주세요.")
-
-        if st.button("대화 초기화"):
-            st.session_state.messages = []
+        display = st.session_state.get("user_display", "")
+        role = st.session_state.get("user_role", "")
+        role_label = "관리자" if role == ROLE_ADMIN else "직원"
+        st.markdown(f"**{display}** · _{role_label}_")
+        if st.button("로그아웃", use_container_width=True):
+            _log(EVENT_LOGOUT)
+            for key in ("authenticated", "user_id", "user_role", "user_display", "messages"):
+                st.session_state.pop(key, None)
             st.rerun()
-
+        page = st.radio("페이지", ["챗봇", "관리자"], horizontal=True, key="page") if role == ROLE_ADMIN else "챗봇"
         st.divider()
-        st.subheader("대화 내보내기")
-        has_messages = bool(st.session_state.messages)
-        turn_count = _turn_count(st.session_state.messages)
-        exported_at = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename_prefix = f"insurance_rag_chat_{exported_at}"
-        st.download_button(
-            "TXT",
-            data=_export_txt(st.session_state.messages, model),
-            file_name=f"{filename_prefix}.txt",
-            mime="text/plain",
-            disabled=not has_messages,
-            use_container_width=True,
-            on_click=_log_export,
-            args=("txt", session_id, model, turn_count),
-        )
-        st.download_button(
-            "CSV",
-            data=_export_csv(st.session_state.messages, model),
-            file_name=f"{filename_prefix}.csv",
-            mime="text/csv",
-            disabled=not has_messages,
-            use_container_width=True,
-            on_click=_log_export,
-            args=("csv", session_id, model, turn_count),
-        )
-        st.download_button(
-            "JSON",
-            data=_export_json(st.session_state.messages, model),
-            file_name=f"{filename_prefix}.json",
-            mime="application/json",
-            disabled=not has_messages,
-            use_container_width=True,
-            on_click=_log_export,
-            args=("json", session_id, model, turn_count),
-        )
+
+        if page == "챗봇":
+            available_models = _get_available_models()
+            default_index = available_models.index(config.OLLAMA_MODEL) if config.OLLAMA_MODEL in available_models else 0
+            model = st.selectbox(
+                "LLM 모델",
+                available_models,
+                index=default_index,
+                help="exaone3.5:7.8b-instruct 권장 (한국어 처리 최적화)",
+            )
+            top_k = st.slider("Top-K", min_value=4, max_value=12, value=8)
+            temperature = st.slider("온도", min_value=0.0, max_value=0.7, value=0.2, step=0.1)
+
+            st.divider()
+            st.markdown("**검색 대상 문서**")
+            selected_docs = []
+            for doc_short in config.DOC_SHORT_ORDER:
+                if st.checkbox(doc_short, value=True, key=f"doc_filter_{doc_short}"):
+                    selected_docs.append(doc_short)
+            if not selected_docs:
+                st.warning("최소 1개 문서를 선택해주세요.")
+
+            if st.button("대화 초기화"):
+                st.session_state.messages = []
+                st.rerun()
+
+            st.divider()
+            st.subheader("대화 내보내기")
+            has_messages = bool(st.session_state.messages)
+            turn_count = _turn_count(st.session_state.messages)
+            exported_at = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename_prefix = f"insurance_rag_chat_{exported_at}"
+            st.download_button(
+                "TXT",
+                data=_export_txt(st.session_state.messages, model),
+                file_name=f"{filename_prefix}.txt",
+                mime="text/plain",
+                disabled=not has_messages,
+                use_container_width=True,
+                on_click=_log_export,
+                args=("txt", model, turn_count),
+            )
+            st.download_button(
+                "CSV",
+                data=_export_csv(st.session_state.messages, model),
+                file_name=f"{filename_prefix}.csv",
+                mime="text/csv",
+                disabled=not has_messages,
+                use_container_width=True,
+                on_click=_log_export,
+                args=("csv", model, turn_count),
+            )
+            st.download_button(
+                "JSON",
+                data=_export_json(st.session_state.messages, model),
+                file_name=f"{filename_prefix}.json",
+                mime="application/json",
+                disabled=not has_messages,
+                use_container_width=True,
+                on_click=_log_export,
+                args=("json", model, turn_count),
+            )
+
+    if page == "관리자":
+        render_admin_page(_log)
+        return
 
     try:
         pipeline = _get_pipeline(model, top_k)
@@ -799,9 +851,8 @@ def main() -> None:
 
     question = st.chat_input("질문을 입력하세요")
     if question and pipeline is not None:
-        log_event(
+        _log(
             EVENT_QUESTION,
-            session_id,
             _build_question_log_details(
                 mode="general",
                 model=model,
@@ -824,9 +875,8 @@ def main() -> None:
             render_sources(chunks, key_prefix=f"current_{len(st.session_state.messages)}")
             render_timing(timing)
 
-        log_event(
+        _log(
             EVENT_ANSWER,
-            session_id,
             _build_answer_log_details(
                 mode="general",
                 model=model,

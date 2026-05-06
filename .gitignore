@@ -6,3 +6,5 @@ __pycache__/
 .venv/
 venv/
 logs/
+users.json
+users.json.tmp

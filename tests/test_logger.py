@@ -29,3 +29,26 @@ def test_log_event_writes_jsonl_record(tmp_path, monkeypatch) -> None:
     for handler in list(logger.handlers):
         handler.close()
         logger.removeHandler(handler)
+
+
+def test_log_event_for_user_adds_user_context(tmp_path, monkeypatch) -> None:
+    logger = logging.getLogger("rag_chat_audit")
+    for handler in list(logger.handlers):
+        handler.close()
+        logger.removeHandler(handler)
+
+    monkeypatch.setattr(audit_logger, "LOG_DIR", tmp_path)
+
+    audit_logger.log_event_for_user("QUESTION", "session-1", "admin", "admin", {"mode": "general"})
+
+    for handler in logger.handlers:
+        handler.flush()
+
+    record = json.loads(next(tmp_path.glob("chat_*.jsonl")).read_text(encoding="utf-8").strip())
+    assert record["details"]["user_id"] == "admin"
+    assert record["details"]["role"] == "admin"
+    assert record["details"]["mode"] == "general"
+
+    for handler in list(logger.handlers):
+        handler.close()
+        logger.removeHandler(handler)

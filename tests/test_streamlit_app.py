@@ -7,6 +7,7 @@ from src.rag.insurance_form import InsuranceFormInput
 from src.ui.streamlit_app import (
     _build_answer_log_details,
     _build_question_log_details,
+    _admin_bootstrap_message,
     _export_csv,
     _export_json,
     _export_txt,
@@ -37,6 +38,13 @@ def test_source_title_includes_pdf_filename_hierarchy_and_page() -> None:
 
     assert "[심평원] | BZ202603053039374.pdf | p.3~4" in title
     assert "제1편 > 제1부 > 제1장 > 제1절" in title
+
+
+def test_admin_bootstrap_message_mentions_cli() -> None:
+    message = _admin_bootstrap_message()
+
+    assert "관리자 계정이 설정되지 않았습니다" in message
+    assert "python scripts/manage_users.py init" in message
 
 
 def test_source_title_uses_config_filename_fallback() -> None:

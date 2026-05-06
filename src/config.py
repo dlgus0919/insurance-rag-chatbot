@@ -59,7 +59,6 @@ OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma3:4b")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 RERANKER_ENABLED: bool = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
-APP_PASSWORD: str = os.getenv("APP_PASSWORD", "")
 LOG_DIR: str = os.getenv("LOG_DIR", "logs")
 OLLAMA_CANDIDATE_MODELS: list[str] = [
     "exaone3.5:7.8b",

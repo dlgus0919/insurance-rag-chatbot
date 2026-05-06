@@ -21,6 +21,10 @@ EVENT_LOGIN_FAILURE = "LOGIN_FAILURE"
 EVENT_QUESTION = "QUESTION"
 EVENT_ANSWER = "ANSWER"
 EVENT_EXPORT = "EXPORT"
+EVENT_LOGOUT = "LOGOUT"
+EVENT_USER_CREATE = "USER_CREATE"
+EVENT_USER_RESET = "USER_RESET"
+EVENT_ADMIN_VIEW = "ADMIN_VIEW"
 
 
 def _get_logger() -> logging.Logger:
@@ -58,3 +62,18 @@ def log_event(event: str, session_id: str, details: dict | None = None) -> None:
         "details": details or {},
     }
     _get_logger().info(json.dumps(record, ensure_ascii=False))
+
+
+def log_event_for_user(
+    event: str,
+    session_id: str,
+    user_id: str | None,
+    role: str | None,
+    details: dict | None = None,
+) -> None:
+    """사용자 정보를 details에 자동 부착해 이벤트를 기록한다."""
+
+    enriched = dict(details or {})
+    enriched.setdefault("user_id", user_id)
+    enriched.setdefault("role", role)
+    log_event(event, session_id, enriched)
