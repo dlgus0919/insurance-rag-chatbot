@@ -35,18 +35,25 @@ class OpenAIClient:
             "Content-Type": "application/json",
         }
 
+    def _is_gpt5_family(self) -> bool:
+        return self.model.startswith("gpt-5")
+
     def _payload(self, prompt: str, system: str, temperature: float, stream: bool) -> dict:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
-        return {
+        payload = {
             "model": self.model,
             "messages": messages,
-            "temperature": temperature,
-            "max_tokens": self.max_tokens,
             "stream": stream,
         }
+        if self._is_gpt5_family():
+            payload["max_completion_tokens"] = self.max_tokens
+        else:
+            payload["temperature"] = temperature
+            payload["max_tokens"] = self.max_tokens
+        return payload
 
     def generate(
         self,
@@ -84,7 +91,9 @@ class OpenAIClient:
                 timeout=DEFAULT_TIMEOUT,
             ) as response:
                 if response.status_code >= 400:
-                    raise RuntimeError(f"OpenAI 스트림 오류(status={response.status_code})")
+                    raise RuntimeError(
+                        f"OpenAI 스트림 오류(status={response.status_code}): {response.text[:300]}"
+                    )
                 for raw in response.iter_lines():
                     if not raw:
                         continue

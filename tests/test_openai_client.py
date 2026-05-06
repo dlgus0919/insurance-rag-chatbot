@@ -43,7 +43,20 @@ def test_payload_contains_chat_messages() -> None:
         {"role": "system", "content": "규칙"},
         {"role": "user", "content": "질문"},
     ]
+    assert payload["max_completion_tokens"] == 123
+    assert "max_tokens" not in payload
+    assert "temperature" not in payload
+
+
+def test_payload_keeps_legacy_options_for_gpt4o() -> None:
+    client = OpenAIClient("gpt-4o", api_key="sk-test", max_tokens=123)
+
+    payload = client._payload("질문", "규칙", 0.1, stream=False)
+
+    assert payload["model"] == "gpt-4o"
     assert payload["max_tokens"] == 123
+    assert payload["temperature"] == 0.1
+    assert "max_completion_tokens" not in payload
 
 
 def test_generate_posts_request_and_saves_usage(monkeypatch) -> None:
@@ -101,3 +114,14 @@ def test_generate_stream_yields_tokens(monkeypatch) -> None:
     assert list(client.generate_stream("질문", system="규칙")) == ["답", "변"]
     assert captured["stream"] is True
     assert captured["json"]["stream"] is True
+
+
+def test_generate_stream_raises_with_response_body(monkeypatch) -> None:
+    def fake_post(*args, **kwargs):
+        return DummyResponse(400, {"error": {"message": "unsupported parameter: temperature"}})
+
+    monkeypatch.setattr(requests, "post", fake_post)
+    client = OpenAIClient("gpt-5-mini", api_key="sk-test")
+
+    with pytest.raises(RuntimeError, match="unsupported parameter"):
+        list(client.generate_stream("질문"))
