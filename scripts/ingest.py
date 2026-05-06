@@ -22,16 +22,23 @@ from src.retrieval.embedder import Embedder
 from src.retrieval.vector_store import VectorStore
 
 
-def build_chunks() -> None:
+def select_sources(cloud_only: bool = False):
+    """cloud_only 옵션에 따라 인제스트 대상 PDF 소스를 선택한다."""
+
+    return [source for source in config.PDF_SOURCES if (not cloud_only) or source.cloud_safe]
+
+
+def build_chunks(sources=None) -> None:
     """PDF_SOURCES를 순회하며 통합 chunks.jsonl을 생성한다."""
 
     started = time.perf_counter()
     all_chunks = []
     id_offset = 0
     doc_counts: Counter[str] = Counter()
+    selected_sources = list(sources or config.PDF_SOURCES)
 
     print("[M6] 멀티 문서 PDF 파싱 시작")
-    for source in config.PDF_SOURCES:
+    for source in selected_sources:
         if not source.path.exists():
             if source.doc_short == "가이드북":
                 print(f"[M10] 보상가이드북 파일 없음, 건너뜀: {source.path.name}")
@@ -127,10 +134,12 @@ def build_index() -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="보험 고시 PDF 인제스트")
     parser.add_argument("--stage", choices=["chunks", "index", "all"], default="all")
+    parser.add_argument("--cloud-only", action="store_true", help="cloud_safe=True인 PDF만 인덱싱한다.")
     args = parser.parse_args()
+    sources = select_sources(args.cloud_only)
 
     if args.stage in {"chunks", "all"}:
-        build_chunks()
+        build_chunks(sources)
     if args.stage in {"index", "all"}:
         build_index()
 

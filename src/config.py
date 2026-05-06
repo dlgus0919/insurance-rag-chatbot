@@ -25,6 +25,7 @@ class PdfSource:
     doc_type: str
     doc_name: str
     doc_short: str
+    cloud_safe: bool = False
 
 
 PDF_SOURCES: list[PdfSource] = [
@@ -33,18 +34,21 @@ PDF_SOURCES: list[PdfSource] = [
         doc_type="policy_act",
         doc_name="건강보험 행위 급여·비급여 목록표 및 급여 상대가치점수",
         doc_short="심평원",
+        cloud_safe=True,
     ),
     PdfSource(
         path=ROOT_DIR / "2.약관_신한 이지로운 실손의료보험(무배당)_20260401_0325.pdf",
         doc_type="insurance_policy",
         doc_name="신한 이지로운 실손의료보험(무배당) 약관",
         doc_short="약관",
+        cloud_safe=True,
     ),
     PdfSource(
         path=ROOT_DIR / "보상가이드북.pdf",
         doc_type="guide_book",
         doc_name="보상가이드북",
         doc_short="가이드북",
+        cloud_safe=False,
     ),
 ]
 DOC_SHORT_ORDER: list[str] = [source.doc_short for source in PDF_SOURCES]
@@ -64,6 +68,7 @@ OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_DEFAULT_MODEL: str = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5-mini")
 OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", "1500"))
 ALLOW_OLLAMA: bool = os.getenv("ALLOW_OLLAMA", "true").lower() == "true"
+CLOUD_DEPLOY: bool = os.getenv("CLOUD_DEPLOY", "false").lower() == "true"
 OLLAMA_CANDIDATE_MODELS: list[str] = [
     "exaone3.5:7.8b",
     "exaone3.5:7.8b-instruct",

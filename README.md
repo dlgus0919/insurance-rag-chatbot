@@ -2,7 +2,7 @@
 
 1,429페이지 건강보험 고시 PDF를 로컬에서 검색하고 답변하는 RAG 챗봇입니다.  
 PDF 파싱, 계층형 청킹, BGE-M3 임베딩, ChromaDB, BM25, RRF 융합, Ollama LLM 호출로 구성됩니다.  
-알파 버전은 단일 사용자 로컬 실행과 출처 확인 가능한 답변 생성만 다룹니다.
+현재 버전은 사용자 계정 로그인, 관리자 로그 대시보드, Ollama 로컬 모델, OpenAI API 모델 선택을 지원합니다.
 
 ## 사전 요구사항
 
@@ -12,6 +12,7 @@ PDF 파싱, 계층형 청킹, BGE-M3 임베딩, ChromaDB, BM25, RRF 융합, Olla
 - 기본 모델: `ollama pull qwen2.5:3b-instruct`
 - Ollama 데스크톱 앱 실행 또는 `ollama serve`
 - BGE-M3 모델 사전 다운로드
+- OpenAI 모델을 사용할 경우 OpenAI API 키
 
 외부 네트워크가 필요한 모델 다운로드는 실행 코드에서 수행하지 않는 것을 전제로 합니다. BGE-M3가 HuggingFace 캐시에 없는 경우 인덱싱 단계에서 중단됩니다.
 
@@ -22,7 +23,7 @@ SentenceTransformer("BAAI/bge-m3")
 PY
 ```
 
-다른 Ollama 모델을 쓰려면 `.env`에서 `OLLAMA_MODEL` 값을 바꿉니다.
+다른 Ollama 모델을 쓰려면 `.env`에서 `OLLAMA_MODEL` 값을 바꿉니다. OpenAI 모델을 쓰려면 `.env`에 `OPENAI_API_KEY`를 추가합니다.
 
 ## 셋업
 
@@ -34,6 +35,21 @@ cp .env.example .env
 ```
 
 입력 PDF `BZ202603053039374.pdf`는 프로젝트 루트에 있어야 합니다.
+
+최초 실행 전 관리자 계정을 만듭니다.
+
+```bash
+python scripts/manage_users.py init
+```
+
+직원 계정은 CLI 또는 관리자 페이지에서 추가합니다.
+
+```bash
+python scripts/manage_users.py add employee01 employee
+python scripts/manage_users.py list
+```
+
+기존 `APP_PASSWORD` 단일 비밀번호 방식은 M15부터 사용하지 않습니다.
 
 ## 인덱싱
 
@@ -64,6 +80,34 @@ Streamlit:
 streamlit run src/ui/streamlit_app.py
 ```
 
+OpenAI 모델 사용 예시:
+
+```bash
+OPENAI_API_KEY=sk-...
+OPENAI_DEFAULT_MODEL=gpt-5-mini
+OPENAI_MAX_TOKENS=1500
+```
+
+OpenAI 모델을 선택하면 질문과 검색된 문서 청크가 OpenAI API로 전송됩니다.
+
+## 클라우드 배포
+
+Streamlit Community Cloud 또는 Hugging Face Spaces 배포 절차는 `docs/17_DEPLOY_GUIDE.md`를 참고하세요.
+
+클라우드 배포에서는 보통 다음 환경변수를 사용합니다.
+
+```bash
+ALLOW_OLLAMA=false
+CLOUD_DEPLOY=true
+INDEX_RELEASE_URL=https://github.com/.../releases/download/.../assets.zip
+```
+
+클라우드용 인덱스는 공개 가능한 문서만 포함해 생성합니다.
+
+```bash
+python scripts/ingest.py --cloud-only --stage all
+```
+
 ## 평가
 
 ```bash
@@ -84,6 +128,10 @@ kiwipiepy 설치 실패: BM25 토크나이저는 정규식 기반 토큰화로 �
 
 Chroma 또는 BM25 인덱스 없음: `python scripts/ingest.py --stage index`를 다시 실행하세요.
 
+관리자 계정 없음: `python scripts/manage_users.py init`을 실행해 첫 관리자를 생성하세요.
+
+OpenAI 모델이 보이지 않음: `.env` 또는 클라우드 secrets에 `OPENAI_API_KEY`가 설정되어 있는지 확인하세요.
+
 ## 알파 범위 외 / 베타 이월
 
 - OCR
@@ -92,5 +140,7 @@ Chroma 또는 BM25 인덱스 없음: `python scripts/ingest.py --stage index`를
 - 코드 정확매칭 우선 라우팅
 - 인덱스 버전 관리와 증분 업데이트
 - 세션 영속화와 사용자별 히스토리
-- Docker/CI/CD
 - LLM 7B/8B 업그레이드 평가
+- SSO/OAuth/OIDC
+- 클라우드 로그 영속 저장소 연동
+- Top-K·온도 자동 설정

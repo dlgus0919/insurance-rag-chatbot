@@ -8,6 +8,7 @@ from src.ui.streamlit_app import (
     _build_answer_log_details,
     _build_question_log_details,
     _admin_bootstrap_message,
+    _bootstrap_users_json_from_env,
     _export_csv,
     _export_json,
     _export_txt,
@@ -45,6 +46,17 @@ def test_admin_bootstrap_message_mentions_cli() -> None:
 
     assert "관리자 계정이 설정되지 않았습니다" in message
     assert "python scripts/manage_users.py init" in message
+
+
+def test_bootstrap_users_json_from_env_writes_file(tmp_path, monkeypatch) -> None:
+    target = tmp_path / "users.json"
+    raw = '{"version":1,"users":[]}'
+    monkeypatch.setenv("USERS_JSON", raw)
+    monkeypatch.setenv("USERS_JSON_PATH", str(target))
+
+    assert _bootstrap_users_json_from_env() is True
+    assert json.loads(target.read_text(encoding="utf-8")) == {"version": 1, "users": []}
+    assert _bootstrap_users_json_from_env() is False
 
 
 def test_source_title_uses_config_filename_fallback() -> None:

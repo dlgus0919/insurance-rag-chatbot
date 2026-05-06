@@ -8,3 +8,5 @@ venv/
 logs/
 users.json
 users.json.tmp
+data/
+*.pdf

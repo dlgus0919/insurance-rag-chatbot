@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import os
 import sys
 import time
 import uuid
@@ -102,6 +103,38 @@ def _admin_bootstrap_message() -> str:
         "관리자 계정이 설정되지 않았습니다.\n\n"
         "터미널에서 `python scripts/manage_users.py init`을 실행해 첫 관리자를 생성하세요."
     )
+
+
+def _bootstrap_users_json_from_env() -> bool:
+    """USERS_JSON 환경변수가 있으면 users.json 파일로 풀어 쓴다."""
+
+    raw = os.getenv("USERS_JSON")
+    if not raw:
+        return False
+    path = Path(os.getenv("USERS_JSON_PATH", str(config.ROOT_DIR / "users.json")))
+    if path.exists():
+        return False
+    try:
+        json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("USERS_JSON 환경변수가 올바른 JSON이 아닙니다.") from exc
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(raw, encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except (PermissionError, OSError):
+        pass
+    return True
+
+
+def _bootstrap_cloud_assets() -> int:
+    """클라우드 배포 모드에서 인덱스 자산 다운로드 부트스트랩을 실행한다."""
+
+    if not config.CLOUD_DEPLOY:
+        return 0
+    from scripts.bootstrap_assets import main as bootstrap_main
+
+    return bootstrap_main()
 
 
 def _check_auth(session_id: str) -> bool:
@@ -735,6 +768,13 @@ def render_insurance_form_panel() -> tuple[InsuranceFormInput | None, bool]:
 
 def main() -> None:
     st.set_page_config(page_title="보험 고시 문서 RAG 챗봇")
+    try:
+        _bootstrap_users_json_from_env()
+        if _bootstrap_cloud_assets() != 0:
+            st.warning("클라우드 인덱스 자산 다운로드에 실패했습니다. 관리자에게 문의하세요.")
+    except RuntimeError as exc:
+        st.error(str(exc))
+        st.stop()
 
     session_id = _ensure_session_id()
     if st.session_state.get("_access_logged") is not True:
@@ -750,6 +790,8 @@ def main() -> None:
     st.title("보험 고시 문서 RAG 챗봇")
 
     with st.sidebar:
+        if config.CLOUD_DEPLOY:
+            st.info("클라우드 배포 - 외부 LLM(OpenAI) 전용")
         display = st.session_state.get("user_display", "")
         role = st.session_state.get("user_role", "")
         role_label = "관리자" if role == ROLE_ADMIN else "직원"
