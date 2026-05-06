@@ -81,7 +81,7 @@ OLLAMA_CANDIDATE_MODELS: list[str] = [
 ]
 DEFAULT_OPENAI_CANDIDATE_MODELS: list[str] = [
     "gpt-5.2",
-    "gpt-5.2-pro",
+    "gpt-5.2-chat-latest",
     "gpt-5",
     "gpt-5-mini",
     "gpt-5-nano",
@@ -91,10 +91,14 @@ DEFAULT_OPENAI_CANDIDATE_MODELS: list[str] = [
     "gpt-4o",
     "gpt-4o-mini",
 ]
+OPENAI_RESPONSES_ONLY_MODELS: set[str] = {
+    "gpt-5.2-pro",
+    "gpt-5.2-pro-2025-12-11",
+}
 OPENAI_CANDIDATE_MODELS: list[str] = [
     model.strip()
     for model in os.getenv("OPENAI_CANDIDATE_MODELS", ",".join(DEFAULT_OPENAI_CANDIDATE_MODELS)).split(",")
-    if model.strip()
+    if model.strip() and model.strip() not in OPENAI_RESPONSES_ONLY_MODELS
 ]
 
 TOP_K_DENSE: int = int(os.getenv("TOP_K_DENSE", "12"))
