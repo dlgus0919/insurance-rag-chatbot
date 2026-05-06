@@ -449,7 +449,7 @@ def _load_heavy_components():
     if not config.BM25_PATH.exists():
         raise RuntimeError("BM25 인덱스가 없습니다. `python scripts/ingest.py --stage index`를 먼저 실행하세요.")
 
-    embedder = Embedder(config.EMBEDDING_MODEL)
+    embedder = Embedder(config.EMBEDDING_MODEL, allow_remote_download=config.HF_MODEL_DOWNLOAD)
     vector_store = VectorStore(config.CHROMA_DIR)
     bm25 = BM25Index.load(config.BM25_PATH)
     reranker = build_reranker(enabled=config.RERANKER_ENABLED)

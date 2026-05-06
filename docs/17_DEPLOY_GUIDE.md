@@ -28,7 +28,7 @@ GitHub Release를 만들고 `assets.zip`을 업로드한 뒤 다운로드 URL을
 
 ## 3. Streamlit Community Cloud 설정
 
-1. <https://streamlit.io/cloud>에 GitHub로 로그인합니다.
+1. [https://streamlit.io/cloud](https://streamlit.io/cloud)에 GitHub로 로그인합니다.
 2. New app을 선택합니다.
 3. Repository, branch, main file을 설정합니다.
    - Main file: `src/ui/streamlit_app.py`
@@ -42,11 +42,18 @@ OPENAI_MAX_TOKENS = "1500"
 OPENAI_CANDIDATE_MODELS = "gpt-5.2,gpt-5.2-pro,gpt-5,gpt-5-mini,gpt-5-nano,gpt-4.1,gpt-4.1-mini,gpt-4.1-nano,gpt-4o,gpt-4o-mini"
 ALLOW_OLLAMA = "false"
 CLOUD_DEPLOY = "true"
-INDEX_RELEASE_URL = "https://github.com/.../releases/download/.../assets.zip"
-USERS_JSON = "{\"version\":1,\"users\":[{\"username\":\"admin\",\"password_hash\":\"$pbkdf2-sha256$...\",\"role\":\"admin\",\"display_name\":\"관리자\",\"created_at\":\"2026-05-06T00:00:00+00:00\",\"password_updated_at\":\"2026-05-06T00:00:00+00:00\"}]}"
+EMBEDDING_MODEL = "BAAI/bge-m3"
+HF_MODEL_DOWNLOAD = "true"
+INDEX_RELEASE_URL = "https://github.com/koreaben777/insurance-rag-chatbot/releases/download/rag-assets-v1/assets.zip"
+
+USERS_JSON_PATH = "/tmp/users_cloud_v1.json"
+
+USERS_JSON = '{"version":1,"users":[{"username":"admin","password_hash":"$pbkdf2-sha256$...","role":"admin","display_name":"관리자","created_at":"2026-05-06T00:00:00+00:00","password_updated_at":"2026-05-06T00:00:00+00:00"}]}'
 ```
 
 `USERS_JSON`의 `password_hash`는 로컬에서 `python scripts/manage_users.py init`으로 생성한 `users.json` 내용을 사용합니다. 평문 비밀번호를 secrets에 넣지 않습니다.
+
+`HF_MODEL_DOWNLOAD=true`는 Streamlit Cloud 웹 게시 테스트에서 BGE-M3를 HuggingFace에서 내려받도록 허용합니다. 로컬 실행과 인제스트는 기본값 `false`를 유지해 기존 캐시 기반 파이프라인을 보존합니다. BGE-M3는 큰 모델이므로 다운로드 또는 로드가 실패하면 BM25-only로 폴백하지 않고 명시 오류를 확인합니다.
 
 ## 4. 배포 후 점검
 

@@ -14,7 +14,7 @@ PDF 파싱, 계층형 청킹, BGE-M3 임베딩, ChromaDB, BM25, RRF 융합, Olla
 - BGE-M3 모델 사전 다운로드
 - OpenAI 모델을 사용할 경우 OpenAI API 키
 
-외부 네트워크가 필요한 모델 다운로드는 실행 코드에서 수행하지 않는 것을 전제로 합니다. BGE-M3가 HuggingFace 캐시에 없는 경우 인덱싱 단계에서 중단됩니다.
+기본값에서는 외부 네트워크가 필요한 모델 다운로드를 실행 코드에서 수행하지 않습니다. BGE-M3가 HuggingFace 캐시에 없는 경우 인덱싱 또는 검색 단계에서 중단됩니다. Streamlit Cloud 웹 게시 테스트에서만 `HF_MODEL_DOWNLOAD=true`를 설정해 HuggingFace 원격 다운로드를 명시적으로 허용할 수 있습니다.
 
 ```bash
 python - <<'PY'
@@ -97,6 +97,8 @@ Streamlit Community Cloud 또는 Hugging Face Spaces 배포 절차는 `docs/17_D
 클라우드 배포에서는 보통 다음 환경변수를 사용합니다.
 
 ```bash
+EMBEDDING_MODEL=BAAI/bge-m3
+HF_MODEL_DOWNLOAD=true
 ALLOW_OLLAMA=false
 CLOUD_DEPLOY=true
 INDEX_RELEASE_URL=https://github.com/.../releases/download/.../assets.zip
@@ -122,7 +124,7 @@ Ollama 미연결: Ollama 데스크톱 앱을 켜거나 `ollama serve`를 실행�
 
 모델 미존재 또는 태그명 오타: `ollama list`로 설치 모델명을 확인하고 `.env`의 `OLLAMA_MODEL` 값을 맞추세요.
 
-BGE-M3 다운로드 실패: 네트워크가 가능한 환경에서 `SentenceTransformer("BAAI/bge-m3")`를 먼저 실행해 HuggingFace 캐시에 저장하세요.
+BGE-M3 로드 실패: 로컬에서는 네트워크가 가능한 환경에서 `SentenceTransformer("BAAI/bge-m3")`를 먼저 실행해 HuggingFace 캐시에 저장하세요. Streamlit Cloud에서는 웹 게시 테스트 목적일 때만 `HF_MODEL_DOWNLOAD=true`를 설정해 원격 다운로드를 허용하세요.
 
 kiwipiepy 설치 실패: BM25 토크나이저는 정규식 기반 토큰화로 폴백합니다. 다만 한국어 검색 품질은 낮아질 수 있습니다.
 

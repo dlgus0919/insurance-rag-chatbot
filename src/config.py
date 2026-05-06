@@ -59,6 +59,7 @@ CHROMA_DIR: Path = ROOT_DIR / "data" / "index" / "chroma"
 BM25_PATH: Path = ROOT_DIR / "data" / "index" / "bm25.pkl"
 
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+HF_MODEL_DOWNLOAD: bool = os.getenv("HF_MODEL_DOWNLOAD", "false").lower() == "true"
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma3:4b")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))

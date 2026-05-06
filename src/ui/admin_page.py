@@ -269,6 +269,10 @@ def _tab_system(_log) -> None:
         st.write("기본 로컬 모델:", config.OLLAMA_MODEL)
         st.write("기본 OpenAI 모델:", config.OPENAI_DEFAULT_MODEL)
         st.write("선택 가능 모델:", list_available_models())
+        st.markdown("**임베딩**")
+        st.write("임베딩 모델:", config.EMBEDDING_MODEL)
+        st.write("HuggingFace 다운로드 허용:", config.HF_MODEL_DOWNLOAD)
+        st.write("클라우드 배포:", config.CLOUD_DEPLOY)
 
 
 def render_admin_page(_log) -> None:
