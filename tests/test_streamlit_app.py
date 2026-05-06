@@ -144,6 +144,25 @@ def test_answer_log_details_include_sources_and_extra_options() -> None:
     assert details["question_preview"] == "식도조루술"
     assert details["sources"][0]["doc_short"] == "심평원"
     assert details["options"] == {"summary": True, "coverage": False}
+    assert details["provider"] == "ollama"
+
+
+def test_answer_log_details_include_openai_model_metadata_and_usage() -> None:
+    details = _build_answer_log_details(
+        mode="general",
+        model="gpt-5-mini",
+        selected_docs=["약관"],
+        answer="답변",
+        timing={"retrieve_ms": 1, "llm_ms": 2, "total_ms": 3},
+        chunks=[],
+        provider="openai",
+        token_usage={"prompt_tokens": 10, "completion_tokens": 5},
+    )
+
+    assert details["provider"] == "openai"
+    assert details["model_family"] == "GPT-5"
+    assert details["model_size"] == "mini"
+    assert details["token_usage"] == {"prompt_tokens": 10, "completion_tokens": 5}
 
 
 def test_insurance_form_log_input_truncates_situation_note() -> None:

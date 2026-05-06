@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
 from src import config
 from src.auth import users as user_store
 from src.auth.users import ROLE_ADMIN
-from src.llm.ollama_client import OllamaClient
+from src.llm.factory import build_llm, format_model_label, get_openai_model_info, is_openai_model, list_available_models
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.rag.insurance_form import (
     COVERAGE_TOPICS,
@@ -316,6 +316,8 @@ def _build_answer_log_details(
     timing: dict,
     chunks: list,
     question: str | None = None,
+    provider: str = "ollama",
+    token_usage: dict | None = None,
     extra: dict | None = None,
 ) -> dict:
     """답변 이벤트 로그 상세 정보를 만든다."""
@@ -323,6 +325,7 @@ def _build_answer_log_details(
     details = {
         "mode": mode,
         "model": model,
+        "provider": provider,
         "selected_docs": selected_docs,
         "answer_preview": answer[:200],
         "timing": _timing_log_payload(timing),
@@ -331,9 +334,24 @@ def _build_answer_log_details(
     }
     if question is not None:
         details["question_preview"] = question[:120]
+    if is_openai_model(model):
+        model_info = get_openai_model_info(model)
+        details["model_family"] = model_info["family"]
+        details["model_size"] = model_info["size"]
+    if token_usage is not None:
+        details["token_usage"] = token_usage
     if extra:
         details.update(extra)
     return details
+
+
+def _llm_answer_log_extra(pipeline: RagPipeline) -> dict:
+    """현재 LLM의 provider와 토큰 사용량을 로그 필드로 반환한다."""
+
+    return {
+        "provider": getattr(pipeline.llm, "provider", "ollama"),
+        "token_usage": getattr(pipeline.llm, "last_usage", None),
+    }
 
 
 def _insurance_form_log_input(form: InsuranceFormInput) -> dict:
@@ -351,14 +369,44 @@ def _insurance_form_log_input(form: InsuranceFormInput) -> dict:
 
 
 @st.cache_data(ttl=30)
-def _get_available_models() -> list[str]:
-    """Ollama에 설치된 권장 모델 목록을 반환한다."""
+def _get_available_models_grouped() -> dict[str, list[str]]:
+    """Local/Cloud 모델 후보를 그룹별로 반환한다."""
 
-    installed = set(OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL).list_models())
-    candidates = [model for model in config.OLLAMA_CANDIDATE_MODELS if model in installed]
-    if config.OLLAMA_MODEL not in candidates:
-        candidates.insert(0, config.OLLAMA_MODEL)
-    return candidates if candidates else [config.OLLAMA_MODEL]
+    return list_available_models()
+
+
+def _select_model_widget() -> str:
+    """모델 선택 위젯을 렌더링하고 선택 모델 ID를 반환한다."""
+
+    grouped = _get_available_models_grouped()
+    options: list[str] = []
+    labels: dict[str, str] = {}
+    for model in grouped["local"]:
+        options.append(model)
+        labels[model] = format_model_label(model, "ollama")
+    for model in grouped["cloud"]:
+        options.append(model)
+        labels[model] = format_model_label(model, "openai")
+
+    if not options:
+        st.error("사용 가능한 LLM 모델이 없습니다. .env의 OPENAI_API_KEY 설정 또는 Ollama 설치를 확인하세요.")
+        st.stop()
+
+    default_index = 0
+    if config.OLLAMA_MODEL in options:
+        default_index = options.index(config.OLLAMA_MODEL)
+    elif config.OPENAI_DEFAULT_MODEL in options:
+        default_index = options.index(config.OPENAI_DEFAULT_MODEL)
+
+    selected = st.selectbox(
+        "LLM 모델",
+        options,
+        index=default_index,
+        format_func=lambda model: labels.get(model, model),
+    )
+    if is_openai_model(selected):
+        st.info("⚠ OpenAI 모델은 외부 서버를 호출합니다. 입력된 질문과 검색된 청크가 OpenAI로 전송됩니다.")
+    return selected
 
 
 @st.cache_resource
@@ -376,18 +424,10 @@ def _load_heavy_components():
 
 
 @st.cache_resource
-def _load_llm(model: str) -> OllamaClient:
-    """선택된 모델 전용 OllamaClient를 생성한다."""
+def _load_llm(model: str):
+    """선택된 모델 전용 LLM 클라이언트를 생성한다."""
 
-    llm = OllamaClient(config.OLLAMA_HOST, model)
-    installed_models = llm.list_models()
-    if not installed_models or model not in installed_models:
-        raise RuntimeError(
-            f"Ollama 서버에 연결할 수 없거나 모델 '{model}'이 설치되지 않았습니다.\n"
-            f"설치 명령: `ollama pull {model}`\n"
-            "또는 Ollama 데스크톱 앱을 실행하세요."
-        )
-    return llm
+    return build_llm(model)
 
 
 def _get_pipeline(model: str, top_k: int) -> RagPipeline:
@@ -554,6 +594,7 @@ def _handle_quick_code(
             timing=timing,
             chunks=chunks,
             question=procedure_name,
+            **_llm_answer_log_extra(pipeline),
             extra={"options": options},
         ),
     )
@@ -636,6 +677,7 @@ def _handle_insurance_form(
             timing=timing,
             chunks=chunks,
             question=form.primary,
+            **_llm_answer_log_extra(pipeline),
             extra=log_extra,
         ),
     )
@@ -721,14 +763,7 @@ def main() -> None:
         st.divider()
 
         if page == "챗봇":
-            available_models = _get_available_models()
-            default_index = available_models.index(config.OLLAMA_MODEL) if config.OLLAMA_MODEL in available_models else 0
-            model = st.selectbox(
-                "LLM 모델",
-                available_models,
-                index=default_index,
-                help="exaone3.5:7.8b-instruct 권장 (한국어 처리 최적화)",
-            )
+            model = _select_model_widget()
             top_k = st.slider("Top-K", min_value=4, max_value=12, value=8)
             temperature = st.slider("온도", min_value=0.0, max_value=0.7, value=0.2, step=0.1)
 
@@ -885,6 +920,7 @@ def main() -> None:
                 timing=timing,
                 chunks=chunks,
                 question=question,
+                **_llm_answer_log_extra(pipeline),
             ),
         )
         st.session_state.messages.append(

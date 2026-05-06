@@ -60,6 +60,10 @@ OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma3:4b")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 RERANKER_ENABLED: bool = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
 LOG_DIR: str = os.getenv("LOG_DIR", "logs")
+OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
+OPENAI_DEFAULT_MODEL: str = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5-mini")
+OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", "1500"))
+ALLOW_OLLAMA: bool = os.getenv("ALLOW_OLLAMA", "true").lower() == "true"
 OLLAMA_CANDIDATE_MODELS: list[str] = [
     "exaone3.5:7.8b",
     "exaone3.5:7.8b-instruct",
@@ -68,6 +72,23 @@ OLLAMA_CANDIDATE_MODELS: list[str] = [
     "qwen2.5:14b-instruct",
     "gemma3:4b",
     "gemma3:1b",
+]
+DEFAULT_OPENAI_CANDIDATE_MODELS: list[str] = [
+    "gpt-5.2",
+    "gpt-5.2-pro",
+    "gpt-5",
+    "gpt-5-mini",
+    "gpt-5-nano",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "gpt-4o",
+    "gpt-4o-mini",
+]
+OPENAI_CANDIDATE_MODELS: list[str] = [
+    model.strip()
+    for model in os.getenv("OPENAI_CANDIDATE_MODELS", ",".join(DEFAULT_OPENAI_CANDIDATE_MODELS)).split(",")
+    if model.strip()
 ]
 
 TOP_K_DENSE: int = int(os.getenv("TOP_K_DENSE", "12"))

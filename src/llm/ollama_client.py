@@ -13,6 +13,8 @@ from src import config
 class OllamaClient:
     """Ollama `/api/generate`를 호출하는 얇은 클라이언트."""
 
+    provider = "ollama"
+
     def __init__(self, host: str, model: str, num_ctx: int | None = None):
         self.host = host.rstrip("/") + "/"
         self.model = model

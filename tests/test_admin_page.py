@@ -62,7 +62,14 @@ def test_compute_stats_groups_questions_and_answers() -> None:
     events = [
         {"event": "QUESTION", "details": {"user_id": "admin", "mode": "general"}},
         {"event": "QUESTION", "details": {"user_id": "admin", "mode": "quick_code"}},
-        {"event": "ANSWER", "details": {"model": "gemma3:4b", "timing": {"total_ms": 2000}}},
+        {
+            "event": "ANSWER",
+            "details": {
+                "model": "gpt-5-mini",
+                "timing": {"total_ms": 2000},
+                "token_usage": {"prompt_tokens": 10, "completion_tokens": 5},
+            },
+        },
     ]
 
     stats = _compute_stats(events)
@@ -72,4 +79,6 @@ def test_compute_stats_groups_questions_and_answers() -> None:
     assert stats["avg_total_sec"] == 2
     assert stats["by_user"] == {"admin": 2}
     assert stats["by_mode"] == {"general": 1, "quick_code": 1}
-    assert stats["by_model"] == {"gemma3:4b": 1}
+    assert stats["by_model"] == {"gpt-5-mini": 1}
+    assert stats["openai_prompt_tokens"] == 10
+    assert stats["openai_completion_tokens"] == 5

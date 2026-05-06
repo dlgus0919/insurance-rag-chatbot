@@ -14,7 +14,7 @@ import streamlit as st
 from src import config
 from src.auth import users as user_store
 from src.auth.users import ROLE_ADMIN, ROLE_EMPLOYEE
-from src.llm.ollama_client import OllamaClient
+from src.llm.factory import is_ollama_allowed, list_available_models
 from src.utils.logger import EVENT_ADMIN_VIEW, EVENT_USER_CREATE, EVENT_USER_RESET
 
 LOG_DIR = Path(config.LOG_DIR)
@@ -120,6 +120,10 @@ def _compute_stats(events: list[dict]) -> dict:
     by_user = Counter((event.get("details") or {}).get("user_id") or "(unknown)" for event in questions)
     by_mode = Counter((event.get("details") or {}).get("mode") or "general" for event in questions)
     by_model = Counter((event.get("details") or {}).get("model") or "?" for event in answers)
+    prompt_tokens = sum((event.get("details") or {}).get("token_usage", {}).get("prompt_tokens", 0) or 0 for event in answers)
+    completion_tokens = sum(
+        (event.get("details") or {}).get("token_usage", {}).get("completion_tokens", 0) or 0 for event in answers
+    )
     return {
         "question_count": len(questions),
         "answer_count": len(answers),
@@ -127,6 +131,8 @@ def _compute_stats(events: list[dict]) -> dict:
         "by_user": dict(by_user),
         "by_mode": dict(by_mode),
         "by_model": dict(by_model),
+        "openai_prompt_tokens": prompt_tokens,
+        "openai_completion_tokens": completion_tokens,
     }
 
 
@@ -186,6 +192,9 @@ def _tab_stats(_log) -> None:
     col1.metric("최근 30일 질문", f"{stats['question_count']:,}")
     col2.metric("응답", f"{stats['answer_count']:,}")
     col3.metric("평균 응답(초)", f"{stats['avg_total_sec']:.1f}")
+    col4, col5 = st.columns(2)
+    col4.metric("OpenAI 누적 입력 토큰(30일)", f"{stats['openai_prompt_tokens']:,}")
+    col5.metric("OpenAI 누적 출력 토큰(30일)", f"{stats['openai_completion_tokens']:,}")
 
     st.markdown("**사용자별 질문 수**")
     st.bar_chart(stats["by_user"])
@@ -256,11 +265,10 @@ def _tab_system(_log) -> None:
         st.write("BM25 파일:", str(config.BM25_PATH), "·", "있음" if config.BM25_PATH.exists() else "없음")
     with col2:
         st.markdown("**LLM**")
-        llm = OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL)
-        st.write("Ollama 연결:", "정상" if llm.health() else "실패")
-        st.write("기본 모델:", config.OLLAMA_MODEL)
-        models = llm.list_models()
-        st.write("설치 모델:", models if models else "(조회 실패 또는 없음)")
+        st.write("Ollama 허용:", is_ollama_allowed())
+        st.write("기본 로컬 모델:", config.OLLAMA_MODEL)
+        st.write("기본 OpenAI 모델:", config.OPENAI_DEFAULT_MODEL)
+        st.write("선택 가능 모델:", list_available_models())
 
 
 def render_admin_page(_log) -> None:
