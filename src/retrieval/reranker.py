@@ -28,7 +28,16 @@ class Reranker:
 
         try:
             logger.info("Reranker 로딩: %s", model_name)
-            self.model = CrossEncoder(model_name, max_length=512)
+            try:
+                self.model = CrossEncoder(model_name, max_length=512, local_files_only=True)
+            except (OSError, ValueError):
+                # 캐시 미스 시 한 번만 원격 다운로드 허용 (초기 셋업용 경고 포함)
+                logger.warning(
+                    "Reranker 로컬 캐시 없음 — HuggingFace에서 다운로드합니다: %s. "
+                    "오프라인 환경에서는 먼저 모델을 내려받아야 합니다.",
+                    model_name,
+                )
+                self.model = CrossEncoder(model_name, max_length=512)
         except Exception as exc:  # pragma: no cover - 모델 캐시/환경 의존
             logger.warning("Reranker 로딩 실패 - reranker 비활성화: %s", exc)
             return
