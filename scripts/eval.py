@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from argparse import ArgumentParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +23,7 @@ from src.retrieval.embedder import Embedder
 from src.retrieval.vector_store import VectorStore
 
 SMOKE_QA_PATH = ROOT / "eval" / "smoke_qa.jsonl"
+SMOKE_QA_V2_PATH = ROOT / "eval" / "smoke_qa_v2.jsonl"
 
 
 def load_questions(path: Path = SMOKE_QA_PATH) -> list[dict]:
@@ -73,6 +75,16 @@ def answer_mentions_expected_codes(answer: str, expected_codes: list[str]) -> bo
     return all(code.upper() in normalized for code in expected_codes)
 
 
+def answer_matches_verdict(answer: str, expected_verdict: str) -> bool:
+    """답변이 기대 판정(불가/판정필요)과 일치하는지 확인한다."""
+
+    if expected_verdict == "불가":
+        return any(kw in answer for kw in ["보상하지 않", "지급하지 않", "면책", "보상 불가", "청구 불가"])
+    if expected_verdict == "판정필요":
+        return any(kw in answer for kw in ["약관", "조항", "확인", "판정", "경우에 따라"])
+    return True
+
+
 def filter_chunks_by_doc(chunks, doc_sources: list[str] | None):
     """doc_sources가 있으면 해당 문서 출처의 청크/검색 결과만 남긴다."""
 
@@ -88,8 +100,18 @@ def _hit_to_chunk(hit) -> Chunk:
     return Chunk(id=hit.id, text=hit.document, metadata=metadata)
 
 
+def parse_args(argv: list[str] | None = None):
+    """평가 CLI 인자를 파싱한다."""
+
+    parser = ArgumentParser(description="Smoke QA 평가 스크립트")
+    parser.add_argument("--v2", action="store_true", help="약관 정형 모드 평가 문항을 사용합니다.")
+    return parser.parse_args(argv)
+
+
 def main() -> None:
-    questions = load_questions()
+    args = parse_args()
+    question_path = SMOKE_QA_V2_PATH if args.v2 else SMOKE_QA_PATH
+    questions = load_questions(question_path)
     if not questions:
         raise SystemExit("평가 문항이 없습니다.")
     if not config.BM25_PATH.exists():
@@ -116,6 +138,8 @@ def main() -> None:
 
     recall_hits = 0
     page_hits = 0
+    verdict_hits = 0
+    doc_hits = 0
     evaluated = 0
     skipped = 0
 
@@ -140,9 +164,14 @@ def main() -> None:
         prompt = build_user_prompt(question, chunks)
         answer = llm.generate(prompt, system=SYSTEM_PROMPT, temperature=0.2)
         answer = append_retrieved_source_citations(answer, chunks)
+        item_type = item.get("type")
         page_ok = answer_mentions_expected_page(answer, expected_pages)
         code_ok = answer_mentions_expected_codes(answer, item.get("expected_codes", []))
+        verdict_ok = answer_matches_verdict(answer, item.get("expected_verdict", ""))
+        doc_ok = all(hit.metadata.get("doc_short") in set(doc_sources or []) for hit in fused_hits) if doc_sources else True
         page_hits += int(page_ok)
+        verdict_hits += int(verdict_ok)
+        doc_hits += int(doc_ok)
 
         top_pages = [
             f"{hit.metadata.get('page_start')}-{hit.metadata.get('page_end')}"
@@ -154,6 +183,7 @@ def main() -> None:
             f"[{index:02d}] {item['type']} recall={'OK' if retrieved else 'MISS'} "
             f"page={'OK' if page_ok else 'MISS'} "
             f"code={'OK' if code_ok else 'MISS'} top_pages={top_pages}"
+            + (f" verdict={'OK' if verdict_ok else 'MISS'} doc={'OK' if doc_ok else 'MISS'}" if item_type == "coverage_judgment" else "")
         )
         evaluated += 1
 
@@ -163,9 +193,14 @@ def main() -> None:
     page_accuracy = page_hits / evaluated
     print(f"retrieval recall@8: {recall:.3f}")
     print(f"출처 페이지 정확도: {page_accuracy:.3f}")
+    if args.v2:
+        print(f"판정 키워드 일치율: {verdict_hits / evaluated:.3f}")
+        print(f"문서 출처 일치율: {doc_hits / evaluated:.3f}")
     if skipped:
         print(f"skipped: {skipped}")
 
+    if args.v2:
+        return
     if recall < 0.7 or page_accuracy < 0.6:
         raise SystemExit(1)
 

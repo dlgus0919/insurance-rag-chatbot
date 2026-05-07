@@ -1,9 +1,12 @@
 from src.retrieval import Hit
 from scripts.eval import (
+    SMOKE_QA_V2_PATH,
     answer_mentions_expected_codes,
     answer_mentions_expected_page,
+    answer_matches_verdict,
     filter_chunks_by_doc,
     hit_matches_expected_page,
+    load_questions,
 )
 
 
@@ -43,3 +46,22 @@ def test_filter_chunks_by_doc() -> None:
 
     assert [chunk.id for chunk in filter_chunks_by_doc(chunks, ["약관"])] == ["b"]
     assert filter_chunks_by_doc(chunks, None) == chunks
+
+
+def test_answer_matches_verdict_not_covered() -> None:
+    assert answer_matches_verdict("이 경우 보상하지 않습니다.", "불가") is True
+    assert answer_matches_verdict("보상이 가능합니다.", "불가") is False
+
+
+def test_answer_matches_verdict_needs_judgment() -> None:
+    assert answer_matches_verdict("약관 조항을 확인해야 합니다.", "판정필요") is True
+
+
+def test_smoke_qa_v2_file_loads_ten_items() -> None:
+    items = load_questions(SMOKE_QA_V2_PATH)
+
+    assert len(items) == 10
+    for item in items:
+        assert item["type"] == "coverage_judgment"
+        assert "expected_verdict" in item
+        assert item["doc_sources"] == ["약관"]
