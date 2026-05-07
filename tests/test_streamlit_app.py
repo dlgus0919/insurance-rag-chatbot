@@ -15,6 +15,7 @@ from src.ui.streamlit_app import (
     _filter_cited_chunks,
     _format_timing,
     _insurance_form_log_input,
+    _sanitize_answer_markdown,
     _source_title,
     _turn_count,
 )
@@ -86,6 +87,14 @@ def test_filter_cited_chunks_returns_only_cited_docs() -> None:
     assert _filter_cited_chunks("답변입니다. [출처: 약관, p.38]", chunks) == [policy]
     assert _filter_cited_chunks("출처가 없는 답변입니다.", chunks) == chunks
     assert _filter_cited_chunks("답변입니다. [출처: 없는문서, p.1]", chunks) == chunks
+
+
+def test_sanitize_answer_markdown_adds_spaces_around_tilde() -> None:
+    assert _sanitize_answer_markdown("1~10") == "1 ~ 10"
+    assert _sanitize_answer_markdown("p.38~42") == "p.38 ~ 42"
+    assert _sanitize_answer_markdown("~~취소선~~") == "~~취소선~~"
+    assert _sanitize_answer_markdown("1 ~ 10") == "1 ~ 10"
+    assert _sanitize_answer_markdown("정상 텍스트") == "정상 텍스트"
 
 
 def test_export_helpers_include_messages_timing_and_sources() -> None:

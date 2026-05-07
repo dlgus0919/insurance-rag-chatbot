@@ -103,6 +103,12 @@ def _filter_cited_chunks(answer: str, chunks: list) -> list:
     return filtered if filtered else chunks
 
 
+def _sanitize_answer_markdown(text: str) -> str:
+    """LLM 답변의 단일 물결표 양측에 공백을 추가해 취소선 렌더링을 방지한다."""
+
+    return _re.sub(r"(?<![~\s])~(?![~\s])", " ~ ", text)
+
+
 def _ensure_session_id() -> str:
     """세션 고유 ID를 생성하거나 기존 값을 반환한다."""
 
@@ -568,7 +574,8 @@ def _stream_answer(
         tokens.append(token)
         placeholder.markdown("".join(tokens) + "▌")
 
-    answer = append_retrieved_source_citations("".join(tokens).strip(), chunks)
+    raw_answer = "".join(tokens).strip()
+    answer = append_retrieved_source_citations(_sanitize_answer_markdown(raw_answer), chunks)
     placeholder.markdown(answer)
     llm_ms = (time.perf_counter() - llm_started) * 1000
     total_ms = (time.perf_counter() - total_started) * 1000
@@ -629,6 +636,7 @@ def _handle_quick_code(
                 include_coverage,
                 temperature=0.0,
             )
+            answer = _sanitize_answer_markdown(answer)
             answer = append_retrieved_source_citations(answer, chunks)
             llm_ms = (time.perf_counter() - llm_started) * 1000
         except RuntimeError as exc:
@@ -716,6 +724,7 @@ def _handle_insurance_form(
 
             llm_started = time.perf_counter()
             answer = generate_insurance_form_answer(pipeline, form, chunks, temperature=0.1)
+            answer = _sanitize_answer_markdown(answer)
             llm_ms = (time.perf_counter() - llm_started) * 1000
         except RuntimeError as exc:
             st.error(str(exc))
