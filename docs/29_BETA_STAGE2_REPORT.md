@@ -70,5 +70,5 @@
 
 ## 8. GitHub 반영
 
-- 구현 변경은 커밋 후 `master` 브랜치에서 `origin/master`로 푸시한다.
+- 구현 커밋 `b730b4a`는 `master` 브랜치에서 `origin/master`로 푸시 완료.
 - 원본 PDF/XLSX와 SQLite 산출 DB는 Git 추적 대상에서 제외한다.
