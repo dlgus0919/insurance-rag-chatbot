@@ -37,7 +37,7 @@ class FakePipeline:
                 document="N39.3 요실금은 보상하지 않는 사항입니다.",
                 metadata={"doc_short": "약관", "chapter": "제3조", "page_start": 38, "page_end": 38},
             )
-        ]
+        ], None
 
 
 def test_build_form_query_for_three_modes() -> None:

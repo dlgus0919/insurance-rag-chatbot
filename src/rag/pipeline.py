@@ -18,18 +18,57 @@ _CODE_PATTERN = re.compile(r"(?<![A-Z0-9.])(?:[A-Z]\d{2}(?:\.\d{1,2})?|[A-Z]{1,3
 
 
 @dataclass
+class StageHit:
+    """단일 검색 단계의 hit 정보."""
+
+    chunk_id: str
+    doc_short: str
+    score: float
+    page_start: int | None
+    page_end: int | None
+    text_preview: str
+
+
+@dataclass
+class DebugInfo:
+    """RAG 단계별 중간 검색 결과."""
+
+    dense_hits: list[StageHit]
+    bm25_hits: list[StageHit]
+    rrf_hits: list[StageHit]
+    final_hits: list[StageHit]
+
+
+@dataclass
 class RagAnswer:
     """RAG 답변 결과."""
 
     answer: str
     chunks: list[Chunk]
     timing: dict
+    debug: DebugInfo | None = None
 
 
 def _hit_to_chunk(hit: Hit) -> Chunk:
     metadata = dict(hit.metadata)
     metadata.setdefault("char_count", len(hit.document))
     return Chunk(id=hit.id, text=hit.document, metadata=metadata)
+
+
+def _hits_to_stage(hits: list[Hit]) -> list[StageHit]:
+    """검색 Hit 목록을 관리자 진단용 StageHit 목록으로 변환한다."""
+
+    return [
+        StageHit(
+            chunk_id=hit.id,
+            doc_short=hit.metadata.get("doc_short", ""),
+            score=round(hit.score, 4),
+            page_start=hit.metadata.get("page_start"),
+            page_end=hit.metadata.get("page_end"),
+            text_preview=hit.document[:100],
+        )
+        for hit in hits
+    ]
 
 
 def _extract_query_codes(question: str) -> list[str]:
@@ -124,7 +163,13 @@ class RagPipeline:
             enabled = config.RERANKER_ENABLED if reranker_enabled is None else reranker_enabled
             self.reranker = build_reranker(enabled=enabled)
 
-    def retrieve_hits(self, question: str, top_k: int | None = None, doc_filter: list[str] | None = None) -> list[Hit]:
+    def retrieve_hits(
+        self,
+        question: str,
+        top_k: int | None = None,
+        doc_filter: list[str] | None = None,
+        return_debug: bool = False,
+    ) -> tuple[list[Hit], DebugInfo | None]:
         """질문에 대한 최종 검색 후보를 반환한다."""
 
         final_top_k = top_k or self.top_k_final
@@ -152,11 +197,14 @@ class RagPipeline:
 
         bm25_hits = self.bm25.query(retrieval_query, self.top_k_bm25)
         bm25_hits = _filter_hits_by_doc(bm25_hits, doc_filter)
+        debug_dense = list(dense_hits)
+        debug_bm25 = list(bm25_hits)
         dense_hits = [hit for hit in dense_hits if not _is_low_value_wide_range(hit)]
         bm25_hits = [hit for hit in bm25_hits if not _is_low_value_wide_range(hit)]
         reranker_enabled = self.reranker is not None and getattr(self.reranker, "enabled", True)
         rrf_top_k = final_top_k * 2 if reranker_enabled else final_top_k
         fused_hits = rrf_fuse(dense_hits, bm25_hits, top_k=rrf_top_k, rrf_k=self.rrf_k)
+        debug_rrf = list(fused_hits)
         if code_hits:
             fused_by_id = {hit.id: hit for hit in fused_hits}
             ordered: list[Hit] = []
@@ -169,8 +217,20 @@ class RagPipeline:
         else:
             fused_hits = _prefer_exact_text_hits(fused_hits, named_code_terms)
         if self.reranker is not None:
-            return self.reranker.rerank(question, fused_hits, top_k=final_top_k)
-        return fused_hits[:final_top_k]
+            final_hits = self.reranker.rerank(question, fused_hits, top_k=final_top_k)
+        else:
+            final_hits = fused_hits[:final_top_k]
+        debug = (
+            DebugInfo(
+                dense_hits=_hits_to_stage(debug_dense),
+                bm25_hits=_hits_to_stage(debug_bm25),
+                rrf_hits=_hits_to_stage(debug_rrf),
+                final_hits=_hits_to_stage(final_hits),
+            )
+            if return_debug
+            else None
+        )
+        return final_hits, debug
 
     def answer(
         self,
@@ -178,13 +238,19 @@ class RagPipeline:
         temperature: float = 0.2,
         top_k: int | None = None,
         doc_filter: list[str] | None = None,
+        return_debug: bool = False,
     ) -> RagAnswer:
         """질문에 대해 답변과 사용한 청크를 반환한다."""
 
         total_started = time.perf_counter()
         retrieve_started = time.perf_counter()
 
-        fused_hits = self.retrieve_hits(question, top_k=top_k, doc_filter=doc_filter)
+        fused_hits, debug = self.retrieve_hits(
+            question,
+            top_k=top_k,
+            doc_filter=doc_filter,
+            return_debug=return_debug,
+        )
         chunks = [_hit_to_chunk(hit) for hit in fused_hits]
 
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
@@ -204,4 +270,5 @@ class RagPipeline:
                 "llm_ms": llm_ms,
                 "total_ms": total_ms,
             },
+            debug=debug,
         )

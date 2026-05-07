@@ -142,7 +142,7 @@ def retrieve_insurance_form_chunks(
     """약관 정형 검색용 청크와 실제 적용된 문서 필터를 반환한다."""
 
     doc_filter = merge_insurance_doc_filter(extra_doc_filter)
-    hits = pipeline.retrieve_hits(build_form_query(form), top_k=INSURANCE_FORM_TOP_K, doc_filter=doc_filter)
+    hits, _ = pipeline.retrieve_hits(build_form_query(form), top_k=INSURANCE_FORM_TOP_K, doc_filter=doc_filter)
     return [_hit_to_chunk(hit) for hit in hits], doc_filter
 
 

@@ -130,7 +130,7 @@ def main() -> None:
             print(f"[{index:02d}] {item['type']} skipped({missing_label} 미인덱싱)")
             continue
 
-        fused_hits = pipeline.retrieve_hits(question, top_k=8)
+        fused_hits, _ = pipeline.retrieve_hits(question, top_k=8)
         fused_hits = filter_chunks_by_doc(fused_hits, doc_sources)
         chunks = [_hit_to_chunk(hit) for hit in fused_hits]
 

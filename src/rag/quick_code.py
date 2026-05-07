@@ -74,7 +74,7 @@ def retrieve_quick_code_chunks(
     """퀵 코드 검색용 청크와 실제 적용된 문서 필터를 반환한다."""
 
     doc_filter = merge_doc_filters(determine_doc_filter(include_coverage), selected_docs)
-    hits = pipeline.retrieve_hits(procedure_name, top_k=QUICK_CODE_TOP_K, doc_filter=doc_filter)
+    hits, _ = pipeline.retrieve_hits(procedure_name, top_k=QUICK_CODE_TOP_K, doc_filter=doc_filter)
     return [_hit_to_chunk(hit) for hit in hits], doc_filter
 
 

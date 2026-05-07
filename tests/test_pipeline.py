@@ -1,10 +1,12 @@
 import numpy as np
 
 from src.rag.pipeline import (
+    DebugInfo,
     RagPipeline,
     _expand_retrieval_query,
     _extract_named_code_terms,
     _extract_query_codes,
+    _hits_to_stage,
     _is_low_value_wide_range,
     _prefer_exact_text_hits,
 )
@@ -150,7 +152,7 @@ def test_code_query_uses_filtered_dense_hits() -> None:
         reranker_enabled=False,
     )
 
-    hits = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=8)
+    hits, _ = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=8)
 
     assert vector_store.filter_calls == [(["AA157"], 6, True, None)]
     assert hits[0].id == "code"
@@ -168,7 +170,7 @@ def test_doc_filter_flows_to_vector_store_and_filters_bm25() -> None:
         reranker_enabled=False,
     )
 
-    hits = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=8, doc_filter=["심평원"])
+    hits, _ = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=8, doc_filter=["심평원"])
 
     assert vector_store.filter_calls == [(["AA157"], 6, True, ["심평원"])]
     assert vector_store.query_calls == [(6, ["심평원"])]
@@ -186,7 +188,7 @@ def test_reranker_receives_expanded_rrf_pool() -> None:
         reranker=reranker,
     )
 
-    hits = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=1)
+    hits, _ = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=1)
 
     assert reranker.calls
     assert reranker.calls[0][2] == 1
@@ -203,6 +205,36 @@ def test_low_value_wide_range_detection() -> None:
     )
 
     assert _is_low_value_wide_range(hit) is True
+
+
+def test_retrieve_hits_can_return_debug_info() -> None:
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        DummyVectorStore(),
+        DummyBM25(),
+        DummyLLM(),
+        top_k_final=2,
+        reranker_enabled=False,
+    )
+
+    hits, debug = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=2, return_debug=True)
+
+    assert len(hits) == 2
+    assert isinstance(debug, DebugInfo)
+    assert debug.dense_hits[0].chunk_id == "code"
+    assert debug.bm25_hits[0].chunk_id == "dense"
+    assert debug.rrf_hits
+    assert debug.final_hits
+
+
+def test_hits_to_stage_rounds_score_and_preview() -> None:
+    hit = Hit(id="a", score=1.23456, document="가" * 120, metadata={"doc_short": "약관", "page_start": 3})
+
+    stage_hits = _hits_to_stage([hit])
+
+    assert stage_hits[0].score == 1.2346
+    assert stage_hits[0].doc_short == "약관"
+    assert len(stage_hits[0].text_preview) == 100
 
 
 def test_context_label_backward_compat() -> None:

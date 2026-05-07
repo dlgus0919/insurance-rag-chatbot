@@ -15,6 +15,7 @@ from src import config
 from src.auth import users as user_store
 from src.auth.users import ROLE_ADMIN, ROLE_EMPLOYEE
 from src.llm.factory import is_ollama_allowed, list_available_models
+from src.rag.pipeline import DebugInfo
 from src.utils.logger import EVENT_ADMIN_VIEW, EVENT_USER_CREATE, EVENT_USER_RESET
 
 LOG_DIR = Path(config.LOG_DIR)
@@ -275,6 +276,50 @@ def _tab_system(_log) -> None:
         st.write("클라우드 배포:", config.CLOUD_DEPLOY)
 
 
+def _tab_search_diagnostics(_log) -> None:
+    """최근 질의의 RAG 단계별 검색 결과를 표시한다."""
+
+    st.markdown("### RAG 검색 진단")
+    st.caption("최근 질의의 단계별 검색 결과를 표시합니다.")
+
+    debug = st.session_state.get("last_debug")
+    if debug is None:
+        st.info("질의를 먼저 실행하세요.")
+        return
+
+    debug = DebugInfo(
+        dense_hits=debug.dense_hits,
+        bm25_hits=debug.bm25_hits,
+        rrf_hits=debug.rrf_hits,
+        final_hits=debug.final_hits,
+    )
+    for stage_name, stage_hits in [
+        ("① Dense (BGE-M3)", debug.dense_hits),
+        ("② BM25 (키워드)", debug.bm25_hits),
+        ("③ RRF 융합", debug.rrf_hits),
+        ("④ Rerank 후 최종", debug.final_hits),
+    ]:
+        with st.expander(f"{stage_name} — {len(stage_hits)}건", expanded=stage_name.startswith("④")):
+            if not stage_hits:
+                st.write("(결과 없음)")
+                continue
+            import pandas as pd
+
+            st.dataframe(
+                [
+                    {
+                        "chunk_id": hit.chunk_id,
+                        "문서": hit.doc_short,
+                        "점수": hit.score,
+                        "페이지": f"p.{hit.page_start}" if hit.page_start else "-",
+                        "본문 미리보기": hit.text_preview,
+                    }
+                    for hit in stage_hits
+                ],
+                use_container_width=True,
+            )
+
+
 def render_admin_page(_log) -> None:
     """관리자 페이지 본문을 렌더링한다."""
 
@@ -284,7 +329,7 @@ def render_admin_page(_log) -> None:
 
     _log(EVENT_ADMIN_VIEW)
     st.title("관리자 페이지")
-    tabs = st.tabs(["로그 조회", "통계", "사용자 관리", "시스템 상태"])
+    tabs = st.tabs(["로그 조회", "통계", "사용자 관리", "시스템 상태", "🔍 검색 진단"])
     with tabs[0]:
         _tab_logs(_log)
     with tabs[1]:
@@ -293,3 +338,5 @@ def render_admin_page(_log) -> None:
         _tab_users(_log)
     with tabs[3]:
         _tab_system(_log)
+    with tabs[4]:
+        _tab_search_diagnostics(_log)
