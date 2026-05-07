@@ -9,4 +9,5 @@ logs/
 users.json
 users.json.tmp
 data/
+data/chat_history/
 *.pdf

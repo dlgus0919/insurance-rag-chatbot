@@ -41,6 +41,7 @@ from src.retrieval.embedder import Embedder
 from src.retrieval.reranker import build_reranker
 from src.retrieval.vector_store import VectorStore
 from src.ui.admin_page import render_admin_page
+from src.ui.chat_store import delete_chat, list_user_chats, load_chat, new_chat_id, save_chat
 from src.ui.pdf_view import open_pdf_in_native_viewer, render_pdf_page_png
 from src.utils.logger import (
     EVENT_ANSWER,
@@ -156,6 +157,35 @@ def _bootstrap_cloud_assets() -> int:
     from scripts.bootstrap_assets import main as bootstrap_main
 
     return bootstrap_main()
+
+
+def _start_new_chat() -> None:
+    """새 채팅을 시작한다."""
+
+    st.session_state.current_chat_id = None
+    st.session_state.messages = []
+    st.session_state["last_debug"] = None
+
+
+def _switch_chat(user_id: str, chat_id: str) -> None:
+    """저장된 채팅을 불러와 현재 세션에 적용한다."""
+
+    chat = load_chat(user_id, chat_id)
+    if chat:
+        st.session_state.current_chat_id = chat_id
+        st.session_state.messages = chat["messages"]
+        st.session_state["last_debug"] = None
+
+
+def _auto_save(user_id: str) -> None:
+    """어시스턴트 메시지 추가 후 채팅을 자동 저장하고 목록을 갱신한다."""
+
+    if not user_id or not st.session_state.messages:
+        return
+    if st.session_state.get("current_chat_id") is None:
+        st.session_state.current_chat_id = new_chat_id()
+    save_chat(user_id, st.session_state.current_chat_id, st.session_state.messages)
+    st.session_state.chat_list = list_user_chats(user_id)
 
 
 def _check_auth(session_id: str) -> bool:
@@ -673,6 +703,7 @@ def _handle_quick_code(
             "model": model,
         }
     )
+    _auto_save(st.session_state.get("user_id", ""))
 
 
 def _handle_insurance_form(
@@ -760,6 +791,7 @@ def _handle_insurance_form(
             "model": model,
         }
     )
+    _auto_save(st.session_state.get("user_id", ""))
 
 
 def render_insurance_form_panel() -> tuple[InsuranceFormInput | None, bool]:
@@ -822,6 +854,11 @@ def main() -> None:
     if not _check_auth(session_id):
         st.stop()
 
+    user_id = st.session_state.get("user_id", "")
+    if "chat_list" not in st.session_state:
+        st.session_state.chat_list = list_user_chats(user_id)
+    if "current_chat_id" not in st.session_state:
+        st.session_state.current_chat_id = None
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
@@ -836,7 +873,16 @@ def main() -> None:
         st.markdown(f"**{display}** · _{role_label}_")
         if st.button("로그아웃", use_container_width=True):
             _log(EVENT_LOGOUT)
-            for key in ("authenticated", "user_id", "user_role", "user_display", "messages", "last_debug"):
+            for key in (
+                "authenticated",
+                "user_id",
+                "user_role",
+                "user_display",
+                "messages",
+                "last_debug",
+                "current_chat_id",
+                "chat_list",
+            ):
                 st.session_state.pop(key, None)
             st.rerun()
         page = st.radio("페이지", ["챗봇", "관리자"], horizontal=True, key="page") if role == ROLE_ADMIN else "챗봇"
@@ -848,6 +894,43 @@ def main() -> None:
             temperature = st.slider("온도", min_value=0.0, max_value=0.7, value=0.2, step=0.1)
 
             st.divider()
+            st.subheader("💬 채팅 목록")
+            if st.button("+ 새 채팅", use_container_width=True, type="primary"):
+                _start_new_chat()
+                st.rerun()
+
+            chat_list = st.session_state.get("chat_list", [])
+            if not chat_list:
+                st.caption("저장된 채팅이 없습니다.")
+            else:
+                for meta in chat_list:
+                    chat_id = meta["chat_id"]
+                    is_active = chat_id == st.session_state.get("current_chat_id")
+                    date_str = meta.get("updated_at", "")[:10]
+                    label = meta.get("title", "제목 없음")
+
+                    col_btn, col_del = st.columns([5, 1])
+                    with col_btn:
+                        btn_type = "primary" if is_active else "secondary"
+                        if st.button(
+                            label,
+                            key=f"chat_sel_{chat_id}",
+                            use_container_width=True,
+                            type=btn_type,
+                            help=f"{date_str} · {meta.get('message_count', 0)}개 메시지",
+                        ):
+                            if not is_active:
+                                _switch_chat(user_id, chat_id)
+                                st.rerun()
+                    with col_del:
+                        if st.button("🗑", key=f"chat_del_{chat_id}", help="삭제"):
+                            delete_chat(user_id, chat_id)
+                            if is_active:
+                                _start_new_chat()
+                            st.session_state.chat_list = list_user_chats(user_id)
+                            st.rerun()
+
+            st.divider()
             st.markdown("**검색 대상 문서**")
             selected_docs = []
             for doc_short in config.DOC_SHORT_ORDER:
@@ -855,10 +938,6 @@ def main() -> None:
                     selected_docs.append(doc_short)
             if not selected_docs:
                 st.warning("최소 1개 문서를 선택해주세요.")
-
-            if st.button("대화 초기화"):
-                st.session_state.messages = []
-                st.rerun()
 
             st.divider()
             st.subheader("대화 내보내기")
@@ -1019,6 +1098,7 @@ def main() -> None:
                 "model": model,
             }
         )
+        _auto_save(user_id)
 
 
 if __name__ == "__main__":
