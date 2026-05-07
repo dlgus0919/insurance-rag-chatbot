@@ -9,16 +9,10 @@ from src.llm.base import LLMClient
 from src.llm.ollama_client import OllamaClient
 
 OPENAI_MODEL_INFO: dict[str, dict] = {
-    "gpt-5.2": {"family": "GPT-5.2", "size": "standard", "use_case": "고성능"},
-    "gpt-5.2-pro": {"family": "GPT-5.2", "size": "pro", "use_case": "최고성능"},
-    "gpt-5": {"family": "GPT-5", "size": "standard", "use_case": "고성능"},
-    "gpt-5-mini": {"family": "GPT-5", "size": "mini", "use_case": "균형형"},
-    "gpt-5-nano": {"family": "GPT-5", "size": "nano", "use_case": "저비용"},
-    "gpt-4.1": {"family": "GPT-4.1", "size": "standard", "use_case": "고성능"},
-    "gpt-4.1-mini": {"family": "GPT-4.1", "size": "mini", "use_case": "균형형"},
-    "gpt-4.1-nano": {"family": "GPT-4.1", "size": "nano", "use_case": "저비용"},
-    "gpt-4o": {"family": "GPT-4o", "size": "standard", "use_case": "호환"},
-    "gpt-4o-mini": {"family": "GPT-4o", "size": "mini", "use_case": "저비용"},
+    "gpt-5.5":            {"family": "GPT-5.5", "size": "standard", "use_case": "최고품질"},
+    "gpt-5.2-chat-latest":{"family": "GPT-5.2", "size": "standard", "use_case": "고성능"},
+    "gpt-5.4-mini":       {"family": "GPT-5.4", "size": "mini",     "use_case": "고속/균형"},
+    "gpt-5-mini":         {"family": "GPT-5",   "size": "mini",     "use_case": "경량/저비용"},
 }
 
 

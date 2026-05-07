@@ -37,9 +37,9 @@ GitHub Release를 만들고 `assets.zip`을 업로드한 뒤 다운로드 URL을
 
 ```toml
 OPENAI_API_KEY = "sk-..."
-OPENAI_DEFAULT_MODEL = "gpt-5-mini"
+OPENAI_DEFAULT_MODEL = "gpt-5.2-chat-latest"
 OPENAI_MAX_TOKENS = "1500"
-OPENAI_CANDIDATE_MODELS = "gpt-5.2,gpt-5.2-pro,gpt-5,gpt-5-mini,gpt-5-nano,gpt-4.1,gpt-4.1-mini,gpt-4.1-nano,gpt-4o,gpt-4o-mini"
+OPENAI_CANDIDATE_MODELS = "gpt-5.5,gpt-5.2-chat-latest,gpt-5.4-mini,gpt-5-mini"
 ALLOW_OLLAMA = "false"
 CLOUD_DEPLOY = "true"
 EMBEDDING_MODEL = "BAAI/bge-m3"
@@ -52,6 +52,8 @@ USERS_JSON = '{"version":1,"users":[{"username":"admin","password_hash":"$pbkdf2
 ```
 
 `USERS_JSON`의 `password_hash`는 로컬에서 `python scripts/manage_users.py init`으로 생성한 `users.json` 내용을 사용합니다. 평문 비밀번호를 secrets에 넣지 않습니다.
+
+`gpt-5.5`, `gpt-5.4-mini`, `gpt-5.2-chat-latest`, `gpt-5-mini`는 Chat Completions와 streaming을 지원하는 모델로 웹앱의 기존 OpenAI 스트리밍 클라이언트에서 사용할 수 있습니다. `gpt-5.2-pro`, `gpt-5.5-pro`처럼 현재 스트리밍 웹앱 경로와 맞지 않는 pro 계열 모델은 후보 목록에 넣지 않습니다.
 
 `HF_MODEL_DOWNLOAD=true`는 Streamlit Cloud 웹 게시 테스트에서 BGE-M3를 HuggingFace에서 내려받도록 허용합니다. 로컬 실행과 인제스트는 기본값 `false`를 유지해 기존 캐시 기반 파이프라인을 보존합니다. BGE-M3는 큰 모델이므로 다운로드 또는 로드가 실패하면 BM25-only로 폴백하지 않고 명시 오류를 확인합니다.
 

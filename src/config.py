@@ -66,7 +66,7 @@ OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 RERANKER_ENABLED: bool = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
 LOG_DIR: str = os.getenv("LOG_DIR", "logs")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-OPENAI_DEFAULT_MODEL: str = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5-mini")
+OPENAI_DEFAULT_MODEL: str = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.2-chat-latest")
 OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", "1500"))
 ALLOW_OLLAMA: bool = os.getenv("ALLOW_OLLAMA", "true").lower() == "true"
 CLOUD_DEPLOY: bool = os.getenv("CLOUD_DEPLOY", "false").lower() == "true"
@@ -80,25 +80,20 @@ OLLAMA_CANDIDATE_MODELS: list[str] = [
     "gemma3:1b",
 ]
 DEFAULT_OPENAI_CANDIDATE_MODELS: list[str] = [
-    "gpt-5.2",
-    "gpt-5.2-chat-latest",
-    "gpt-5",
-    "gpt-5-mini",
-    "gpt-5-nano",
-    "gpt-4.1",
-    "gpt-4.1-mini",
-    "gpt-4.1-nano",
-    "gpt-4o",
-    "gpt-4o-mini",
+    "gpt-5.5",           # 최신 프론티어 — 복잡한 약관 해석·보상판정
+    "gpt-5.2-chat-latest",  # 이전 세대 프론티어 인스턴트 — 일반 질의
+    "gpt-5.4-mini",      # 중간 성능, 고속 — 퀵 코드 검색
+    "gpt-5-mini",        # 경량/저비용 — 단순 조회·테스트
 ]
-OPENAI_RESPONSES_ONLY_MODELS: set[str] = {
+OPENAI_EXCLUDED_STREAMING_MODELS: set[str] = {
+    "gpt-5.5-pro",
     "gpt-5.2-pro",
     "gpt-5.2-pro-2025-12-11",
 }
 OPENAI_CANDIDATE_MODELS: list[str] = [
     model.strip()
     for model in os.getenv("OPENAI_CANDIDATE_MODELS", ",".join(DEFAULT_OPENAI_CANDIDATE_MODELS)).split(",")
-    if model.strip() and model.strip() not in OPENAI_RESPONSES_ONLY_MODELS
+    if model.strip() and model.strip() not in OPENAI_EXCLUDED_STREAMING_MODELS
 ]
 
 TOP_K_DENSE: int = int(os.getenv("TOP_K_DENSE", "12"))

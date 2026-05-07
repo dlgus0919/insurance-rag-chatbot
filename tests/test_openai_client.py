@@ -125,3 +125,50 @@ def test_generate_stream_raises_with_response_body(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="unsupported parameter"):
         list(client.generate_stream("질문"))
+
+
+# ── 신규 4개 모델 검증 ──────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("model", [
+    "gpt-5.5",
+    "gpt-5.2-chat-latest",
+    "gpt-5.4-mini",
+    "gpt-5-mini",
+])
+def test_all_candidate_models_use_max_completion_tokens(model: str) -> None:
+    """4개 모델 모두 Chat Completions 형식으로 max_completion_tokens만 전송해야 한다."""
+    client = OpenAIClient(model, api_key="sk-test", max_tokens=512)
+    payload = client._payload("질문", "규칙", 0.2, stream=False)
+
+    assert payload["model"] == model
+    assert payload["max_completion_tokens"] == 512
+    assert "max_tokens" not in payload, f"{model}: max_tokens 포함 금지 (Chat Completions 오류 유발)"
+    assert "temperature" not in payload, f"{model}: temperature 미지원 모델에 전송 금지"
+
+
+def test_candidate_models_list_contains_exactly_four(monkeypatch) -> None:
+    """config에 스트리밍 웹앱에서 노출할 4개 모델만 등록되어야 한다."""
+    monkeypatch.delenv("OPENAI_CANDIDATE_MODELS", raising=False)
+    from importlib import reload
+    from src import config as cfg
+    reload(cfg)
+
+    expected = {"gpt-5.5", "gpt-5.2-chat-latest", "gpt-5.4-mini", "gpt-5-mini"}
+    assert set(cfg.OPENAI_CANDIDATE_MODELS) == expected
+
+    for blocked in ("gpt-5.5-pro", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11"):
+        assert blocked not in cfg.OPENAI_CANDIDATE_MODELS, f"{blocked}은 현재 웹앱 스트리밍 후보에서 제외해야 함"
+
+
+def test_streaming_excluded_model_filtered_from_env(monkeypatch) -> None:
+    """Streamlit Secrets에 pro 계열이 포함되어 있어도 런타임에 걸러져야 한다."""
+    monkeypatch.setenv(
+        "OPENAI_CANDIDATE_MODELS",
+        "gpt-5.5,gpt-5.5-pro,gpt-5.2-chat-latest,gpt-5.4-mini,gpt-5-mini",
+    )
+    from importlib import reload
+    from src import config as cfg
+    reload(cfg)
+
+    assert "gpt-5.5-pro" not in cfg.OPENAI_CANDIDATE_MODELS
+    assert "gpt-5.5" in cfg.OPENAI_CANDIDATE_MODELS

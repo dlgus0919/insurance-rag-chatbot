@@ -84,8 +84,9 @@ OpenAI 모델 사용 예시:
 
 ```bash
 OPENAI_API_KEY=sk-...
-OPENAI_DEFAULT_MODEL=gpt-5-mini
+OPENAI_DEFAULT_MODEL=gpt-5.2-chat-latest
 OPENAI_MAX_TOKENS=1500
+OPENAI_CANDIDATE_MODELS=gpt-5.5,gpt-5.2-chat-latest,gpt-5.4-mini,gpt-5-mini
 ```
 
 OpenAI 모델을 선택하면 질문과 검색된 문서 청크가 OpenAI API로 전송됩니다.
