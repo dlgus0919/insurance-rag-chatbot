@@ -30,12 +30,14 @@ from src.llm.factory import build_llm, format_model_label, get_openai_model_info
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.rag.insurance_form import (
     COVERAGE_TOPICS,
+    INSURANCE_FORM_TOP_K,
     InsuranceFormInput,
+    build_form_query,
     generate_insurance_form_answer,
     retrieve_insurance_form_chunks,
 )
 from src.rag.pipeline import DebugInfo, RagPipeline, _hit_to_chunk
-from src.rag.quick_code import generate_quick_code_answer, retrieve_quick_code_chunks
+from src.rag.quick_code import QUICK_CODE_TOP_K, generate_quick_code_answer, retrieve_quick_code_chunks
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
 from src.retrieval.reranker import build_reranker
@@ -501,27 +503,6 @@ def _select_model_widget() -> str:
     return selected
 
 
-def _get_doc_filter_from_meta(
-    own_company: str,
-    product_type: str,
-    selected_docs: list[str],
-) -> list[str] | None:
-    """자사/타사와 상품 유형 필터를 반영해 검색 대상 doc_short 목록을 만든다."""
-
-    candidates = list(config.INDEXED_PDF_SOURCES)
-    if own_company == "자사":
-        candidates = [source for source in candidates if source.is_own_company is True]
-    elif own_company == "타사":
-        candidates = [source for source in candidates if source.is_own_company is False]
-
-    if product_type != "전체":
-        candidates = [source for source in candidates if source.product_type == product_type]
-
-    candidate_shorts = {source.doc_short for source in candidates}
-    filtered = [doc_short for doc_short in selected_docs if doc_short in candidate_shorts]
-    return filtered if filtered else None
-
-
 @st.cache_resource
 def _load_heavy_components():
     """임베더·벡터스토어·BM25·Reranker를 한 번만 로드한다."""
@@ -641,7 +622,7 @@ def _handle_quick_code(
     model: str,
     temperature: float,
     session_id: str,
-    selected_docs: list[str],
+    selected_docs: list[str] | None,
 ) -> None:
     """퀵 코드 검색 폼 제출을 처리한다."""
 
@@ -649,6 +630,7 @@ def _handle_quick_code(
     options = {"summary": include_summary, "coverage": include_coverage}
     st.session_state.messages.append({"role": "user", "content": question})
     st.session_state["last_debug"] = None
+    log_selected_docs = list(selected_docs or [])
     _log(
         EVENT_QUESTION,
         _build_question_log_details(
@@ -656,7 +638,7 @@ def _handle_quick_code(
             model=model,
             top_k=6,
             temperature=0.0,
-            selected_docs=selected_docs,
+            selected_docs=log_selected_docs,
             question=procedure_name,
             extra={"options": options},
         ),
@@ -670,12 +652,17 @@ def _handle_quick_code(
         try:
             with st.spinner("코드 후보 검색 중..."):
                 retrieve_started = time.perf_counter()
-                chunks, applied_doc_filter = retrieve_quick_code_chunks(
-                    pipeline,
-                    procedure_name,
-                    include_coverage,
-                    selected_docs,
-                )
+                if selected_docs is None:
+                    hits, _ = pipeline.retrieve_hits(procedure_name, top_k=QUICK_CODE_TOP_K, doc_filter=None)
+                    chunks = [_hit_to_chunk(hit) for hit in hits]
+                    applied_doc_filter = []
+                else:
+                    chunks, applied_doc_filter = retrieve_quick_code_chunks(
+                        pipeline,
+                        procedure_name,
+                        include_coverage,
+                        selected_docs,
+                    )
                 retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
 
             llm_started = time.perf_counter()
@@ -732,13 +719,13 @@ def _handle_insurance_form(
     pipeline: RagPipeline,
     model: str,
     session_id: str,
-    selected_docs: list[str],
+    selected_docs: list[str] | None,
 ) -> None:
     """약관 정형 검색 폼 제출을 처리한다."""
 
     sub_mode_label = {value: key for key, value in INSURANCE_SUB_MODES.items()}[form.mode]
     question = f"약관 정형 검색({sub_mode_label}): {form.primary}"
-    applied_doc_filter = list(dict.fromkeys(["약관"] + selected_docs))
+    applied_doc_filter = [] if selected_docs is None else list(dict.fromkeys(["약관"] + selected_docs))
     log_extra = {
         "sub_mode": form.mode,
         "form_input": _insurance_form_log_input(form),
@@ -767,11 +754,20 @@ def _handle_insurance_form(
         try:
             with st.spinner("약관 조항 검색 중..."):
                 retrieve_started = time.perf_counter()
-                chunks, applied_doc_filter = retrieve_insurance_form_chunks(
-                    pipeline,
-                    form,
-                    extra_doc_filter=selected_docs,
-                )
+                if selected_docs is None:
+                    hits, _ = pipeline.retrieve_hits(
+                        build_form_query(form),
+                        top_k=INSURANCE_FORM_TOP_K,
+                        doc_filter=None,
+                    )
+                    chunks = [_hit_to_chunk(hit) for hit in hits]
+                    applied_doc_filter = []
+                else:
+                    chunks, applied_doc_filter = retrieve_insurance_form_chunks(
+                        pipeline,
+                        form,
+                        extra_doc_filter=selected_docs,
+                    )
                 retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
 
             llm_started = time.perf_counter()
@@ -952,34 +948,8 @@ def main() -> None:
                             st.rerun()
 
             st.divider()
-            st.markdown("#### 문서 필터")
-            own_company_filter = st.radio(
-                "보험사 구분",
-                ["전체", "자사", "타사"],
-                horizontal=True,
-                key="own_company_filter",
-            )
-            available_product_types = sorted(
-                {source.product_type for source in config.INDEXED_PDF_SOURCES if source.product_type}
-            )
-            product_type_filter = st.selectbox(
-                "상품 유형",
-                ["전체"] + available_product_types,
-                key="product_type_filter",
-            )
-            st.markdown("---")
-            st.markdown("**문서 개별 선택**")
-            selected_docs = []
-            for doc_short in config.INDEXED_DOC_SHORT_ORDER:
-                if st.checkbox(doc_short, value=True, key=f"doc_filter_{doc_short}"):
-                    selected_docs.append(doc_short)
-            effective_doc_filter = _get_doc_filter_from_meta(
-                own_company_filter,
-                product_type_filter,
-                selected_docs,
-            )
-            if not selected_docs:
-                st.warning("최소 1개 문서를 선택해주세요.")
+            st.markdown("#### 검색 범위")
+            st.caption("현재 전체 문서를 검색합니다.")
 
             st.divider()
             st.subheader("대화 내보내기")
@@ -1037,9 +1007,6 @@ def main() -> None:
                 render_timing(message.get("timing"))
 
     search_mode = st.radio("검색 모드", SEARCH_MODES, horizontal=True, key="search_mode")
-    if not selected_docs:
-        st.info("검색 대상 문서를 1개 이상 선택하면 질문할 수 있습니다.")
-        return
 
     if search_mode == "약관 정형 검색":
         form, submitted = render_insurance_form_panel()
@@ -1053,7 +1020,7 @@ def main() -> None:
             if pipeline is None:
                 st.error("검색 파이프라인을 사용할 수 없습니다.")
                 return
-            _handle_insurance_form(form, pipeline, model, session_id, effective_doc_filter or selected_docs)
+            _handle_insurance_form(form, pipeline, model, session_id, None)
         return
 
     if search_mode == "퀵 코드 검색":
@@ -1081,7 +1048,7 @@ def main() -> None:
                 model,
                 temperature,
                 session_id,
-                effective_doc_filter or selected_docs,
+                None,
             )
         return
 
@@ -1094,7 +1061,7 @@ def main() -> None:
                 model=model,
                 top_k=top_k,
                 temperature=temperature,
-                selected_docs=effective_doc_filter or selected_docs,
+                selected_docs=[],
                 question=question,
             ),
         )
@@ -1108,7 +1075,7 @@ def main() -> None:
                     pipeline,
                     question,
                     temperature,
-                    doc_filter=effective_doc_filter,
+                    doc_filter=None,
                 )
             except RuntimeError as exc:
                 st.error(str(exc))
@@ -1123,7 +1090,7 @@ def main() -> None:
             _build_answer_log_details(
                 mode="general",
                 model=model,
-                selected_docs=effective_doc_filter or selected_docs,
+                selected_docs=[],
                 answer=answer,
                 timing=timing,
                 chunks=cited_chunks,

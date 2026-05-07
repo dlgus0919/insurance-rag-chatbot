@@ -118,9 +118,16 @@ PDF_SOURCES: list[PdfSource] = [
     ),
 ]
 DOC_SHORT_ORDER: list[str] = [source.doc_short for source in PDF_SOURCES]
-INDEXED_PDF_SOURCES: list[PdfSource] = [
-    source for source in PDF_SOURCES if not source.requires_ocr and source.path.exists()
-]
+
+
+def indexed_pdf_sources(sources: list[PdfSource] | None = None) -> list[PdfSource]:
+    """클라우드에서 조회 가능한 인덱싱 대상 문서 목록을 반환한다."""
+
+    selected_sources = PDF_SOURCES if sources is None else sources
+    return [source for source in selected_sources if not source.requires_ocr and source.cloud_safe]
+
+
+INDEXED_PDF_SOURCES: list[PdfSource] = indexed_pdf_sources()
 INDEXED_DOC_SHORT_ORDER: list[str] = [source.doc_short for source in INDEXED_PDF_SOURCES]
 
 SPREADSHEET_SOURCES: list[SpreadsheetSource] = [
