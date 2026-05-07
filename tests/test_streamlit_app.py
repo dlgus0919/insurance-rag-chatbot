@@ -12,6 +12,7 @@ from src.ui.streamlit_app import (
     _export_csv,
     _export_json,
     _export_txt,
+    _filter_cited_chunks,
     _format_timing,
     _insurance_form_log_input,
     _source_title,
@@ -75,6 +76,16 @@ def test_format_timing() -> None:
     timing = {"retrieve_ms": 12.3, "llm_ms": 456.7, "total_ms": 1234.5}
 
     assert _format_timing(timing) == "검색 12ms · 생성 457ms · 합계 1.2초"
+
+
+def test_filter_cited_chunks_returns_only_cited_docs() -> None:
+    policy = Chunk(id="p", text="약관", metadata={"doc_short": "약관"})
+    hira = Chunk(id="h", text="심평원", metadata={"doc_short": "심평원"})
+    chunks = [policy, hira]
+
+    assert _filter_cited_chunks("답변입니다. [출처: 약관, p.38]", chunks) == [policy]
+    assert _filter_cited_chunks("출처가 없는 답변입니다.", chunks) == chunks
+    assert _filter_cited_chunks("답변입니다. [출처: 없는문서, p.1]", chunks) == chunks
 
 
 def test_export_helpers_include_messages_timing_and_sources() -> None:

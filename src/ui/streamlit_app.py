@@ -6,6 +6,7 @@ import csv
 import io
 import json
 import os
+import re as _re
 import sys
 import time
 import uuid
@@ -86,6 +87,16 @@ def _format_timing(timing: dict) -> str:
         f"검색 {timing['retrieve_ms']:.0f}ms · 생성 {timing['llm_ms']:.0f}ms · "
         f"합계 {timing['total_ms'] / 1000:.1f}초"
     )
+
+
+def _filter_cited_chunks(answer: str, chunks: list) -> list:
+    """답변의 [출처: <doc_short>, ...] 블록에 언급된 문서 청크만 반환한다."""
+
+    cited_docs = {match.strip() for match in _re.findall(r"\[출처:\s*([^,\]\n]+)", answer)}
+    if not cited_docs:
+        return chunks
+    filtered = [chunk for chunk in chunks if chunk.metadata.get("doc_short") in cited_docs]
+    return filtered if filtered else chunks
 
 
 def _ensure_session_id() -> str:
@@ -622,8 +633,9 @@ def _handle_quick_code(
 
         total_ms = (time.perf_counter() - total_started) * 1000
         timing = {"retrieve_ms": retrieve_ms, "llm_ms": llm_ms, "total_ms": total_ms}
+        cited_chunks = _filter_cited_chunks(answer, chunks)
         st.markdown(answer)
-        render_sources(chunks, key_prefix=f"quick_{len(st.session_state.messages)}")
+        render_sources(cited_chunks, key_prefix=f"quick_{len(st.session_state.messages)}")
         render_timing(timing)
 
     _log(
@@ -634,7 +646,7 @@ def _handle_quick_code(
             selected_docs=applied_doc_filter,
             answer=answer,
             timing=timing,
-            chunks=chunks,
+            chunks=cited_chunks,
             question=procedure_name,
             **_llm_answer_log_extra(pipeline),
             extra={"options": options},
@@ -644,7 +656,7 @@ def _handle_quick_code(
         {
             "role": "assistant",
             "content": answer,
-            "chunks": chunks,
+            "chunks": cited_chunks,
             "timing": timing,
             "model": model,
         }
@@ -706,8 +718,9 @@ def _handle_insurance_form(
 
         total_ms = (time.perf_counter() - total_started) * 1000
         timing = {"retrieve_ms": retrieve_ms, "llm_ms": llm_ms, "total_ms": total_ms}
+        cited_chunks = _filter_cited_chunks(answer, chunks)
         st.markdown(answer)
-        render_sources(chunks, key_prefix=f"insurance_{len(st.session_state.messages)}")
+        render_sources(cited_chunks, key_prefix=f"insurance_{len(st.session_state.messages)}")
         render_timing(timing)
 
     _log(
@@ -718,7 +731,7 @@ def _handle_insurance_form(
             selected_docs=applied_doc_filter,
             answer=answer,
             timing=timing,
-            chunks=chunks,
+            chunks=cited_chunks,
             question=form.primary,
             **_llm_answer_log_extra(pipeline),
             extra=log_extra,
@@ -728,7 +741,7 @@ def _handle_insurance_form(
         {
             "role": "assistant",
             "content": answer,
-            "chunks": chunks,
+            "chunks": cited_chunks,
             "timing": timing,
             "model": model,
         }
@@ -969,7 +982,8 @@ def main() -> None:
                 st.error(str(exc))
                 return
             st.session_state["last_debug"] = debug
-            render_sources(chunks, key_prefix=f"current_{len(st.session_state.messages)}")
+            cited_chunks = _filter_cited_chunks(answer, chunks)
+            render_sources(cited_chunks, key_prefix=f"current_{len(st.session_state.messages)}")
             render_timing(timing)
 
         _log(
@@ -980,7 +994,7 @@ def main() -> None:
                 selected_docs=selected_docs,
                 answer=answer,
                 timing=timing,
-                chunks=chunks,
+                chunks=cited_chunks,
                 question=question,
                 **_llm_answer_log_extra(pipeline),
             ),
@@ -989,7 +1003,7 @@ def main() -> None:
             {
                 "role": "assistant",
                 "content": answer,
-                "chunks": chunks,
+                "chunks": cited_chunks,
                 "timing": timing,
                 "model": model,
             }
