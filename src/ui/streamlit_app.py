@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
+import logging as _logging
 import os
 import re as _re
 import sys
@@ -14,6 +15,9 @@ from datetime import datetime
 from pathlib import Path
 
 import streamlit as st
+
+_logging.getLogger("transformers.utils.versions").setLevel(_logging.ERROR)
+_logging.getLogger("sentence_transformers").setLevel(_logging.WARNING)
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
