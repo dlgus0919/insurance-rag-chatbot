@@ -125,6 +125,28 @@ def test_expand_retrieval_query_for_three_major_non_covered_items() -> None:
     assert "자기공명영상진단" in expanded
 
 
+def test_expand_retrieval_query_for_traffic_accident() -> None:
+    expanded = _expand_retrieval_query("보험 가입 후 3일째 교통사고로 입원했습니다.")
+
+    assert "상해급여" in expanded
+    assert "자동차보험" in expanded
+    assert "보장개시일" in expanded
+
+
+def test_expand_retrieval_query_for_motorcycle() -> None:
+    expanded = _expand_retrieval_query("이륜자동차를 운전하다가 사고가 났습니다.")
+
+    assert "이륜자동차 부담보 특별약관" in expanded
+    assert "알릴 의무" in expanded
+
+
+def test_expand_retrieval_query_for_drunk_injury() -> None:
+    expanded = _expand_retrieval_query("술을 마신 상태에서 넘어져 상해를 입었습니다.")
+
+    assert "면책" in expanded
+    assert "중대한 과실" in expanded
+
+
 def test_extract_named_code_terms() -> None:
     assert _extract_named_code_terms("식도조루술의 코드를 알려줘.") == ["식도조루술"]
 
