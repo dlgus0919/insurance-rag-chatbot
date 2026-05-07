@@ -284,7 +284,8 @@ def _tab_search_diagnostics(_log) -> None:
 
     debug = st.session_state.get("last_debug")
     if debug is None:
-        st.info("질의를 먼저 실행하세요.")
+        st.info("챗봇 페이지에서 일반 질의를 먼저 실행하면 단계별 결과가 여기에 표시됩니다.")
+        st.caption("(퀵 코드·약관 정형 모드는 진단 데이터를 수집하지 않습니다.)")
         return
 
     debug = DebugInfo(

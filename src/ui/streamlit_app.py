@@ -550,14 +550,13 @@ def _stream_answer(
     question: str,
     temperature: float,
     doc_filter: list[str] | None = None,
-    return_debug: bool = False,
 ) -> tuple[str, list, dict, DebugInfo | None]:
     """검색 후 LLM 스트리밍 답변을 렌더링하고 결과를 반환한다."""
 
     total_started = time.perf_counter()
     with st.spinner("관련 문서 검색 중..."):
         retrieve_started = time.perf_counter()
-        hits, debug = pipeline.retrieve_hits(question, doc_filter=doc_filter, return_debug=return_debug)
+        hits, debug = pipeline.retrieve_hits(question, doc_filter=doc_filter, return_debug=True)
         chunks = [_hit_to_chunk(hit) for hit in hits]
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
 
@@ -591,6 +590,7 @@ def _handle_quick_code(
     question = f"퀵 코드 검색: {procedure_name}"
     options = {"summary": include_summary, "coverage": include_coverage}
     st.session_state.messages.append({"role": "user", "content": question})
+    st.session_state["last_debug"] = None
     _log(
         EVENT_QUESTION,
         _build_question_log_details(
@@ -685,6 +685,7 @@ def _handle_insurance_form(
     }
 
     st.session_state.messages.append({"role": "user", "content": question})
+    st.session_state["last_debug"] = None
     _log(
         EVENT_QUESTION,
         _build_question_log_details(
@@ -826,7 +827,7 @@ def main() -> None:
         st.markdown(f"**{display}** · _{role_label}_")
         if st.button("로그아웃", use_container_width=True):
             _log(EVENT_LOGOUT)
-            for key in ("authenticated", "user_id", "user_role", "user_display", "messages"):
+            for key in ("authenticated", "user_id", "user_role", "user_display", "messages", "last_debug"):
                 st.session_state.pop(key, None)
             st.rerun()
         page = st.radio("페이지", ["챗봇", "관리자"], horizontal=True, key="page") if role == ROLE_ADMIN else "챗봇"
@@ -836,8 +837,6 @@ def main() -> None:
             model = _select_model_widget()
             top_k = st.slider("Top-K", min_value=4, max_value=12, value=8)
             temperature = st.slider("온도", min_value=0.0, max_value=0.7, value=0.2, step=0.1)
-            if role == ROLE_ADMIN:
-                st.checkbox("🔍 검색 디버그 활성화", key="debug_mode")
 
             st.divider()
             st.markdown("**검색 대상 문서**")
@@ -980,7 +979,6 @@ def main() -> None:
                     question,
                     temperature,
                     doc_filter=selected_docs,
-                    return_debug=st.session_state.get("debug_mode", False),
                 )
             except RuntimeError as exc:
                 st.error(str(exc))
