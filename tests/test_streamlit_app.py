@@ -14,6 +14,7 @@ from src.ui.streamlit_app import (
     _export_txt,
     _filter_cited_chunks,
     _format_timing,
+    _get_doc_filter_from_meta,
     _insurance_form_log_input,
     _sanitize_answer_markdown,
     _source_title,
@@ -257,6 +258,31 @@ def test_answer_log_details_include_openai_model_metadata_and_usage() -> None:
     assert details["model_family"] == "GPT-5"
     assert details["model_size"] == "mini"
     assert details["token_usage"] == {"prompt_tokens": 10, "completion_tokens": 5}
+
+
+def test_get_doc_filter_from_meta_own_company() -> None:
+    selected = ["심평원", "약관", "자사_SOL건강", "자사_SOL운전자"]
+
+    result = _get_doc_filter_from_meta("자사", "전체", selected)
+
+    assert "심평원" not in (result or [])
+    assert "약관" in (result or [])
+    assert "자사_SOL건강" in (result or [])
+    assert "자사_SOL운전자" in (result or [])
+
+
+def test_get_doc_filter_from_meta_product_type() -> None:
+    selected = ["약관", "자사_SOL건강", "자사_SOL운전자"]
+
+    result = _get_doc_filter_from_meta("전체", "건강", selected)
+
+    assert result == ["자사_SOL건강"]
+
+
+def test_get_doc_filter_returns_none_when_empty_after_filter() -> None:
+    result = _get_doc_filter_from_meta("타사", "전체", ["약관", "자사_SOL건강"])
+
+    assert result is None
 
 
 def test_insurance_form_log_input_truncates_situation_note() -> None:

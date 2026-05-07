@@ -8,7 +8,29 @@ venv/
 logs/
 users.json
 users.json.tmp
-data/
 data/chat_history/
 assets.zip
 *.pdf
+*.xlsx
+*.xls
+
+# 원본 자료 — GitHub 푸시 금지
+/*.pdf
+/*.xlsx
+/*.xls
+/data/raw/
+/backup/
+
+# data 산출물은 기본 제외하되, 향후 단계 표준 디렉토리만 보존한다.
+data/*
+!data/extracted/
+data/extracted/**
+!data/extracted/.gitkeep
+!data/index/
+data/index/*
+!data/index/graph/
+data/index/graph/*
+!data/index/graph/.gitkeep
+!data/index/relational/
+data/index/relational/*
+!data/index/relational/.gitkeep

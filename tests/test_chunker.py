@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from src.config import PdfSource
-from src.parser.chunker import chunk_pages
+from src.parser.chunker import Chunk, chunk_pages, load_chunks, save_chunks
 
 
 def test_header_context_and_codes_are_propagated() -> None:
@@ -134,6 +134,51 @@ def test_chunk_id_includes_doc_short() -> None:
     assert chunks[0].id.startswith("약관_")
     assert chunks[0].metadata["doc_short"] == "약관"
     assert chunks[0].metadata["pdf_filename"] == "dummy.pdf"
+
+
+def test_extended_metadata_defaults_and_source_fields() -> None:
+    sample = [(1, "제1조(보장)\n회사는 보상합니다.")]
+    dummy_source = PdfSource(
+        path=Path("dummy.pdf"),
+        doc_type="insurance_policy",
+        doc_name="테스트",
+        doc_short="약관",
+        insurance_company="신한EZ",
+        is_own_company=True,
+        product_type="실손",
+        effective_date="2026-04-01",
+    )
+
+    chunks = chunk_pages(sample, doc_source=dummy_source)
+    metadata = chunks[0].metadata
+
+    assert metadata["content_type"] == "text"
+    assert metadata["source_method"] == "native"
+    assert metadata["insurance_company"] == "신한EZ"
+    assert metadata["is_own_company"] is True
+    assert metadata["product_type"] == "실손"
+    assert metadata["effective_date"] == "2026-04-01"
+    assert metadata["linked_std_cds"] is None
+
+
+def test_chunk_jsonl_roundtrip_keeps_extended_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "chunks.jsonl"
+    chunk = Chunk(
+        id="ch_1",
+        text="표준코드 050000011",
+        metadata={
+            "content_type": "table",
+            "source_method": "native",
+            "confidence": 0.98,
+            "bbox": [0, 1, 2, 3],
+            "linked_std_cds": ["050000011"],
+        },
+    )
+
+    save_chunks([chunk], path)
+    loaded = load_chunks(path)
+
+    assert loaded == [chunk]
 
 
 def test_missing_pdf_skipped(tmp_path: Path) -> None:

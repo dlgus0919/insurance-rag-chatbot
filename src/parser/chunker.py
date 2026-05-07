@@ -31,6 +31,23 @@ HEADER_PATTERNS = {
     "insurance_policy": INSURANCE_HEADERS,
     "guide_book": GUIDE_BOOK_HEADERS,
 }
+EXTENDED_META_FIELDS = [
+    "insurance_company",
+    "is_own_company",
+    "product_name",
+    "product_type",
+    "effective_date",
+    "version",
+    "coverage_category",
+    "clause_type",
+    "content_type",
+    "source_method",
+    "confidence",
+    "bbox",
+    "linked_std_cds",
+]
+EXTENDED_META_DEFAULTS = {field: None for field in EXTENDED_META_FIELDS}
+EXTENDED_META_DEFAULTS.update({"content_type": "text", "source_method": "native"})
 
 
 @dataclass
@@ -161,6 +178,7 @@ def _make_chunk(
 ) -> Chunk:
     codes = _extract_codes(text)
     metadata = {
+        **EXTENDED_META_DEFAULTS,
         "page_start": page_start,
         "page_end": page_end,
         "volume": context.get("volume"),
@@ -180,6 +198,10 @@ def _make_chunk(
                 "pdf_filename": doc_source.path.name,
             }
         )
+        for field in EXTENDED_META_FIELDS:
+            value = getattr(doc_source, field, None)
+            if value is not None:
+                metadata[field] = value
     return Chunk(id=chunk_id, text=text, metadata=metadata)
 
 

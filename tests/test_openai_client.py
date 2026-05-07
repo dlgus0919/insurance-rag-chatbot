@@ -34,7 +34,7 @@ def test_openai_client_requires_api_key(monkeypatch) -> None:
 
 
 def test_payload_contains_chat_messages() -> None:
-    client = OpenAIClient("gpt-5-mini", api_key="sk-test", max_tokens=123)
+    client = OpenAIClient("gpt-5-mini", api_key="test-api-key", max_tokens=123)
 
     payload = client._payload("질문", "규칙", 0.1, stream=False)
 
@@ -49,7 +49,7 @@ def test_payload_contains_chat_messages() -> None:
 
 
 def test_payload_keeps_legacy_options_for_gpt4o() -> None:
-    client = OpenAIClient("gpt-4o", api_key="sk-test", max_tokens=123)
+    client = OpenAIClient("gpt-4o", api_key="test-api-key", max_tokens=123)
 
     payload = client._payload("질문", "규칙", 0.1, stream=False)
 
@@ -73,11 +73,11 @@ def test_generate_posts_request_and_saves_usage(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(requests, "post", fake_post)
-    client = OpenAIClient("gpt-5-mini", api_key="sk-test")
+    client = OpenAIClient("gpt-5-mini", api_key="test-api-key")
 
     assert client.generate("질문", system="규칙", temperature=0.2) == "답변"
     assert captured["url"].endswith("/chat/completions")
-    assert captured["headers"]["Authorization"] == "Bearer sk-test"
+    assert captured["headers"]["Authorization"] == "Bearer test-api-key"
     assert captured["json"]["stream"] is False
     assert client.last_usage == {"prompt_tokens": 10, "completion_tokens": 5}
 
@@ -87,7 +87,7 @@ def test_generate_raises_on_http_error(monkeypatch) -> None:
         return DummyResponse(401, {"error": "bad key"})
 
     monkeypatch.setattr(requests, "post", fake_post)
-    client = OpenAIClient("gpt-5-mini", api_key="sk-test")
+    client = OpenAIClient("gpt-5-mini", api_key="test-api-key")
 
     with pytest.raises(RuntimeError, match="status=401"):
         client.generate("질문")
@@ -109,7 +109,7 @@ def test_generate_stream_yields_tokens(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(requests, "post", fake_post)
-    client = OpenAIClient("gpt-5-mini", api_key="sk-test")
+    client = OpenAIClient("gpt-5-mini", api_key="test-api-key")
 
     assert list(client.generate_stream("질문", system="규칙")) == ["답", "변"]
     assert captured["stream"] is True
@@ -121,7 +121,7 @@ def test_generate_stream_raises_with_response_body(monkeypatch) -> None:
         return DummyResponse(400, {"error": {"message": "unsupported parameter: temperature"}})
 
     monkeypatch.setattr(requests, "post", fake_post)
-    client = OpenAIClient("gpt-5-mini", api_key="sk-test")
+    client = OpenAIClient("gpt-5-mini", api_key="test-api-key")
 
     with pytest.raises(RuntimeError, match="unsupported parameter"):
         list(client.generate_stream("질문"))
@@ -137,7 +137,7 @@ def test_generate_stream_raises_with_response_body(monkeypatch) -> None:
 ])
 def test_all_candidate_models_use_max_completion_tokens(model: str) -> None:
     """4개 모델 모두 Chat Completions 형식으로 max_completion_tokens만 전송해야 한다."""
-    client = OpenAIClient(model, api_key="sk-test", max_tokens=512)
+    client = OpenAIClient(model, api_key="test-api-key", max_tokens=512)
     payload = client._payload("질문", "규칙", 0.2, stream=False)
 
     assert payload["model"] == model

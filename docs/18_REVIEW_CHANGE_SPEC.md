@@ -124,7 +124,7 @@ pytest -q
 경고는 `tests/test_pdf_view.py` 실행 중 PyMuPDF/SWIG 계열 deprecation warning이며, 현재 기능 실패는 아니다.
 
 보안 문자열 점검 결과:
-- 문서와 테스트에는 `sk-...`, `sk-test` placeholder만 존재한다.
+- 문서와 테스트에는 실제 키가 아닌 placeholder만 존재한다.
 - 실제 OpenAI 키나 실제 사용자 password hash는 확인되지 않았다.
 
 ---

@@ -45,7 +45,7 @@ def test_parse_openai_candidate_models() -> None:
 def test_list_available_models_respects_env(monkeypatch) -> None:
     monkeypatch.setattr(factory, "OllamaClient", FakeOllama)
     monkeypatch.setenv("ALLOW_OLLAMA", "true")
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
 
     grouped = factory.list_available_models()
 

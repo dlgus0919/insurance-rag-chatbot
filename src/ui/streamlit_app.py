@@ -501,6 +501,27 @@ def _select_model_widget() -> str:
     return selected
 
 
+def _get_doc_filter_from_meta(
+    own_company: str,
+    product_type: str,
+    selected_docs: list[str],
+) -> list[str] | None:
+    """자사/타사와 상품 유형 필터를 반영해 검색 대상 doc_short 목록을 만든다."""
+
+    candidates = list(config.INDEXED_PDF_SOURCES)
+    if own_company == "자사":
+        candidates = [source for source in candidates if source.is_own_company is True]
+    elif own_company == "타사":
+        candidates = [source for source in candidates if source.is_own_company is False]
+
+    if product_type != "전체":
+        candidates = [source for source in candidates if source.product_type == product_type]
+
+    candidate_shorts = {source.doc_short for source in candidates}
+    filtered = [doc_short for doc_short in selected_docs if doc_short in candidate_shorts]
+    return filtered if filtered else None
+
+
 @st.cache_resource
 def _load_heavy_components():
     """임베더·벡터스토어·BM25·Reranker를 한 번만 로드한다."""
@@ -931,11 +952,32 @@ def main() -> None:
                             st.rerun()
 
             st.divider()
-            st.markdown("**검색 대상 문서**")
+            st.markdown("#### 문서 필터")
+            own_company_filter = st.radio(
+                "보험사 구분",
+                ["전체", "자사", "타사"],
+                horizontal=True,
+                key="own_company_filter",
+            )
+            available_product_types = sorted(
+                {source.product_type for source in config.INDEXED_PDF_SOURCES if source.product_type}
+            )
+            product_type_filter = st.selectbox(
+                "상품 유형",
+                ["전체"] + available_product_types,
+                key="product_type_filter",
+            )
+            st.markdown("---")
+            st.markdown("**문서 개별 선택**")
             selected_docs = []
-            for doc_short in config.DOC_SHORT_ORDER:
+            for doc_short in config.INDEXED_DOC_SHORT_ORDER:
                 if st.checkbox(doc_short, value=True, key=f"doc_filter_{doc_short}"):
                     selected_docs.append(doc_short)
+            effective_doc_filter = _get_doc_filter_from_meta(
+                own_company_filter,
+                product_type_filter,
+                selected_docs,
+            )
             if not selected_docs:
                 st.warning("최소 1개 문서를 선택해주세요.")
 
@@ -1011,7 +1053,7 @@ def main() -> None:
             if pipeline is None:
                 st.error("검색 파이프라인을 사용할 수 없습니다.")
                 return
-            _handle_insurance_form(form, pipeline, model, session_id, selected_docs)
+            _handle_insurance_form(form, pipeline, model, session_id, effective_doc_filter or selected_docs)
         return
 
     if search_mode == "퀵 코드 검색":
@@ -1039,7 +1081,7 @@ def main() -> None:
                 model,
                 temperature,
                 session_id,
-                selected_docs,
+                effective_doc_filter or selected_docs,
             )
         return
 
@@ -1052,7 +1094,7 @@ def main() -> None:
                 model=model,
                 top_k=top_k,
                 temperature=temperature,
-                selected_docs=selected_docs,
+                selected_docs=effective_doc_filter or selected_docs,
                 question=question,
             ),
         )
@@ -1066,7 +1108,7 @@ def main() -> None:
                     pipeline,
                     question,
                     temperature,
-                    doc_filter=selected_docs,
+                    doc_filter=effective_doc_filter,
                 )
             except RuntimeError as exc:
                 st.error(str(exc))
@@ -1081,7 +1123,7 @@ def main() -> None:
             _build_answer_log_details(
                 mode="general",
                 model=model,
-                selected_docs=selected_docs,
+                selected_docs=effective_doc_filter or selected_docs,
                 answer=answer,
                 timing=timing,
                 chunks=cited_chunks,

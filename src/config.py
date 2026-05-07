@@ -26,6 +26,24 @@ class PdfSource:
     doc_name: str
     doc_short: str
     cloud_safe: bool = False
+    insurance_company: str | None = None
+    is_own_company: bool | None = None
+    product_name: str | None = None
+    product_type: str | None = None
+    effective_date: str | None = None
+    version: str | None = None
+    requires_ocr: bool = False
+
+
+@dataclass
+class SpreadsheetSource:
+    """관계형 적재 대상 원본 스프레드시트 정보."""
+
+    path: Path
+    source_id: str
+    source_name: str
+    data_type: str
+    cloud_safe: bool = False
 
 
 PDF_SOURCES: list[PdfSource] = [
@@ -42,6 +60,11 @@ PDF_SOURCES: list[PdfSource] = [
         doc_name="신한 이지로운 실손의료보험(무배당) 약관",
         doc_short="약관",
         cloud_safe=True,
+        insurance_company="신한EZ",
+        is_own_company=True,
+        product_name="신한 이지로운 실손의료보험(무배당)",
+        product_type="실손",
+        effective_date="2026-04-01",
     ),
     PdfSource(
         path=ROOT_DIR / "보상가이드북.pdf",
@@ -50,13 +73,72 @@ PDF_SOURCES: list[PdfSource] = [
         doc_short="가이드북",
         cloud_safe=False,
     ),
+    PdfSource(
+        path=ROOT_DIR / "2.약관_신한 SOL 처음건강보험(무배당)(자동갱신형)_20260101.pdf",
+        doc_type="insurance_policy",
+        doc_name="신한 SOL 처음건강보험(무배당)(자동갱신형) 약관",
+        doc_short="자사_SOL건강",
+        cloud_safe=True,
+        insurance_company="신한EZ",
+        is_own_company=True,
+        product_name="신한 SOL 처음건강보험(무배당)(자동갱신형)",
+        product_type="건강",
+        effective_date="2026-01-01",
+        version="자동갱신형",
+    ),
+    PdfSource(
+        path=ROOT_DIR / "2.약관_신한 SOL 처음운전자보험(무배당)_20260101.pdf",
+        doc_type="insurance_policy",
+        doc_name="신한 SOL 처음운전자보험(무배당) 약관",
+        doc_short="자사_SOL운전자",
+        cloud_safe=True,
+        insurance_company="신한EZ",
+        is_own_company=True,
+        product_name="신한 SOL 처음운전자보험(무배당)",
+        product_type="운전자",
+        effective_date="2026-01-01",
+    ),
+    PdfSource(
+        path=ROOT_DIR / "Claim 실무종합가이드.pdf",
+        doc_type="ops_guide_scanned",
+        doc_name="Claim 실무종합가이드",
+        doc_short="실무가이드",
+        cloud_safe=False,
+        insurance_company="신한EZ",
+        is_own_company=True,
+        requires_ocr=True,
+    ),
+    PdfSource(
+        path=ROOT_DIR / "소비자 상담 주요 사례집.pdf",
+        doc_type="case_book_scanned",
+        doc_name="소비자 상담 주요 사례집",
+        doc_short="상담사례집",
+        cloud_safe=True,
+        requires_ocr=True,
+    ),
 ]
 DOC_SHORT_ORDER: list[str] = [source.doc_short for source in PDF_SOURCES]
+INDEXED_PDF_SOURCES: list[PdfSource] = [
+    source for source in PDF_SOURCES if not source.requires_ocr and source.path.exists()
+]
+INDEXED_DOC_SHORT_ORDER: list[str] = [source.doc_short for source in INDEXED_PDF_SOURCES]
+
+SPREADSHEET_SOURCES: list[SpreadsheetSource] = [
+    SpreadsheetSource(
+        path=ROOT_DIR / "비급여표준모델_전체판(23.12-25.07)_250723(신한EZ전달본).xlsx",
+        source_id="D8",
+        source_name="비급여 표준 모델 전체판",
+        data_type="nonpay_standard",
+        cloud_safe=False,
+    )
+]
 
 PDF_PATH: Path = PDF_SOURCES[0].path
 CHUNKS_PATH: Path = ROOT_DIR / "data" / "processed" / "chunks.jsonl"
 CHROMA_DIR: Path = ROOT_DIR / "data" / "index" / "chroma"
 BM25_PATH: Path = ROOT_DIR / "data" / "index" / "bm25.pkl"
+RELATIONAL_INDEX_DIR: Path = ROOT_DIR / "data" / "index" / "relational"
+STANDARD_CODES_DB_PATH: Path = RELATIONAL_INDEX_DIR / "standard_codes.sqlite"
 
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 HF_MODEL_DOWNLOAD: bool = os.getenv("HF_MODEL_DOWNLOAD", "false").lower() == "true"

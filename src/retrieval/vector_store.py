@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -13,23 +14,36 @@ from src.retrieval import Hit
 
 def _encode_metadata(metadata: dict) -> dict:
     encoded = dict(metadata)
-    codes = encoded.get("codes")
-    if isinstance(codes, list):
-        encoded["codes"] = ",".join(str(code) for code in codes)
-    if isinstance(encoded.get("is_code_table"), bool):
-        encoded["is_code_table"] = "true" if encoded["is_code_table"] else "false"
+    for field in ("codes", "linked_std_cds"):
+        value = encoded.get(field)
+        if isinstance(value, list):
+            encoded[field] = ",".join(str(item) for item in value)
+    bbox = encoded.get("bbox")
+    if isinstance(bbox, list):
+        encoded["bbox"] = json.dumps(bbox, ensure_ascii=False)
+    for field in ("is_code_table", "is_own_company"):
+        if isinstance(encoded.get(field), bool):
+            encoded[field] = "true" if encoded[field] else "false"
     return {key: value for key, value in encoded.items() if value is not None}
 
 
 def _decode_metadata(metadata: dict | None) -> dict:
     decoded = dict(metadata or {})
-    codes = decoded.get("codes", "")
-    if isinstance(codes, str):
-        decoded["codes"] = [code for code in codes.split(",") if code]
-    is_code_table = decoded.get("is_code_table")
-    if isinstance(is_code_table, str):
-        decoded["is_code_table"] = is_code_table.lower() == "true"
-    elif "is_code_table" not in decoded:
+    for field in ("codes", "linked_std_cds"):
+        value = decoded.get(field, "")
+        if isinstance(value, str):
+            decoded[field] = [item for item in value.split(",") if item]
+    bbox = decoded.get("bbox")
+    if isinstance(bbox, str):
+        try:
+            decoded["bbox"] = json.loads(bbox)
+        except json.JSONDecodeError:
+            decoded["bbox"] = None
+    for field in ("is_code_table", "is_own_company"):
+        value = decoded.get(field)
+        if isinstance(value, str):
+            decoded[field] = value.lower() == "true"
+    if "is_code_table" not in decoded:
         decoded["is_code_table"] = False
     return decoded
 

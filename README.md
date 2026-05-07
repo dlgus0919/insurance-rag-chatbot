@@ -4,6 +4,10 @@
 PDF 파싱, 계층형 청킹, BGE-M3 임베딩, ChromaDB, BM25, RRF 융합, Ollama LLM 호출로 구성됩니다.  
 현재 버전은 사용자 계정 로그인, 관리자 로그 대시보드, Ollama 로컬 모델, OpenAI API 모델 선택을 지원합니다.
 
+현재 단계: 베타 Stage 2 — D3·D4 자사 약관 인덱싱 + 사이드바 필터 보강.
+
+원본 PDF/XLSX, OCR 추출본, 백업 자료는 GitHub에 절대 푸시하지 않습니다.
+
 ## 사전 요구사항
 
 - Python 3.11 권장
@@ -13,6 +17,7 @@ PDF 파싱, 계층형 청킹, BGE-M3 임베딩, ChromaDB, BM25, RRF 융합, Olla
 - Ollama 데스크톱 앱 실행 또는 `ollama serve`
 - BGE-M3 모델 사전 다운로드
 - OpenAI 모델을 사용할 경우 OpenAI API 키
+- 비급여 표준 모델 SQLite 적재를 수행할 경우 `openpyxl`
 
 기본값에서는 외부 네트워크가 필요한 모델 다운로드를 실행 코드에서 수행하지 않습니다. BGE-M3가 HuggingFace 캐시에 없는 경우 인덱싱 또는 검색 단계에서 중단됩니다. Streamlit Cloud 웹 게시 테스트에서만 `HF_MODEL_DOWNLOAD=true`를 설정해 HuggingFace 원격 다운로드를 명시적으로 허용할 수 있습니다.
 
@@ -83,7 +88,7 @@ streamlit run src/ui/streamlit_app.py
 OpenAI 모델 사용 예시:
 
 ```bash
-OPENAI_API_KEY=sk-...
+OPENAI_API_KEY=<OPENAI_API_KEY>
 OPENAI_DEFAULT_MODEL=gpt-5.2-chat-latest
 OPENAI_MAX_TOKENS=1500
 OPENAI_CANDIDATE_MODELS=gpt-5.5,gpt-5.2-chat-latest,gpt-5.4-mini,gpt-5-mini

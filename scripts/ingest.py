@@ -22,10 +22,18 @@ from src.retrieval.embedder import Embedder
 from src.retrieval.vector_store import VectorStore
 
 
-def select_sources(cloud_only: bool = False):
-    """cloud_only 옵션에 따라 인제스트 대상 PDF 소스를 선택한다."""
+def select_sources(cloud_only: bool = False, skip_ocr: bool = True):
+    """옵션에 따라 인제스트 대상 PDF 소스를 선택한다."""
 
-    return [source for source in config.PDF_SOURCES if (not cloud_only) or source.cloud_safe]
+    sources = list(config.PDF_SOURCES)
+    if cloud_only:
+        sources = [source for source in sources if source.cloud_safe]
+    if skip_ocr:
+        skipped = [source.doc_short for source in sources if source.requires_ocr]
+        if skipped:
+            print(f"[ingest] requires_ocr 소스 건너뜀 (OCR 파이프라인 미구축): {skipped}")
+        sources = [source for source in sources if not source.requires_ocr]
+    return sources
 
 
 def build_chunks(sources=None) -> None:
@@ -135,8 +143,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="보험 고시 PDF 인제스트")
     parser.add_argument("--stage", choices=["chunks", "index", "all"], default="all")
     parser.add_argument("--cloud-only", action="store_true", help="cloud_safe=True인 PDF만 인덱싱한다.")
+    parser.add_argument("--include-ocr", action="store_true", help="requires_ocr=True PDF도 인제스트 대상에 포함한다.")
     args = parser.parse_args()
-    sources = select_sources(args.cloud_only)
+    sources = select_sources(args.cloud_only, skip_ocr=not args.include_ocr)
 
     if args.stage in {"chunks", "all"}:
         build_chunks(sources)

@@ -36,7 +36,7 @@ GitHub Release를 만들고 `assets.zip`을 업로드한 뒤 다운로드 URL을
 5. Secrets에 다음 값을 입력합니다.
 
 ```toml
-OPENAI_API_KEY = "sk-..."
+OPENAI_API_KEY = "<OPENAI_API_KEY>"
 OPENAI_DEFAULT_MODEL = "gpt-5.2-chat-latest"
 OPENAI_MAX_TOKENS = "1500"
 OPENAI_CANDIDATE_MODELS = "gpt-5.5,gpt-5.2-chat-latest,gpt-5.4-mini,gpt-5-mini"

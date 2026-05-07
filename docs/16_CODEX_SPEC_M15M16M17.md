@@ -958,7 +958,7 @@ OPENAI_CANDIDATE_MODELS: list[str] = [
 
 ```
 # === OpenAI (선택) ===
-# OPENAI_API_KEY=sk-...
+# OPENAI_API_KEY=<OPENAI_API_KEY>
 # OPENAI_DEFAULT_MODEL=gpt-4o-mini
 # OPENAI_MAX_TOKENS=1500
 # === 클라우드 게시 가드 ===
@@ -1207,7 +1207,7 @@ if config.CLOUD_DEPLOY:
 3. Advanced settings → Python version 3.11, Secrets 입력:
 
 ```
-OPENAI_API_KEY = "sk-..."
+OPENAI_API_KEY = "<OPENAI_API_KEY>"
 OPENAI_DEFAULT_MODEL = "gpt-4o-mini"
 OPENAI_MAX_TOKENS = "1500"
 ALLOW_OLLAMA = "false"
@@ -1244,7 +1244,7 @@ USERS_JSON = '{"version":1,"users":[{"username":"admin","password_hash":"$pbkdf2
 기존 README의 "사전 요구사항"·"실행" 섹션을 다음과 같이 보강:
 
 - 사용자 부트스트랩: `python scripts/manage_users.py init`
-- OpenAI 사용 가이드: `.env`에 `OPENAI_API_KEY=sk-...` 추가
+- OpenAI 사용 가이드: `.env`에 `OPENAI_API_KEY=<OPENAI_API_KEY>` 추가
 - 클라우드 배포: `docs/17_DEPLOY_GUIDE.md` 참고
 - `APP_PASSWORD` deprecated 안내
 

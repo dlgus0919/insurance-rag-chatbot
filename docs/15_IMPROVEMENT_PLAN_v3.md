@@ -59,7 +59,7 @@
 **API 키 보안 — 사용자 가이드:**
 1. 사용자가 보유한 OpenAI API 키를 프로젝트 루트의 `.env` 파일에 다음과 같이 직접 추가
    ```
-   OPENAI_API_KEY=sk-...
+   OPENAI_API_KEY=<OPENAI_API_KEY>
    OPENAI_DEFAULT_MODEL=gpt-4o-mini
    OPENAI_MAX_TOKENS=1500
    ```
@@ -188,7 +188,7 @@
 
 1. **OpenAI API 키 입력**: `.env`에 다음 라인 추가 (값은 실제 키)
    ```
-   OPENAI_API_KEY=sk-...
+   OPENAI_API_KEY=<OPENAI_API_KEY>
    OPENAI_DEFAULT_MODEL=gpt-4o-mini
    OPENAI_MAX_TOKENS=1500
    ```
