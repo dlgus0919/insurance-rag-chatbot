@@ -130,3 +130,7 @@ pytest -q
   2. CLOVA 실데이터 비교는 정책 허용 범위에서 별도 실행
   3. 개선 결과를 `scripts/ocr_extract.py` 경로에 단계적으로 반영
 
+## 9) Git 반영 상태
+- 커밋: `fe2b612`
+- 브랜치: `master`
+- 원격 반영: `origin/master` 푸시 완료
