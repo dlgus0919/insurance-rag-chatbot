@@ -17,6 +17,7 @@ from src.parser.ocr_preprocessor import LayoutRegion, PreprocessResult
 @dataclass
 class _CallRecorder:
     layout_regions: list | None = None
+    received_image: object | None = None
 
 
 def _prepare_doc(tmp_path: Path, page_no: int = 60) -> Path:
@@ -47,9 +48,10 @@ def test_run_true_hybrid_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
         figure_save_dir.mkdir(parents=True)
         figure_path = figure_save_dir / f"{page_name}_fig00.png"
         image.crop((80, 80, 100, 100)).save(figure_path)
+        masked = Image.new("RGB", image.size, color="red")
         return PreprocessResult(
             original_image=image,
-            masked_image=image.copy(),
+            masked_image=masked,
             regions=[
                 LayoutRegion("table", (0, 0, 80, 40)),
                 LayoutRegion("figure", (80, 80, 100, 100)),
@@ -59,6 +61,7 @@ def test_run_true_hybrid_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 
     def fake_clova_ocr_page(image, page_name: str, layout_regions: list, timeout_sec: int) -> list[LayoutBlock]:
         recorder.layout_regions = layout_regions
+        recorder.received_image = image
         return [
             LayoutBlock(
                 block_type="table",
@@ -79,8 +82,13 @@ def test_run_true_hybrid_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     assert output["status"] == "SUCCESS"
     assert output["blocks"][0]["block_type"] == "table"
     assert output["blocks"][0]["quality"]["grade"] == "PASS"
+    assert output["masked_image"] is None
     assert output["figures"][0]["saved_path"] == "p060_true_hybrid_figures/p060_fig00.png"
     assert recorder.layout_regions is not None
+    assert all(region.block_type != "figure" for region in recorder.layout_regions)
+    assert len(recorder.layout_regions) == 1
+    assert recorder.received_image is not None
+    assert recorder.received_image.getpixel((0, 0)) != (255, 0, 0)
 
 
 def test_run_true_hybrid_clova_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

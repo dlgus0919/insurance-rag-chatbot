@@ -61,7 +61,7 @@ def _write_page_json(
         "status": status,
         "error": error,
         "original_image": f"p{page_no:03d}_original.png",
-        "masked_image": f"p{page_no:03d}_masked.png",
+        "masked_image": None,
         "figures": figures,
         "blocks": blocks,
         "metrics": metrics,
@@ -109,10 +109,11 @@ def run_true_hybrid_local(doc_short: str, pages_arg: str, output_dir: Path, time
             with Image.open(original_path) as image:
                 image.load()
                 prep = preprocess_page(image, figure_save_dir=figure_save_dir, page_name=page_name)
+                layout_regions_no_fig = [region for region in prep.regions if region.block_type != "figure"]
                 blocks = clova_ocr_page(
-                    prep.masked_image,
+                    image,
                     page_name=page_name,
-                    layout_regions=prep.regions,
+                    layout_regions=layout_regions_no_fig,
                     timeout_sec=timeout_sec,
                 )
             elapsed = time.perf_counter() - started
