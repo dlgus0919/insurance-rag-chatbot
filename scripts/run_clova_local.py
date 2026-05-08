@@ -193,7 +193,7 @@ def _write_page_json(
     return payload
 
 
-def _update_summary(output_dir: Path, doc_short: str, clova_results: list[dict]) -> None:
+def _update_summary(output_dir: Path, doc_short: str, clova_results: list[dict], engine_key: str = "clova") -> None:
     summary_path = output_dir / doc_short / "summary.json"
     if not summary_path.exists():
         return
@@ -222,7 +222,7 @@ def _update_summary(output_dir: Path, doc_short: str, clova_results: list[dict])
             grades[grade] += 1
 
     summary.setdefault("engines", {})
-    summary["engines"]["clova"] = {
+    summary["engines"][engine_key] = {
         "avg_elapsed_sec": round(avg_elapsed, 3) if avg_elapsed is not None else None,
         "avg_korean_ratio": round(avg_korean_ratio, 3) if avg_korean_ratio is not None else None,
         "avg_noise_ratio": round(avg_noise_ratio, 3) if avg_noise_ratio is not None else None,
@@ -232,10 +232,11 @@ def _update_summary(output_dir: Path, doc_short: str, clova_results: list[dict])
         "skipped_pages": skipped_pages,
         "status": "SUCCESS" if not skipped_pages else ("PARTIAL" if success else "SKIPPED"),
     }
-    summary["clova_rerun_at"] = datetime.now().isoformat(timespec="seconds")
+    timestamp_key = "clova_rerun_at" if engine_key == "clova" else f"{engine_key}_run_at"
+    summary[timestamp_key] = datetime.now().isoformat(timespec="seconds")
 
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    print("[run_clova_local] summary.json 업데이트 완료")
+    print(f"[run_clova_local] summary.json {engine_key} 업데이트 완료")
 
 
 def run_clova_local(doc_short: str, pages_arg: str, output_dir: Path, timeout_sec: int) -> None:
@@ -334,4 +335,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
