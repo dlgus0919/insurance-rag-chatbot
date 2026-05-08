@@ -1,4 +1,4 @@
-# Optional OCR verification dependencies.
+# Optional OCR verification and preprocessing dependencies.
 # System packages required for Tesseract:
 # Mac:   brew install tesseract tesseract-lang poppler
 # Linux: apt-get install -y tesseract-ocr tesseract-ocr-kor poppler-utils
@@ -6,3 +6,9 @@ pytesseract>=0.3.10
 easyocr>=1.7.1
 pdf2image>=1.17.0
 Pillow>=10.0.0
+
+# PP-Structure OCR pipeline.
+paddlepaddle>=2.6.0
+paddleocr>=2.8.0,<3.0.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0

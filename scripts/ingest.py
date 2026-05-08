@@ -16,10 +16,13 @@ if str(ROOT) not in sys.path:
 
 from src import config
 from src.parser.chunker import chunk_pages, load_chunks, save_chunks
+from src.parser.ocr_chunker import chunk_from_extracted
 from src.parser.pdf_parser import parse_pdf
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
 from src.retrieval.vector_store import VectorStore
+
+EXTRACTED_BASE = ROOT / "data" / "extracted"
 
 
 def select_sources(cloud_only: bool = False, skip_ocr: bool = True):
@@ -31,7 +34,7 @@ def select_sources(cloud_only: bool = False, skip_ocr: bool = True):
     if skip_ocr:
         skipped = [source.doc_short for source in sources if source.requires_ocr]
         if skipped:
-            print(f"[ingest] requires_ocr 소스 건너뜀 (OCR 파이프라인 미구축): {skipped}")
+            print(f"[ingest] requires_ocr 소스 기본 제외: {skipped}")
         sources = [source for source in sources if not source.requires_ocr]
     return sources
 
@@ -54,18 +57,28 @@ def build_chunks(sources=None) -> None:
                 print(f"[M6] 파일 없음, 건너뜀: {source.path.name}")
             continue
 
-        print(f"[M6] PDF 파싱: {source.doc_short} ({source.path.name})")
-        pages = parse_pdf(source.path)
-        non_empty_pages = sum(1 for _, text in pages if text.strip())
-        print(f"[M6] {source.doc_short}: 전체 {len(pages)}페이지, 텍스트 {non_empty_pages}페이지")
+        if source.requires_ocr:
+            extracted_dir = EXTRACTED_BASE / source.doc_short
+            manifest_path = extracted_dir / "manifest.json"
+            if not manifest_path.exists():
+                print(f"[M6] OCR 추출물 없음, 건너뜀: {source.doc_short}")
+                print(f"     먼저 python scripts/ocr_extract.py --doc {source.doc_short} 실행")
+                continue
+            print(f"[M6] OCR 청크 생성: {source.doc_short}")
+            chunks = chunk_from_extracted(source.doc_short, extracted_dir, source, id_offset=id_offset)
+        else:
+            print(f"[M6] PDF 파싱: {source.doc_short} ({source.path.name})")
+            pages = parse_pdf(source.path)
+            non_empty_pages = sum(1 for _, text in pages if text.strip())
+            print(f"[M6] {source.doc_short}: 전체 {len(pages)}페이지, 텍스트 {non_empty_pages}페이지")
 
-        chunks = chunk_pages(
-            pages,
-            target_chars=config.CHUNK_TARGET_CHARS,
-            overlap_chars=config.CHUNK_OVERLAP_CHARS,
-            doc_source=source,
-            id_offset=id_offset,
-        )
+            chunks = chunk_pages(
+                pages,
+                target_chars=config.CHUNK_TARGET_CHARS,
+                overlap_chars=config.CHUNK_OVERLAP_CHARS,
+                doc_source=source,
+                id_offset=id_offset,
+            )
         all_chunks.extend(chunks)
         id_offset += len(chunks)
         doc_counts[source.doc_short] = len(chunks)
