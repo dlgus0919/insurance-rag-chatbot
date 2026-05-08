@@ -1,10 +1,5 @@
-from src.parser.ocr_engine import (
-    LayoutBlock,
-    _region_to_block,
-    _table_html_to_json,
-    _table_html_to_text,
-    should_use_easyocr_fallback,
-)
+import src.parser.ocr_engine as ocr_engine
+from src.parser.ocr_engine import LayoutBlock, _region_to_block, _table_html_to_json, _table_html_to_text, should_use_easyocr_fallback
 
 
 def test_table_html_to_text_and_json() -> None:
@@ -69,3 +64,52 @@ def test_should_use_easyocr_fallback() -> None:
     assert should_use_easyocr_fallback([], threshold=0.5) is True
     assert should_use_easyocr_fallback([LayoutBlock("text", [0, 0, 1, 1], "x", confidence=0.2)], 0.5) is True
     assert should_use_easyocr_fallback([LayoutBlock("table", [0, 0, 1, 1], "x", confidence=0.9)], 0.5) is False
+
+
+def test_get_korean_ocr_singleton(monkeypatch) -> None:
+    class DummyPaddleOCR:
+        calls = 0
+
+        def __init__(self, lang: str, show_log: bool):
+            DummyPaddleOCR.calls += 1
+            self.lang = lang
+            self.show_log = show_log
+
+        def ocr(self, _arr, cls: bool = False):  # noqa: ANN001
+            return [[]]
+
+    monkeypatch.setattr(ocr_engine, "_korean_ocr_engine", None)
+
+    class DummyModule:
+        PaddleOCR = DummyPaddleOCR
+
+    monkeypatch.setitem(__import__("sys").modules, "paddleocr", DummyModule())
+
+    first = ocr_engine._get_korean_ocr()
+    second = ocr_engine._get_korean_ocr()
+
+    assert first is second
+    assert DummyPaddleOCR.calls == 1
+
+
+def test_ocr_page_sets_source_method_twopass(monkeypatch) -> None:
+    class DummyImage:
+        mode = "RGB"
+
+        def crop(self, _bbox):  # noqa: ANN001
+            return self
+
+    monkeypatch.setattr(ocr_engine, "_get_structure_engine", lambda: lambda _arr: [{"type": "text", "bbox": [0, 0, 10, 10]}])
+
+    class DummyKoreanOCR:
+        @staticmethod
+        def ocr(_arr, cls: bool = False):  # noqa: ANN001
+            return [[([0, 0, 10, 10], ("수술종수", 0.98))]]
+
+    monkeypatch.setattr(ocr_engine, "_get_korean_ocr", lambda: DummyKoreanOCR())
+    monkeypatch.setitem(__import__("sys").modules, "numpy", __import__("numpy"))
+
+    blocks = ocr_engine.ocr_page(DummyImage())
+
+    assert len(blocks) == 1
+    assert blocks[0].source_method == "ocr_ppstructure_twopass"
