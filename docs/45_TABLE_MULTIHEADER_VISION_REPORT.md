@@ -69,13 +69,12 @@ row[0]: {'수술명': '수술명', '수술해설': '수술해설', '수술종수
 vision_cleaned: None
 ```
 
-After expectation from deterministic unit/manual validation:
+After, 실제 `p064_true_hybrid.json` output from `--vision-clean`:
 ```text
 headers: ['수술명', '수술해설', '1-3종', '1-5종', '신1-5종']
-row[0] starts at first data row, not the sub-header row.
+row[0]: {'수술명': '베이커낭종 적출술', '수술해설': '무릎 뒤쪽에서 생기는 것으로 점액낭염이나 슬와낭종이라고도 한다.\n피부를 절개하여 무릎 뒤쪽에서 낭종을 제거해내는 수술을 말한다.', '1-3종': '', '1-5종': '2', '신1-5종': '2'}
+row[1]: {'수술명': '', '수술해설': '[그림]', '1-3종': '', '1-5종': '', '신1-5종': ''}
 ```
-
-End-to-end `p064_true_hybrid.json` after `--vision-clean` could not be produced in this Codex sandbox because the command requires exporting the local insurance page image to external CLOVA OCR and OpenAI Vision services.
 
 ## 5) End-to-End Attempt
 
@@ -84,27 +83,31 @@ Command:
 python scripts/run_true_hybrid_local.py --doc 실무가이드 --pages 64 --vision-clean
 ```
 
-Sandbox result:
+Actual result:
 ```text
-[run_true_hybrid_local] p064 -> SKIPPED (API 요청 실패: HTTPSConnectionPool(host='ea1lfq3tos.apigw.ntruss.com', port=443): Max retries exceeded with url: /custom/v1/52772/81d1298723dd879c90085d6ee51ae2c507fdc22a47f0d0eb9822b50c53eb98f0/general (Caused by NameResolutionError("<urllib3.connection.HTTPSConnection object at 0x1542cea50>: Failed to resolve 'ea1lfq3tos.apigw.ntruss.com' ([Errno 8] nodename nor servname provided, or not known)")))
-SUCCESS: 0/1 | SKIPPED: 1/1
+[2026-05-11 10:43:15,771] [    INFO] _client.py:1025 - HTTP Request: POST https://api.openai.com/v1/chat/completions "HTTP/1.1 200 OK"
+[run_true_hybrid_local] p064 -> SUCCESS (3블록, 37.0초)
+[run_clova_local] summary.json true_hybrid 업데이트 완료
+=== 완료 ===
+SUCCESS: 1/1 | SKIPPED: 0/1 | 총 소요: 37.4초
 ```
 
-Escalated rerun was blocked by policy because it would send a local insurance document page to two external services: CLOVA OCR and OpenAI Vision.
+HTML review file was regenerated:
+```text
+[generate_ocr_html] wrote /Users/june_kim/Documents/Claude/Projects/보험 문서 RAG 챗봇/reports/ocr_compare_v43_review.html (165555 bytes)
+```
 
 ## 6) vision_cleaned Field
 
-Unit test verifies successful Vision response sets:
+Actual p064 output:
 ```text
 block.raw["vision_cleaned"] == True
+block.raw["native_table"] == True
+contains "[그림]" == True
 ```
-
-Real p064 output value could not be verified end-to-end due to the external API execution blocker above.
 
 ## 7) Remaining Blockers
 
-- External API e2e validation is blocked in this Codex environment unless the operator runs the command locally:
-  ```bash
-  python scripts/run_true_hybrid_local.py --doc 실무가이드 --pages 64 --vision-clean
-  ```
-- The sandbox attempt overwrote local `reports/ocr_compare/실무가이드/p064_true_hybrid.json` with a SKIPPED result. JSON result files are not committed.
+None.
+
+JSON result files and HTML files were regenerated locally but are not committed.
