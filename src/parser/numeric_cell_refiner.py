@@ -34,6 +34,8 @@ ALLOWED_VALUES_BY_ROLE = {
     "신1-5종": {"N", "1", "2", "3", "4", "5"},
 }
 DEFAULT_NUMERIC_VISION_MODEL = "gpt-4.1"
+NUMERIC_VISION_MAX_TOKENS = 1536
+NUMERIC_CHUNK_TARGET_CELLS = 15
 CORRECTION_REASON = "complete_surgery_grade_group"
 VISION_PROMPT = """당신은 보험 약관 표의 수술종수 컬럼 값을 판독하는 전문가입니다.
 첨부 이미지는 같은 표의 전체 크롭과 수술종수 컬럼 영역 확대 크롭입니다.
@@ -62,8 +64,12 @@ __CANDIDATE_ROWS__
 
 반환 형식 (이 JSON 구조만 반환):
 {
-  "corrections": [
-    {"row_index": <int>, "col": "<컬럼명>", "to": "<값>", "confidence": "high|medium|low"}
+  "rows": [
+    {
+      "row_index": <int>,
+      "values": {"<컬럼명>": "<값>"},
+      "confidence": "high|medium|low"
+    }
   ],
   "unresolved": [
     {"row_index": <int>, "col": "<컬럼명>", "reason": "not_readable"}
@@ -151,6 +157,32 @@ def _candidate_row_indexes(table_json: dict, grade_roles: list[dict]) -> list[in
     return indexes
 
 
+def _candidate_index_chunks(
+    table_json: dict,
+    grade_roles: list[dict],
+    candidate_indexes: list[int],
+    max_target_cells: int = NUMERIC_CHUNK_TARGET_CELLS,
+) -> list[list[int]]:
+    """후보 행을 Vision 응답이 잘리지 않을 정도의 target cell 묶음으로 나눈다."""
+
+    rows = table_json.get("rows", [])
+    chunks: list[list[int]] = []
+    current: list[int] = []
+    current_cells = 0
+    for row_index in candidate_indexes:
+        row = rows[row_index] if row_index < len(rows) and isinstance(rows[row_index], dict) else {}
+        cell_count = max(1, len(_target_cells_for_row(row, grade_roles)))
+        if current and current_cells + cell_count > max_target_cells:
+            chunks.append(current)
+            current = []
+            current_cells = 0
+        current.append(row_index)
+        current_cells += cell_count
+    if current:
+        chunks.append(current)
+    return chunks
+
+
 def _target_cells_for_row(row: dict, grade_roles: list[dict]) -> list[str]:
     targets: list[str] = []
     for role in grade_roles:
@@ -213,6 +245,7 @@ def _build_prompt(table_json: dict, grade_roles: list[dict], candidate_indexes: 
                 "row_index": index,
                 "수술명": str(row.get("수술명", ""))[:50],
                 "현재값": {role["col"]: str(row.get(role["col"], "")) for role in grade_roles},
+                "대상셀": _target_cells_for_row(row, grade_roles),
             }
         )
     return (
@@ -233,7 +266,7 @@ def _call_vision(
     try:
         response = client.chat.completions.create(
             model=model,
-            max_tokens=512,
+            max_tokens=NUMERIC_VISION_MAX_TOKENS,
             messages=[
                 {
                     "role": "user",
@@ -251,6 +284,39 @@ def _call_vision(
         LOGGER.warning("Numeric cell refinement failed: %s", exc)
         return None
     return _extract_json_object(_response_content(response))
+
+
+def _delta_correction_items(delta: dict) -> list[dict]:
+    """Vision delta에서 row compact 형식과 legacy corrections 형식을 같은 형태로 펼친다."""
+
+    items: list[dict] = []
+    for item in delta.get("corrections", []) or []:
+        if isinstance(item, dict):
+            items.append(item)
+
+    for row_item in delta.get("rows", []) or []:
+        if not isinstance(row_item, dict):
+            continue
+        row_index = row_item.get("row_index")
+        values = row_item.get("values", {})
+        if not isinstance(values, dict):
+            continue
+        row_confidence = row_item.get("confidence", "medium")
+        for col, value in values.items():
+            confidence = row_confidence
+            to_value = value
+            if isinstance(value, dict):
+                to_value = value.get("to", "")
+                confidence = value.get("confidence", row_confidence)
+            items.append(
+                {
+                    "row_index": row_index,
+                    "col": col,
+                    "to": to_value,
+                    "confidence": confidence,
+                }
+            )
+    return items
 
 
 def _extract_valid_corrections_and_unresolved(
@@ -271,7 +337,7 @@ def _extract_valid_corrections_and_unresolved(
     }
     resolved: set[tuple[int, str]] = set()
 
-    for item in delta.get("corrections", []) or []:
+    for item in _delta_correction_items(delta):
         if not isinstance(item, dict):
             continue
         row_index = item.get("row_index")
@@ -341,6 +407,29 @@ def _extract_valid_corrections_and_unresolved(
     return corrections, unresolved
 
 
+def _unresolved_for_candidates(
+    table_json: dict,
+    grade_roles: list[dict],
+    candidate_indexes: list[int],
+    reason: str,
+) -> list[dict]:
+    rows = table_json.get("rows", [])
+    unresolved: list[dict] = []
+    for row_index in candidate_indexes:
+        if row_index >= len(rows) or not isinstance(rows[row_index], dict):
+            continue
+        for col in _target_cells_for_row(rows[row_index], grade_roles):
+            unresolved.append(
+                {
+                    "row_index": row_index,
+                    "col": col,
+                    "from": str(rows[row_index].get(col, "")),
+                    "reason": reason,
+                }
+            )
+    return unresolved
+
+
 def _apply_corrections(table_json: dict, corrections: list[dict]) -> dict:
     updated = {
         "headers": [str(header) for header in table_json.get("headers", [])],
@@ -359,13 +448,13 @@ def _parse_with_retry(
     client: Any,
     model: str,
     prompt: str,
-) -> dict | None:
+) -> tuple[dict | None, str | None]:
     for attempt in range(2):
         parsed = _call_vision(block, page_image, client, model, prompt)
         if _is_valid_delta(parsed):
-            return parsed
+            return parsed, None
         LOGGER.warning("Numeric cell refinement returned invalid delta format (attempt %s)", attempt + 1)
-    return None
+    return None, "invalid_delta_format"
 
 
 def _is_valid_delta(parsed: dict | None) -> bool:
@@ -374,14 +463,118 @@ def _is_valid_delta(parsed: dict | None) -> bool:
     if not isinstance(parsed, dict):
         return False
     corrections = parsed.get("corrections")
+    rows = parsed.get("rows")
     unresolved = parsed.get("unresolved")
-    if corrections is None and unresolved is None:
+    if corrections is None and rows is None and unresolved is None:
         return False
+    if rows is not None and not isinstance(rows, list):
+        return False
+    if isinstance(rows, list):
+        for item in rows:
+            if not isinstance(item, dict):
+                return False
+            if not isinstance(item.get("row_index"), int):
+                return False
+            if not isinstance(item.get("values"), dict):
+                return False
     if corrections is not None and not isinstance(corrections, list):
         return False
+    if isinstance(corrections, list):
+        for item in corrections:
+            if not isinstance(item, dict):
+                return False
+            if not isinstance(item.get("row_index"), int):
+                return False
+            if not item.get("col"):
+                return False
     if unresolved is not None and not isinstance(unresolved, list):
         return False
+    if isinstance(unresolved, list):
+        for item in unresolved:
+            if not isinstance(item, dict):
+                return False
+            if not isinstance(item.get("row_index"), int):
+                return False
+            if not item.get("col"):
+                return False
     return True
+
+
+def _refine_candidate_chunk(
+    block: LayoutBlock,
+    page_image: Image.Image,
+    client: Any,
+    model: str,
+    grade_roles: list[dict],
+    candidate_indexes: list[int],
+    *,
+    depth: int = 0,
+) -> tuple[list[dict], list[dict], list[dict]]:
+    prompt = _build_prompt(block.table_json or {}, grade_roles, candidate_indexes)
+    parsed, error = _parse_with_retry(block, page_image, client, model, prompt)
+    rows = (block.table_json or {}).get("rows", [])
+    chunk_meta = {
+        "candidate_rows": candidate_indexes,
+        "target_cells": sum(
+            len(_target_cells_for_row(rows[row_index], grade_roles))
+            for row_index in candidate_indexes
+            if row_index < len(rows) and isinstance(rows[row_index], dict)
+        ),
+        "depth": depth,
+    }
+    if parsed is not None:
+        corrections, unresolved = _extract_valid_corrections_and_unresolved(
+            block.table_json or {},
+            parsed,
+            grade_roles,
+            candidate_indexes,
+        )
+        chunk_meta["status"] = "ok"
+        chunk_meta["corrections"] = len(corrections)
+        chunk_meta["unresolved"] = len(unresolved)
+        return corrections, unresolved, [chunk_meta]
+
+    if len(candidate_indexes) > 1:
+        midpoint = max(1, len(candidate_indexes) // 2)
+        first = candidate_indexes[:midpoint]
+        second = candidate_indexes[midpoint:]
+        chunk_meta["status"] = "split_after_invalid_delta"
+        chunk_meta["error"] = error
+        first_corrections, first_unresolved, first_meta = _refine_candidate_chunk(
+            block,
+            page_image,
+            client,
+            model,
+            grade_roles,
+            first,
+            depth=depth + 1,
+        )
+        second_corrections, second_unresolved, second_meta = _refine_candidate_chunk(
+            block,
+            page_image,
+            client,
+            model,
+            grade_roles,
+            second,
+            depth=depth + 1,
+        )
+        return (
+            first_corrections + second_corrections,
+            first_unresolved + second_unresolved,
+            [chunk_meta] + first_meta + second_meta,
+        )
+
+    unresolved = _unresolved_for_candidates(
+        block.table_json or {},
+        grade_roles,
+        candidate_indexes,
+        error or "invalid_delta_format",
+    )
+    chunk_meta["status"] = "failed"
+    chunk_meta["error"] = error
+    chunk_meta["corrections"] = 0
+    chunk_meta["unresolved"] = len(unresolved)
+    return [], unresolved, [chunk_meta]
 
 
 def _refine_single_table(block: LayoutBlock, page_image: Image.Image, client: Any, model: str) -> LayoutBlock:
@@ -397,23 +590,27 @@ def _refine_single_table(block: LayoutBlock, page_image: Image.Image, client: An
     if not candidate_indexes:
         return block
 
-    prompt = _build_prompt(block.table_json, grade_roles, candidate_indexes)
-    parsed = _parse_with_retry(block, page_image, client, model, prompt)
-    if parsed is None:
-        return block
-
-    corrections, unresolved = _extract_valid_corrections_and_unresolved(
-        block.table_json,
-        parsed,
-        grade_roles,
-        candidate_indexes,
-    )
-    if not corrections and not unresolved:
-        return block
+    corrections: list[dict] = []
+    unresolved: list[dict] = []
+    chunk_meta: list[dict] = []
+    for chunk in _candidate_index_chunks(block.table_json, grade_roles, candidate_indexes):
+        chunk_corrections, chunk_unresolved, meta = _refine_candidate_chunk(
+            block,
+            page_image,
+            client,
+            model,
+            grade_roles,
+            chunk,
+        )
+        corrections.extend(chunk_corrections)
+        unresolved.extend(chunk_unresolved)
+        chunk_meta.extend(meta)
 
     updated_table = _apply_corrections(block.table_json, corrections)
     raw = dict(block.raw or {})
     raw["numeric_candidate_rows"] = candidate_indexes
+    raw["numeric_refiner_chunks"] = chunk_meta
+    raw["numeric_refiner_status"] = "refined" if corrections else "unresolved" if unresolved else "no_changes"
     if corrections:
         raw["numeric_corrections"] = corrections
         raw["numeric_refined"] = True

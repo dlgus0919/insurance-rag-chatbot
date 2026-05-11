@@ -130,7 +130,7 @@ def test_refine_numeric_cells_applies_all_blank_text_row_corrections() -> None:
         },
     ]
     assert completions.calls[0]["model"] == "gpt-4.1"
-    assert completions.calls[0]["max_tokens"] == 512
+    assert completions.calls[0]["max_tokens"] == 1536
     assert len(completions.calls[0]["messages"][0]["content"]) == 3
 
 
@@ -232,15 +232,63 @@ def test_refine_numeric_cells_supports_surgery_grade_headers() -> None:
     assert result[0].raw["numeric_corrections"][0]["col"] == "수술종수"
 
 
-def test_refine_numeric_cells_keeps_original_on_invalid_shape_after_retry() -> None:
+def test_refine_numeric_cells_splits_large_candidate_batches() -> None:
+    rows = [
+        {"수술명": f"수술 {index}", "수술해설": "설명", "1-3종": "", "1-5종": "", "신1-5종": ""}
+        for index in range(7)
+    ]
+    completions = _Completions(
+        [
+            """
+            {
+              "rows": [
+                {"row_index": 0, "values": {"1-3종": "1", "1-5종": "1", "신1-5종": "1"}, "confidence": "high"},
+                {"row_index": 1, "values": {"1-3종": "1", "1-5종": "1", "신1-5종": "1"}, "confidence": "high"},
+                {"row_index": 2, "values": {"1-3종": "1", "1-5종": "1", "신1-5종": "1"}, "confidence": "high"},
+                {"row_index": 3, "values": {"1-3종": "1", "1-5종": "1", "신1-5종": "1"}, "confidence": "high"},
+                {"row_index": 4, "values": {"1-3종": "1", "1-5종": "1", "신1-5종": "1"}, "confidence": "high"}
+              ]
+            }
+            """,
+            """
+            {
+              "rows": [
+                {"row_index": 5, "values": {"1-3종": "1", "1-5종": "1", "신1-5종": "1"}, "confidence": "high"},
+                {"row_index": 6, "values": {"1-3종": "1", "1-5종": "1", "신1-5종": "1"}, "confidence": "high"}
+              ]
+            }
+            """,
+        ]
+    )
+    client = _Client(completions)
+
+    result = refine_numeric_cells([_table_block(rows)], Image.new("RGB", (120, 120), "white"), client)
+
+    assert len(completions.calls) == 2
+    assert len(result[0].raw["numeric_corrections"]) == 21
+    assert result[0].raw["numeric_refiner_status"] == "refined"
+    assert [chunk["candidate_rows"] for chunk in result[0].raw["numeric_refiner_chunks"]] == [
+        [0, 1, 2, 3, 4],
+        [5, 6],
+    ]
+    assert all(row["1-3종"] == "1" for row in result[0].table_json["rows"])
+
+
+def test_refine_numeric_cells_records_unresolved_on_invalid_shape_after_retry() -> None:
     block = _table_block()
     completions = _Completions(['{"headers":["수술명"],"rows":[{"수술명":"변경"}]}'])
     client = _Client(completions)
 
     result = refine_numeric_cells([block], Image.new("RGB", (120, 120), "white"), client)
 
-    assert result[0] is block
+    assert result[0] is not block
     assert "numeric_refined" not in result[0].raw
+    assert result[0].raw["numeric_refiner_status"] == "unresolved"
+    assert result[0].raw["numeric_unresolved_cells"] == [
+        {"row_index": 0, "col": "1-3종", "from": "", "reason": "invalid_delta_format"},
+        {"row_index": 0, "col": "1-5종", "from": "", "reason": "invalid_delta_format"},
+        {"row_index": 0, "col": "신1-5종", "from": "", "reason": "invalid_delta_format"},
+    ]
     assert len(completions.calls) == 2
 
 

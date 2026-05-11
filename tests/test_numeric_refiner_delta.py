@@ -33,6 +33,27 @@ def test_delta_format_corrections_applied() -> None:
     assert unresolved == []
 
 
+def test_delta_format_compact_rows_applied() -> None:
+    original = _table(
+        [{"수술명": "핀고정술", "수술해설": "설명", "1-3종": "", "1-5종": "", "신1-5종": ""}]
+    )
+    delta = {
+        "rows": [
+            {
+                "row_index": 0,
+                "values": {"1-3종": "1", "1-5종": "1", "신1-5종": "1"},
+                "confidence": "high",
+            }
+        ]
+    }
+
+    corrections, unresolved = _extract_valid_corrections_and_unresolved(original, delta, GRADE_ROLES, [0])
+
+    assert [item["to"] for item in corrections] == ["1", "1", "1"]
+    assert [item["confidence"] for item in corrections] == ["high", "high", "high"]
+    assert unresolved == []
+
+
 def test_delta_format_invalid_value_rejected() -> None:
     original = _table(
         [{"수술명": "잘못된 값", "수술해설": "설명", "1-3종": "4", "1-5종": "3", "신1-5종": "2"}]

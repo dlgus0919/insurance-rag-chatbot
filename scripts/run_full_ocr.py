@@ -171,6 +171,12 @@ def _save_blocks(blocks: list[LayoutBlock], out_dir: Path, page_no: int) -> list
                 entry["numeric_corrections"] = raw["numeric_corrections"]
             if raw.get("numeric_unresolved_cells"):
                 entry["numeric_unresolved_cells"] = raw["numeric_unresolved_cells"]
+            if raw.get("numeric_candidate_rows"):
+                entry["numeric_candidate_rows"] = raw["numeric_candidate_rows"]
+            if raw.get("numeric_refiner_status"):
+                entry["numeric_refiner_status"] = raw["numeric_refiner_status"]
+            if raw.get("numeric_refiner_chunks"):
+                entry["numeric_refiner_chunks"] = raw["numeric_refiner_chunks"]
             block_entries.append(entry)
             table_index += 1
             continue
