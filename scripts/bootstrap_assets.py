@@ -5,16 +5,32 @@ from __future__ import annotations
 
 import io
 import os
+from pathlib import Path
 import sys
 import zipfile
 
 import requests
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from src import config
 
 
 def main() -> int:
     """INDEX_RELEASE_URL이 설정되고 인덱스가 비어 있으면 zip 자산을 내려받는다."""
+
+    if os.getenv("REBUILD_INDEX_FROM_CHUNKS", "false").lower() == "true":
+        if not (config.CHROMA_DIR.exists() and any(config.CHROMA_DIR.iterdir())):
+            print("ChromaDB가 비어있습니다. chunks.jsonl에서 인덱스를 재빌드합니다...")
+            from scripts.build_cloud_index import rebuild_from_chunks
+
+            rebuild_from_chunks()
+            print("인덱스 재빌드 완료")
+        else:
+            print("ChromaDB 존재 - 재빌드 스킵")
+        return 0
 
     url = os.getenv("INDEX_RELEASE_URL")
     if not url:

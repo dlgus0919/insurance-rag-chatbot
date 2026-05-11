@@ -261,13 +261,16 @@ def run_clova_local(
     total_started = time.perf_counter()
     vision_client = None
     clean_table_blocks = None
+    refine_numeric_cells = None
     if vision_clean:
         import openai
 
+        from src.parser.numeric_cell_refiner import refine_numeric_cells as refine_numeric_cells_func
         from src.parser.table_vision_cleaner import clean_table_blocks as clean_table_blocks_func
 
         vision_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         clean_table_blocks = clean_table_blocks_func
+        refine_numeric_cells = refine_numeric_cells_func
 
     for page_no in pages:
         original_path = doc_dir / f"p{page_no:03d}_original.png"
@@ -298,6 +301,8 @@ def run_clova_local(
                 blocks = clova_ocr_page(image, page_name=f"p{page_no:03d}", timeout_sec=timeout_sec)
                 if clean_table_blocks is not None:
                     blocks = clean_table_blocks(blocks, image, vision_client)
+                if refine_numeric_cells is not None:
+                    blocks = refine_numeric_cells(blocks, image, vision_client)
             block_payload = _serialize_blocks(blocks)
             elapsed = time.perf_counter() - started
             result = _write_page_json(

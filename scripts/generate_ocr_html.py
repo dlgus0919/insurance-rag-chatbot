@@ -53,9 +53,16 @@ def _quality_badge(quality: dict | None) -> str:
 
 def _table_badge(block: dict) -> str:
     raw = block.get("raw") or {}
+    badges: list[str] = []
     if raw.get("native_table") is True:
-        return '<span class="badge native">🔵 CLOVA 네이티브</span>'
-    return '<span class="badge geometric">🔶 기하학적 재구성</span>'
+        badges.append('<span class="badge native">🔵 CLOVA 네이티브</span>')
+    else:
+        badges.append('<span class="badge geometric">🔶 기하학적 재구성</span>')
+    if raw.get("vision_cleaned") is True:
+        badges.append('<span class="badge vision">👁️ 표 정제</span>')
+    if raw.get("numeric_refined") is True:
+        badges.append('<span class="badge numeric">✏️ 숫자 정제</span>')
+    return "".join(badges)
 
 
 def _render_table(table_json: dict | None) -> str:
@@ -194,6 +201,8 @@ def generate_html(doc_short: str, output_path: Path) -> Path:
     .badge {{ border-radius: 999px; padding: 2px 7px; font-size: 12px; font-weight: 650; }}
     .native {{ background: #dbeafe; color: #1e40af; }}
     .geometric {{ background: #ffedd5; color: #9a3412; }}
+    .vision {{ background: #ede9fe; color: #5b21b6; }}
+    .numeric {{ background: #dcfce7; color: #166534; }}
     .grade-pass {{ background: #dcfce7; color: #166534; }}
     .grade-marginal {{ background: #fef9c3; color: #854d0e; }}
     .grade-fail {{ background: #fee2e2; color: #991b1b; }}
