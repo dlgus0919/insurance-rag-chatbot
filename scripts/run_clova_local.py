@@ -156,6 +156,7 @@ def _serialize_blocks(blocks) -> list[dict]:
             "text": raw.get("text", ""),
             "table_json": _normalize_table_json(raw.get("table_json")),
             "source_method": raw.get("source_method", "ocr_clova"),
+            "raw": raw.get("raw", {}),
         }
         entry["quality"] = _block_quality(entry)
         serialized.append(entry)
