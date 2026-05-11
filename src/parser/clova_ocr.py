@@ -47,6 +47,17 @@ def _field_center_x(field: dict) -> float:
     return (x1 + x2) / 2.0
 
 
+def _field_height(field: dict) -> float:
+    _, y1, _, y2 = _field_bbox(field)
+    return max(0.0, y2 - y1)
+
+
+def _adaptive_row_gap(fields: list[dict]) -> float:
+    heights = [_field_height(field) for field in fields if _field_height(field) > 0]
+    median_h = sorted(heights)[len(heights) // 2] if heights else 20.0
+    return max(8.0, median_h * 0.6)
+
+
 def _unique_headers(headers: list[str], width: int) -> list[str]:
     normalized: list[str] = []
     seen: dict[str, int] = {}
@@ -237,10 +248,12 @@ def _request_clova(image, page_name: str, timeout_sec: int | None = None) -> dic
     return image_result
 
 
-def _group_fields_into_rows(fields: list[dict], row_gap: float = 20.0) -> list[list[dict]]:
+def _group_fields_into_rows(fields: list[dict], row_gap: float | None = None) -> list[list[dict]]:
     if not fields:
         return []
     sorted_fields = sorted(fields, key=lambda field: (_field_center_y(field), _field_center_x(field)))
+    if row_gap is None:
+        row_gap = _adaptive_row_gap(sorted_fields)
     rows: list[list[dict]] = [[sorted_fields[0]]]
     for field in sorted_fields[1:]:
         last_row_y = _field_center_y(rows[-1][-1])
@@ -357,19 +370,53 @@ def reconstruct_table_from_fields(
     return {"headers": headers, "rows": rows_dict}
 
 
-def _fields_to_lines(fields: list[dict]) -> str:
-    lines: list[str] = []
+def _fields_to_lines(fields: list[dict], row_gap: float | None = None) -> str:
+    """Y 좌표 간격 기반으로 CLOVA field 목록을 텍스트 줄로 변환한다."""
+
+    if not fields:
+        return ""
+    sorted_fields = sorted(fields, key=lambda value: (_field_center_y(value), _field_center_x(value)))
+    if row_gap is None:
+        row_gap = _adaptive_row_gap(sorted_fields)
+
+    lines: list[list[str]] = []
     current: list[str] = []
-    for field in sorted(fields, key=lambda value: (_field_center_y(value), _field_center_x(value))):
+    prev_y: float | None = None
+    for field in sorted_fields:
         text = str(field.get("inferText", "")).strip()
-        if text:
-            current.append(text)
-        if field.get("lineBreak", False):
+        if not text:
+            continue
+        cy = _field_center_y(field)
+        if prev_y is not None and (cy - prev_y) > row_gap:
             if current:
-                lines.append(" ".join(current))
-                current = []
+                lines.append(current)
+            current = []
+        current.append(text)
+        prev_y = cy
     if current:
-        lines.append(" ".join(current))
+        lines.append(current)
+    return "\n".join(" ".join(line) for line in lines)
+
+
+def _compute_para_gap(rows: list[list[dict]]) -> float:
+    if len(rows) < 2:
+        return 40.0
+    gaps = [
+        _field_center_y(rows[index + 1][0]) - _field_center_y(rows[index][-1])
+        for index in range(len(rows) - 1)
+    ]
+    gaps.sort()
+    median_gap = gaps[len(gaps) // 2]
+    return max(median_gap * 2.0, 30.0)
+
+
+def _rows_to_text(rows: list[list[dict]]) -> str:
+    lines: list[str] = []
+    for row in rows:
+        values = [str(field.get("inferText", "")).strip() for field in row]
+        line = " ".join(value for value in values if value)
+        if line:
+            lines.append(line)
     return "\n".join(lines)
 
 
@@ -526,23 +573,39 @@ def clova_ocr_page(
             )
 
     remainder = [field for index, field in enumerate(fields) if index not in used_indices]
-    remainder_text = _fields_to_lines(remainder)
-    if remainder_text.strip():
-        all_vertices: list[dict] = []
-        for field in remainder:
-            vertices = field.get("boundingPoly", {}).get("vertices", [])
-            if isinstance(vertices, list):
-                all_vertices.extend(vertices)
-        blocks.append(
-            LayoutBlock(
-                block_type="text",
-                bbox=list(_vertices_to_bbox(all_vertices)),
-                text=remainder_text,
-                confidence=_avg_confidence(remainder),
-                source_method="ocr_clova",
-                raw={"remainder": True},
+    if remainder:
+        rem_rows = _group_fields_into_rows(remainder)
+        paragraphs: list[list[list[dict]]] = []
+        if rem_rows:
+            para_gap = _compute_para_gap(rem_rows)
+            paragraphs = [[rem_rows[0]]]
+            for row in rem_rows[1:]:
+                prev_row_y = _field_center_y(paragraphs[-1][-1][-1])
+                curr_row_y = _field_center_y(row[0])
+                if curr_row_y - prev_row_y > para_gap:
+                    paragraphs.append([])
+                paragraphs[-1].append(row)
+
+        for para_rows in paragraphs:
+            para_text = _rows_to_text(para_rows)
+            if not para_text.strip():
+                continue
+            para_fields = [field for row in para_rows for field in row]
+            all_vertices: list[dict] = []
+            for field in para_fields:
+                vertices = field.get("boundingPoly", {}).get("vertices", [])
+                if isinstance(vertices, list):
+                    all_vertices.extend(vertices)
+            blocks.append(
+                LayoutBlock(
+                    block_type="text",
+                    bbox=list(_vertices_to_bbox(all_vertices)),
+                    text=para_text,
+                    confidence=_avg_confidence(para_fields),
+                    source_method="ocr_clova",
+                    raw={"remainder": True},
+                )
             )
-        )
 
     blocks.sort(key=lambda block: (block.bbox[1], block.bbox[0]))
     return blocks if blocks else _fields_to_single_block(fields)

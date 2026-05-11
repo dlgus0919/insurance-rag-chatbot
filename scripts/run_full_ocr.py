@@ -162,6 +162,8 @@ def _save_blocks(blocks: list[LayoutBlock], out_dir: Path, page_no: int) -> list
                 "bbox": _block_bbox(block),
                 "confidence": _block_confidence(block),
                 "chars": len(text),
+                "source_method": block.source_method,
+                "native_table": bool(raw.get("native_table", False)),
                 "vision_cleaned": bool(raw.get("vision_cleaned", False)),
                 "numeric_refined": bool(raw.get("numeric_refined", False)),
             }
@@ -186,6 +188,7 @@ def _save_blocks(blocks: list[LayoutBlock], out_dir: Path, page_no: int) -> list
                 "bbox": _block_bbox(block),
                 "confidence": _block_confidence(block),
                 "chars": len(text),
+                "source_method": block.source_method,
             }
         )
         text_index += 1
@@ -251,15 +254,19 @@ def _process_page(
     timeout_sec: int,
     vision_client: Any = None,
     numeric_model: str = "gpt-4.1",
+    clova_native: bool = False,
 ) -> tuple[list[dict], bool]:
     """단일 페이지를 True Hybrid OCR로 처리하고 블록 파일을 저장한다."""
 
     image = extract_page_image(pdf_path, page_no)
-    pp_blocks = run_ppstructure(image)
+    layout_regions = None
+    if not clova_native:
+        pp_blocks = run_ppstructure(image)
+        layout_regions = _layout_regions(pp_blocks)
     blocks = clova_ocr_page(
         image,
         page_name=f"p{page_no:03d}",
-        layout_regions=_layout_regions(pp_blocks),
+        layout_regions=layout_regions,
         timeout_sec=timeout_sec,
     )
 
@@ -294,7 +301,7 @@ def _select_sources(doc: str) -> list[config.PdfSource]:
 def _confirm_vision_clean(vision_clean: bool, yes: bool) -> None:
     if not vision_clean:
         return
-    print("[경고] --vision-clean 활성화: 표 감지 페이지마다 OpenAI Vision API를 2회 호출합니다.")
+    print("[경고] Vision 후보정 활성화: 표 감지 페이지마다 OpenAI Vision API를 2회 호출합니다.")
     print("       전체 실행 시 추가 비용이 발생할 수 있습니다. 계속하려면 Enter를 누르세요.")
     if yes or os.getenv("CI", "").lower() == "true":
         return
@@ -311,6 +318,7 @@ def run_document(
     vision_clean: bool,
     vision_client: Any = None,
     numeric_model: str = "gpt-4.1",
+    clova_native: bool = False,
 ) -> dict:
     total_pages = get_page_count(source.path)
     pages = parse_pages(pages_arg, total_pages)
@@ -340,6 +348,7 @@ def run_document(
                 timeout_sec=timeout_sec,
                 vision_client=active_vision_client,
                 numeric_model=numeric_model,
+                clova_native=clova_native,
             )
             if not page_vision_available:
                 vision_available = False
@@ -379,11 +388,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="전체 스캔본 True Hybrid OCR 실행")
     parser.add_argument("--doc", required=True, help="실무가이드, 상담사례집 또는 all")
     parser.add_argument("--pages", default=None, help="0-indexed 페이지 범위. 예: 60-70, 64")
-    parser.add_argument("--vision-clean", action="store_true", default=False, help="OpenAI Vision 표/숫자 정제 활성화")
+    parser.add_argument(
+        "--vision-clean",
+        action="store_true",
+        dest="vision_clean",
+        help="OpenAI Vision 표/숫자 정제 활성화 (기본값)",
+    )
+    parser.add_argument(
+        "--no-vision-clean",
+        action="store_false",
+        dest="vision_clean",
+        help="OpenAI Vision 표/숫자 정제를 비활성화",
+    )
     parser.add_argument("--force", action="store_true", default=False, help="기존 true_hybrid 페이지도 재처리")
     parser.add_argument("--timeout", type=int, default=90, help="페이지당 CLOVA API 타임아웃 초")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--yes", action="store_true", default=False, help="비용 경고 확인을 생략")
+    parser.add_argument(
+        "--clova-native",
+        action="store_true",
+        default=False,
+        help="PP-Structure layout 전달 없이 CLOVA 네이티브 표 인식을 한 번에 사용",
+    )
+    parser.set_defaults(vision_clean=True)
     return parser
 
 
@@ -412,6 +439,7 @@ def main(argv: list[str] | None = None) -> int:
             vision_clean=args.vision_clean,
             vision_client=vision_client,
             numeric_model=numeric_model,
+            clova_native=args.clova_native,
         )
     return 0
 

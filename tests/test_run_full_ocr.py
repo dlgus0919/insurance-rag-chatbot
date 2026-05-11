@@ -5,7 +5,7 @@ from pathlib import Path
 
 from src.parser.ocr_engine import LayoutBlock
 
-from scripts.run_full_ocr import _is_page_done, _save_blocks, _update_manifest, parse_pages
+from scripts.run_full_ocr import _is_page_done, _process_page, _save_blocks, _update_manifest, parse_pages
 
 
 def test_parse_pages_supports_ranges_and_validates_total() -> None:
@@ -40,6 +40,7 @@ def test_save_blocks_writes_text_blocks(tmp_path: Path) -> None:
             "bbox": [1, 2, 3, 4],
             "confidence": 0.91,
             "chars": 6,
+            "source_method": "ocr_ppstructure",
         }
     ]
     assert (tmp_path / "text" / "p064_b00.txt").read_text(encoding="utf-8") == "본문 텍스트"
@@ -92,3 +93,34 @@ def test_update_manifest_replaces_page_and_sorts(tmp_path: Path) -> None:
     assert [page["page_no"] for page in updated["pages"]] == [64, 65]
     assert updated["pages"][0]["engine"] == "true_hybrid"
     assert updated["pages"][0]["page_label"] == 65
+
+
+def test_process_page_clova_native_skips_ppstructure(monkeypatch, tmp_path: Path) -> None:
+    image = object()
+    calls = {"ppstructure": 0, "layout_regions": "not-called"}
+
+    monkeypatch.setattr("scripts.run_full_ocr.extract_page_image", lambda _pdf, _page: image)
+
+    def fake_run_ppstructure(_image):
+        calls["ppstructure"] += 1
+        return []
+
+    def fake_clova_ocr_page(_image, *, page_name, layout_regions, timeout_sec):
+        calls["layout_regions"] = layout_regions
+        return [LayoutBlock("text", [0, 0, 10, 10], "CLOVA 본문", source_method="ocr_clova")]
+
+    monkeypatch.setattr("scripts.run_full_ocr.run_ppstructure", fake_run_ppstructure)
+    monkeypatch.setattr("scripts.run_full_ocr.clova_ocr_page", fake_clova_ocr_page)
+
+    entries, vision_available = _process_page(
+        tmp_path / "dummy.pdf",
+        64,
+        tmp_path / "out",
+        timeout_sec=90,
+        clova_native=True,
+    )
+
+    assert calls["ppstructure"] == 0
+    assert calls["layout_regions"] is None
+    assert vision_available is True
+    assert entries[0]["source_method"] == "ocr_clova"
