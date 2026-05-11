@@ -60,13 +60,16 @@ def _unique_headers(headers: list[str], width: int) -> list[str]:
 
 
 def _cell_words_text(cell: dict) -> str:
-    words: list[str] = []
+    lines: list[str] = []
     for line in cell.get("cellTextLines", []):
-        for word in line.get("words", []):
-            text = str(word.get("text", "")).strip()
+        words: list[str] = []
+        for word in line.get("cellWords", []):
+            text = str(word.get("inferText", "")).strip()
             if text:
                 words.append(text)
-    return " ".join(words)
+        if words:
+            lines.append(" ".join(words))
+    return "\n".join(lines)
 
 
 def _table_to_json(table: dict) -> dict:
@@ -150,6 +153,7 @@ def _request_clova(image, page_name: str, timeout_sec: int | None = None) -> dic
             "version": "V2",
             "requestId": str(uuid.uuid4()),
             "timestamp": 0,
+            "enableTableDetection": True,
             "images": [{"format": "jpg", "name": page_name}],
         },
         ensure_ascii=False,
@@ -364,6 +368,24 @@ def _fields_to_single_block(fields: list[dict]) -> list[LayoutBlock]:
     ]
 
 
+def _native_table_to_block(table: dict) -> LayoutBlock | None:
+    vertices = table.get("boundingPoly", {}).get("vertices", [])
+    table_json = _table_to_json(table)
+    text = _table_to_text(table_json)
+    if not text.strip() and not table_json.get("headers"):
+        return None
+    return LayoutBlock(
+        block_type="table",
+        bbox=list(_vertices_to_bbox(vertices)),
+        text=text,
+        html=_table_json_to_html(table_json),
+        table_json=table_json,
+        confidence=None,
+        source_method="ocr_clova",
+        raw={"native_table": True},
+    )
+
+
 def _normalize_layout_region(region: Any) -> tuple[str, tuple[int, int, int, int]] | None:
     if isinstance(region, dict):
         block_type = str(region.get("block_type", region.get("type", "text")))
@@ -403,19 +425,30 @@ def clova_ocr_page(
 
     image_result = _request_clova(image, page_name=page_name, timeout_sec=timeout_sec)
     fields = image_result.get("fields", [])
+    native_tables = image_result.get("tables") or []
 
-    if layout_regions is None:
+    if layout_regions is None and not native_tables:
         return _fields_to_single_block(fields)
 
     blocks: list[LayoutBlock] = []
     used_indices: set[int] = set()
 
-    for raw_region in layout_regions:
+    for table in native_tables:
+        table_block = _native_table_to_block(table)
+        if table_block is None:
+            continue
+        blocks.append(table_block)
+        used_indices.update(_field_indices_in_bbox(fields, tuple(table_block.bbox)))
+
+    for raw_region in layout_regions or []:
         normalized = _normalize_layout_region(raw_region)
         if normalized is None:
             continue
         block_type, bbox = normalized
         if block_type == "figure":
+            continue
+
+        if block_type == "table" and native_tables:
             continue
 
         matched_indices = _field_indices_in_bbox(fields, bbox)
@@ -475,4 +508,3 @@ def clova_ocr_page(
 
     blocks.sort(key=lambda block: (block.bbox[1], block.bbox[0]))
     return blocks if blocks else _fields_to_single_block(fields)
-

@@ -58,28 +58,28 @@ def test_table_to_json_merges_cells_and_serializes_rows() -> None:
                 "columnIndex": 0,
                 "rowSpan": 1,
                 "columnSpan": 1,
-                "cellTextLines": [{"words": [{"text": "수술종수"}]}],
+                "cellTextLines": [{"cellWords": [{"inferText": "수술종수"}]}],
             },
             {
                 "rowIndex": 0,
                 "columnIndex": 1,
                 "rowSpan": 1,
                 "columnSpan": 1,
-                "cellTextLines": [{"words": [{"text": "수술명"}]}],
+                "cellTextLines": [{"cellWords": [{"inferText": "수술명"}]}],
             },
             {
                 "rowIndex": 1,
                 "columnIndex": 0,
                 "rowSpan": 1,
                 "columnSpan": 1,
-                "cellTextLines": [{"words": [{"text": "1종"}]}],
+                "cellTextLines": [{"cellWords": [{"inferText": "1종"}]}],
             },
             {
                 "rowIndex": 1,
                 "columnIndex": 1,
                 "rowSpan": 1,
                 "columnSpan": 1,
-                "cellTextLines": [{"words": [{"text": "봉합술"}]}],
+                "cellTextLines": [{"cellWords": [{"inferText": "봉합술"}]}],
             },
         ]
     }
@@ -88,6 +88,30 @@ def test_table_to_json_merges_cells_and_serializes_rows() -> None:
 
     assert result["headers"] == ["수술종수", "수술명"]
     assert result["rows"][0] == {"수술종수": "1종", "수술명": "봉합술"}
+
+
+def test_request_clova_includes_enable_table_detection(monkeypatch) -> None:
+    monkeypatch.setenv("CLOVA_OCR_URL", "https://example.test/ocr")
+    monkeypatch.setenv("CLOVA_OCR_SECRET", "secret-key")
+    captured: dict = {}
+
+    class DummyResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"images": [{"inferResult": "SUCCESS", "fields": [], "tables": []}]}
+
+    def fake_post(url: str, headers: dict, files: dict, timeout: int):  # noqa: ANN001
+        captured["message"] = json.loads(files["message"][1])
+        return DummyResponse()
+
+    monkeypatch.setattr(clova_ocr.requests, "post", fake_post)
+
+    result = clova_ocr._request_clova(Image.new("RGB", (10, 10), "white"), page_name="sample")
+
+    assert result["tables"] == []
+    assert captured["message"]["enableTableDetection"] is True
 
 
 def test_table_to_text_serializes_header_and_rows() -> None:
@@ -192,6 +216,81 @@ def test_clova_ocr_page_with_layout_regions(monkeypatch) -> None:
     assert all(block.block_type != "figure" for block in blocks)
 
 
+def test_clova_ocr_page_uses_native_tables_when_present(monkeypatch) -> None:
+    native_table = {
+        "boundingPoly": {
+            "vertices": [
+                {"x": 80, "y": 80},
+                {"x": 520, "y": 80},
+                {"x": 520, "y": 180},
+                {"x": 80, "y": 180},
+            ]
+        },
+        "cells": [
+            {
+                "rowIndex": 0,
+                "columnIndex": 0,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "수술종수"}]}],
+            },
+            {
+                "rowIndex": 0,
+                "columnIndex": 1,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "수술명"}]}],
+            },
+            {
+                "rowIndex": 1,
+                "columnIndex": 0,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "1종"}]}],
+            },
+            {
+                "rowIndex": 1,
+                "columnIndex": 1,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "봉합술"}]}],
+            },
+        ],
+    }
+
+    def fake_request_clova(image, page_name: str, timeout_sec: int | None = None) -> dict:  # noqa: ANN001
+        return {
+            "fields": [
+                _field("수술종수", 100, 90, 180, 110),
+                _field("수술명", 300, 90, 380, 110, line_break=True),
+                _field("1종", 100, 140, 180, 160),
+                _field("봉합술", 300, 140, 380, 160, line_break=True),
+                _field("표 밖 텍스트", 90, 210, 240, 230, line_break=True),
+            ],
+            "tables": [native_table],
+        }
+
+    def fail_reconstruct_table_from_fields(*args, **kwargs):  # noqa: ANN001
+        raise AssertionError("native tables should bypass geometric reconstruction")
+
+    monkeypatch.setattr(clova_ocr, "_request_clova", fake_request_clova)
+    monkeypatch.setattr(clova_ocr, "reconstruct_table_from_fields", fail_reconstruct_table_from_fields)
+
+    blocks = clova_ocr_page(
+        Image.new("RGB", (600, 300), "white"),
+        page_name="sample",
+        layout_regions=[{"type": "table", "bbox": [80, 80, 520, 180]}],
+    )
+
+    table = next(block for block in blocks if block.block_type == "table")
+    assert table.raw == {"native_table": True}
+    assert table.bbox == [80, 80, 520, 180]
+    assert table.table_json is not None
+    assert table.table_json["headers"] == ["수술종수", "수술명"]
+    assert table.table_json["rows"][0] == {"수술종수": "1종", "수술명": "봉합술"}
+    assert "표 밖 텍스트" in blocks[-1].text
+
+
 def test_clova_ocr_page_raises_on_http_error(monkeypatch) -> None:
     monkeypatch.setenv("CLOVA_OCR_URL", "https://example.test/ocr")
     monkeypatch.setenv("CLOVA_OCR_SECRET", "secret-key")
@@ -204,4 +303,3 @@ def test_clova_ocr_page_raises_on_http_error(monkeypatch) -> None:
 
     with pytest.raises(ClovaOcrError, match="API 요청 실패"):
         clova_ocr_page(Image.new("RGB", (10, 10), "white"))
-
