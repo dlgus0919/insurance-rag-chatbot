@@ -43,6 +43,7 @@ from src.retrieval.embedder import Embedder
 from src.retrieval.reranker import build_reranker
 from src.retrieval.vector_store import VectorStore
 from src.ui.admin_page import render_admin_page
+from src.ui.brand import inject_css, render_logo, render_sidebar_logo
 from src.ui.chat_store import delete_chat, list_user_chats, load_chat, new_chat_id, save_chat
 from src.ui.pdf_view import open_pdf_in_native_viewer, render_pdf_page_png
 from src.utils.logger import (
@@ -197,15 +198,23 @@ def _check_auth(session_id: str) -> bool:
         return True
 
     if not user_store.has_admin():
-        st.title("보험 고시 문서 RAG 챗봇")
+        render_logo(width=220)
+        st.markdown(
+            '<h1 class="app-header" style="text-align:center;">보험 문서 RAG 챗봇</h1>',
+            unsafe_allow_html=True,
+        )
         st.error(_admin_bootstrap_message())
         return False
 
-    st.title("보험 고시 문서 RAG 챗봇")
-    st.markdown("---")
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        st.subheader("🔐 임직원 전용 서비스")
+        render_logo(width=220)
+        st.markdown(
+            '<p class="login-subtitle">임직원 전용 보험 문서 RAG 서비스</p>',
+            unsafe_allow_html=True,
+        )
+        st.markdown("---")
+        st.subheader("🔐 로그인")
         username = st.text_input("사용자명", placeholder="사용자명")
         password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
         if st.button("로그인", use_container_width=True, type="primary"):
@@ -855,6 +864,7 @@ def render_insurance_form_panel() -> tuple[InsuranceFormInput | None, bool]:
 
 def main() -> None:
     st.set_page_config(page_title="보험 고시 문서 RAG 챗봇")
+    inject_css()
     try:
         _bootstrap_users_json_from_env()
         if _bootstrap_cloud_assets() != 0:
@@ -879,9 +889,13 @@ def main() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    st.title("보험 고시 문서 RAG 챗봇")
+    st.markdown(
+        '<h1 class="app-header">📋 보험 문서 RAG 챗봇</h1>',
+        unsafe_allow_html=True,
+    )
 
     with st.sidebar:
+        render_sidebar_logo()
         if config.CLOUD_DEPLOY:
             st.info("클라우드 배포 - 외부 LLM(OpenAI) 전용")
         display = st.session_state.get("user_display", "")

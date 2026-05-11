@@ -11,3 +11,10 @@ fastReruns = true
 # Cloud에서는 warning 이상만 출력해 선택적 의존성 탐색 로그를 줄인다.
 level = "warning"
 messageFormat = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+[theme]
+primaryColor = "#0046FF"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F7FC"
+textColor = "#1A1A2E"
+font = "sans serif"
