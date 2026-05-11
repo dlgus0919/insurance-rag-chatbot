@@ -43,7 +43,7 @@ from src.retrieval.embedder import Embedder
 from src.retrieval.reranker import build_reranker
 from src.retrieval.vector_store import VectorStore
 from src.ui.admin_page import render_admin_page
-from src.ui.brand import inject_css, render_logo, render_sidebar_logo
+from src.ui.brand import inject_css, render_logo
 from src.ui.chat_store import delete_chat, list_user_chats, load_chat, new_chat_id, save_chat
 from src.ui.pdf_view import open_pdf_in_native_viewer, render_pdf_page_png
 from src.utils.logger import (
@@ -889,13 +889,10 @@ def main() -> None:
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    st.markdown(
-        '<h1 class="app-header">📋 보험 문서 RAG 챗봇</h1>',
-        unsafe_allow_html=True,
-    )
+    render_logo(width=360)
+    st.markdown('<h1 class="app-header">보험 문서 RAG 챗봇</h1>', unsafe_allow_html=True)
 
     with st.sidebar:
-        render_sidebar_logo()
         if config.CLOUD_DEPLOY:
             st.info("클라우드 배포 - 외부 LLM(OpenAI) 전용")
         display = st.session_state.get("user_display", "")
