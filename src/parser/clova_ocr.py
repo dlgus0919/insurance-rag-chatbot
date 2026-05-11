@@ -72,6 +72,49 @@ def _cell_words_text(cell: dict) -> str:
     return "\n".join(lines)
 
 
+def _cell_span(cell: dict) -> tuple[int, int, int, int]:
+    row_index = int(cell.get("rowIndex", 0))
+    col_index = int(cell.get("columnIndex", 0))
+    row_span = max(1, int(cell.get("rowSpan", 1)))
+    col_span = max(1, int(cell.get("columnSpan", 1)))
+    return row_index, col_index, row_span, col_span
+
+
+def _header_colspan_cols(cells: list[dict]) -> set[int]:
+    colspan_cols: set[int] = set()
+    for cell in cells:
+        row_index, col_index, _, col_span = _cell_span(cell)
+        if row_index == 0 and col_span > 1:
+            colspan_cols.update(range(col_index, col_index + col_span))
+    return colspan_cols
+
+
+def _detect_header_rows(cells: list[dict]) -> int:
+    colspan_cols = _header_colspan_cols(cells)
+    if not colspan_cols:
+        return 1
+    for cell in cells:
+        row_index, col_index, _, col_span = _cell_span(cell)
+        if row_index == 1 and any(col in colspan_cols for col in range(col_index, col_index + col_span)):
+            return 2
+    return 1
+
+
+def _build_column_headers(grid: list[list[str]], cells: list[dict], width: int) -> list[str]:
+    header_rows = _detect_header_rows(cells)
+    if header_rows == 1 or len(grid) < 2:
+        return _unique_headers(grid[0] if grid else [], width)
+
+    colspan_cols = _header_colspan_cols(cells)
+    headers: list[str] = []
+    for col_index in range(width):
+        if col_index in colspan_cols:
+            headers.append(grid[1][col_index] if col_index < len(grid[1]) else "")
+        else:
+            headers.append(grid[0][col_index] if grid else "")
+    return _unique_headers(headers, width)
+
+
 def _table_to_json(table: dict) -> dict:
     """CLOVA tables 필드가 있을 때 table JSON으로 변환한다."""
 
@@ -82,28 +125,23 @@ def _table_to_json(table: dict) -> dict:
     max_row = 0
     max_col = 0
     for cell in cells:
-        row_index = int(cell.get("rowIndex", 0))
-        col_index = int(cell.get("columnIndex", 0))
-        row_span = max(1, int(cell.get("rowSpan", 1)))
-        col_span = max(1, int(cell.get("columnSpan", 1)))
+        row_index, col_index, row_span, col_span = _cell_span(cell)
         max_row = max(max_row, row_index + row_span - 1)
         max_col = max(max_col, col_index + col_span - 1)
 
     grid: list[list[str]] = [[""] * (max_col + 1) for _ in range(max_row + 1)]
     for cell in cells:
-        row_index = int(cell.get("rowIndex", 0))
-        col_index = int(cell.get("columnIndex", 0))
-        row_span = max(1, int(cell.get("rowSpan", 1)))
-        col_span = max(1, int(cell.get("columnSpan", 1)))
+        row_index, col_index, row_span, col_span = _cell_span(cell)
         value = _cell_words_text(cell)
         for row in range(row_index, min(len(grid), row_index + row_span)):
             for col in range(col_index, min(len(grid[row]), col_index + col_span)):
                 if not grid[row][col]:
                     grid[row][col] = value
 
-    headers = _unique_headers(grid[0] if grid else [], len(grid[0]) if grid else 0)
+    header_rows = _detect_header_rows(cells)
+    headers = _build_column_headers(grid, cells, len(grid[0]) if grid else 0)
     rows: list[dict] = []
-    for raw_row in grid[1:]:
+    for raw_row in grid[header_rows:]:
         padded = raw_row + [""] * max(0, len(headers) - len(raw_row))
         rows.append(dict(zip(headers, padded[: len(headers)])))
     return {"headers": headers, "rows": rows}

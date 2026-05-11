@@ -90,6 +90,88 @@ def test_table_to_json_merges_cells_and_serializes_rows() -> None:
     assert result["rows"][0] == {"수술종수": "1종", "수술명": "봉합술"}
 
 
+def test_table_to_json_uses_second_header_row_for_colspan_group() -> None:
+    table = {
+        "cells": [
+            {
+                "rowIndex": 0,
+                "columnIndex": 0,
+                "rowSpan": 2,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "수술명"}]}],
+            },
+            {
+                "rowIndex": 0,
+                "columnIndex": 1,
+                "rowSpan": 2,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "수술해설"}]}],
+            },
+            {
+                "rowIndex": 0,
+                "columnIndex": 2,
+                "rowSpan": 1,
+                "columnSpan": 3,
+                "cellTextLines": [{"cellWords": [{"inferText": "수술종수"}]}],
+            },
+            {
+                "rowIndex": 1,
+                "columnIndex": 2,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "1-3종"}]}],
+            },
+            {
+                "rowIndex": 1,
+                "columnIndex": 3,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "1-5종"}]}],
+            },
+            {
+                "rowIndex": 1,
+                "columnIndex": 4,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "신1-5종"}]}],
+            },
+            {
+                "rowIndex": 2,
+                "columnIndex": 0,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "봉합술"}]}],
+            },
+            {
+                "rowIndex": 2,
+                "columnIndex": 1,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "설명"}]}],
+            },
+            {
+                "rowIndex": 2,
+                "columnIndex": 3,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "2"}]}],
+            },
+            {
+                "rowIndex": 2,
+                "columnIndex": 4,
+                "rowSpan": 1,
+                "columnSpan": 1,
+                "cellTextLines": [{"cellWords": [{"inferText": "2"}]}],
+            },
+        ]
+    }
+
+    result = _table_to_json(table)
+
+    assert result["headers"] == ["수술명", "수술해설", "1-3종", "1-5종", "신1-5종"]
+    assert result["rows"][0] == {"수술명": "봉합술", "수술해설": "설명", "1-3종": "", "1-5종": "2", "신1-5종": "2"}
+
+
 def test_request_clova_includes_enable_table_detection(monkeypatch) -> None:
     monkeypatch.setenv("CLOVA_OCR_URL", "https://example.test/ocr")
     monkeypatch.setenv("CLOVA_OCR_SECRET", "secret-key")

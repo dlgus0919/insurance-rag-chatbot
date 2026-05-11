@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -71,7 +72,13 @@ def _write_page_json(
     return payload
 
 
-def run_true_hybrid_local(doc_short: str, pages_arg: str, output_dir: Path, timeout_sec: int) -> None:
+def run_true_hybrid_local(
+    doc_short: str,
+    pages_arg: str,
+    output_dir: Path,
+    timeout_sec: int,
+    vision_clean: bool = False,
+) -> None:
     doc_dir = output_dir / doc_short
     if not doc_dir.exists():
         raise FileNotFoundError(f"결과 디렉터리를 찾을 수 없습니다: {doc_dir}")
@@ -83,6 +90,15 @@ def run_true_hybrid_local(doc_short: str, pages_arg: str, output_dir: Path, time
     results: list[dict] = []
     success = skipped = 0
     total_started = time.perf_counter()
+    vision_client = None
+    clean_table_blocks = None
+    if vision_clean:
+        import openai
+
+        from src.parser.table_vision_cleaner import clean_table_blocks as clean_table_blocks_func
+
+        vision_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        clean_table_blocks = clean_table_blocks_func
 
     for page_no in pages:
         page_name = f"p{page_no:03d}"
@@ -116,6 +132,8 @@ def run_true_hybrid_local(doc_short: str, pages_arg: str, output_dir: Path, time
                     layout_regions=layout_regions_no_fig,
                     timeout_sec=timeout_sec,
                 )
+                if clean_table_blocks is not None:
+                    blocks = clean_table_blocks(blocks, image, vision_client)
             elapsed = time.perf_counter() - started
             figures = _extract_figures(prep, doc_dir)
             block_payload = _serialize_blocks(blocks)
@@ -163,9 +181,15 @@ def main() -> int:
     parser.add_argument("--pages", default="60-70")
     parser.add_argument("--output-dir", type=Path, default=ROOT / "reports" / "ocr_compare")
     parser.add_argument("--timeout", type=int, default=60)
+    parser.add_argument(
+        "--vision-clean",
+        action="store_true",
+        default=False,
+        help="OpenAI Vision LLM으로 표 셀 그림 감지 및 OCR 보정",
+    )
     args = parser.parse_args()
 
-    run_true_hybrid_local(args.doc, args.pages, args.output_dir, args.timeout)
+    run_true_hybrid_local(args.doc, args.pages, args.output_dir, args.timeout, vision_clean=args.vision_clean)
     return 0
 
 
