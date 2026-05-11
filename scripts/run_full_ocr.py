@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""전체 스캔 PDF True Hybrid OCR 실행 및 data/extracted 포맷 저장."""
+"""전체 스캔 PDF OCR 실행 및 data/extracted 포맷 저장."""
 
 from __future__ import annotations
 
@@ -26,6 +26,8 @@ from src.parser.table_vision_cleaner import TableVisionCleanerAuthError, clean_t
 
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "extracted"
 TRUE_HYBRID_ENGINE = "true_hybrid"
+CLOVA_NATIVE_ENGINE = "clova_native"
+DEFAULT_ENGINE = CLOVA_NATIVE_ENGINE
 
 
 def parse_pages(value: str | None, total_pages: int) -> list[int]:
@@ -74,11 +76,15 @@ def _write_manifest(manifest_path: Path, manifest: dict) -> None:
     tmp_path.replace(manifest_path)
 
 
-def _is_page_done(manifest: dict, page_no: int) -> bool:
-    """manifest에 해당 페이지의 true_hybrid 성공 결과가 있으면 True."""
+def _engine_from_native_flag(clova_native: bool) -> str:
+    return CLOVA_NATIVE_ENGINE if clova_native else TRUE_HYBRID_ENGINE
+
+
+def _is_page_done(manifest: dict, page_no: int, engine: str = DEFAULT_ENGINE) -> bool:
+    """manifest에 해당 페이지의 지정 OCR 엔진 성공 결과가 있으면 True."""
 
     for page_info in manifest.get("pages", []):
-        if int(page_info.get("page_no", -1)) == page_no and page_info.get("engine") == TRUE_HYBRID_ENGINE:
+        if int(page_info.get("page_no", -1)) == page_no and page_info.get("engine") == engine:
             return True
     return False
 
@@ -208,13 +214,14 @@ def _update_manifest(
     page_no: int,
     page_label: int,
     block_entries: list[dict],
+    engine: str = DEFAULT_ENGINE,
 ) -> dict:
     """단일 페이지 manifest 항목을 교체하고 즉시 저장한다."""
 
     page_entry = {
         "page_no": page_no,
         "page_label": page_label,
-        "engine": TRUE_HYBRID_ENGINE,
+        "engine": engine,
         "fallback_reason": None,
         "blocks": block_entries,
     }
@@ -262,7 +269,7 @@ def _process_page(
     numeric_model: str = "gpt-4.1",
     clova_native: bool = False,
 ) -> tuple[list[dict], bool]:
-    """단일 페이지를 True Hybrid OCR로 처리하고 블록 파일을 저장한다."""
+    """단일 페이지를 지정 OCR 방식으로 처리하고 블록 파일을 저장한다."""
 
     image = extract_page_image(pdf_path, page_no)
     layout_regions = None
@@ -331,17 +338,18 @@ def run_document(
     doc_dir = output_dir / source.doc_short
     manifest_path = doc_dir / "manifest.json"
     manifest = _load_manifest(manifest_path, source.doc_short, total_pages)
+    engine = _engine_from_native_flag(clova_native)
 
-    print(f"[run_full_ocr] {source.doc_short} ({total_pages} 페이지) 시작")
+    print(f"[run_full_ocr] {source.doc_short} ({total_pages} 페이지) 시작 - engine={engine}")
     success = skipped = failed = 0
     started_all = time.perf_counter()
     vision_available = vision_clean
 
     for completed, page_no in enumerate(pages, start=1):
         page_name = f"p{page_no:03d}"
-        if not force and _is_page_done(manifest, page_no):
+        if not force and _is_page_done(manifest, page_no, engine):
             skipped += 1
-            print(f"[run_full_ocr] {page_name} -> SKIPPED (기존 true_hybrid 결과)  [{completed}/{len(pages)} 완료]")
+            print(f"[run_full_ocr] {page_name} -> SKIPPED (기존 {engine} 결과)  [{completed}/{len(pages)} 완료]")
             continue
 
         started = time.perf_counter()
@@ -359,7 +367,7 @@ def run_document(
             if not page_vision_available:
                 vision_available = False
             elapsed = time.perf_counter() - started
-            _update_manifest(manifest_path, manifest, page_no, page_no + 1, block_entries)
+            _update_manifest(manifest_path, manifest, page_no, page_no + 1, block_entries, engine=engine)
             success += 1
             print(
                 f"[run_full_ocr] {page_name} -> SUCCESS ({len(block_entries)}블록, {elapsed:.1f}초)  "
@@ -391,7 +399,7 @@ def run_document(
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="전체 스캔본 True Hybrid OCR 실행")
+    parser = argparse.ArgumentParser(description="전체 스캔본 OCR 실행")
     parser.add_argument("--doc", required=True, help="실무가이드, 상담사례집 또는 all")
     parser.add_argument("--pages", default=None, help="0-indexed 페이지 범위. 예: 60-70, 64")
     parser.add_argument(
@@ -406,17 +414,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="vision_clean",
         help="OpenAI Vision 표/숫자 정제를 비활성화",
     )
-    parser.add_argument("--force", action="store_true", default=False, help="기존 true_hybrid 페이지도 재처리")
+    parser.add_argument("--force", action="store_true", default=False, help="기존 동일 OCR 엔진 페이지도 재처리")
     parser.add_argument("--timeout", type=int, default=90, help="페이지당 CLOVA API 타임아웃 초")
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--yes", action="store_true", default=False, help="비용 경고 확인을 생략")
     parser.add_argument(
         "--clova-native",
         action="store_true",
-        default=False,
-        help="PP-Structure layout 전달 없이 CLOVA 네이티브 표 인식을 한 번에 사용",
+        dest="clova_native",
+        help="PP-Structure layout 전달 없이 CLOVA 네이티브 표 인식을 한 번에 사용 (기본값)",
     )
-    parser.set_defaults(vision_clean=True)
+    parser.add_argument(
+        "--true-hybrid",
+        action="store_false",
+        dest="clova_native",
+        help="PP-Structure layout + CLOVA OCR 방식 사용 (보존된 대체 워크플로우)",
+    )
+    parser.set_defaults(vision_clean=True, clova_native=True)
     return parser
 
 

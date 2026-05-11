@@ -5,7 +5,17 @@ from pathlib import Path
 
 from src.parser.ocr_engine import LayoutBlock
 
-from scripts.run_full_ocr import _is_page_done, _process_page, _save_blocks, _update_manifest, parse_pages
+from scripts.run_full_ocr import (
+    CLOVA_NATIVE_ENGINE,
+    TRUE_HYBRID_ENGINE,
+    _engine_from_native_flag,
+    _is_page_done,
+    _process_page,
+    _save_blocks,
+    _update_manifest,
+    build_arg_parser,
+    parse_pages,
+)
 
 
 def test_parse_pages_supports_ranges_and_validates_total() -> None:
@@ -13,16 +23,22 @@ def test_parse_pages_supports_ranges_and_validates_total() -> None:
     assert parse_pages(None, total_pages=3) == [0, 1, 2]
 
 
-def test_is_page_done_requires_true_hybrid_engine() -> None:
+def test_engine_from_native_flag_selects_workflow() -> None:
+    assert _engine_from_native_flag(True) == CLOVA_NATIVE_ENGINE
+    assert _engine_from_native_flag(False) == TRUE_HYBRID_ENGINE
+
+
+def test_is_page_done_requires_matching_engine() -> None:
     manifest = {
         "pages": [
-            {"page_no": 64, "engine": "ppstructure"},
+            {"page_no": 64, "engine": "clova_native"},
             {"page_no": 65, "engine": "true_hybrid"},
         ]
     }
-    assert _is_page_done(manifest, 65) is True
-    assert _is_page_done(manifest, 64) is False
-    assert _is_page_done(manifest, 66) is False
+    assert _is_page_done(manifest, 64, "clova_native") is True
+    assert _is_page_done(manifest, 65, "true_hybrid") is True
+    assert _is_page_done(manifest, 65, "clova_native") is False
+    assert _is_page_done(manifest, 66, "clova_native") is False
 
 
 def test_save_blocks_writes_text_blocks(tmp_path: Path) -> None:
@@ -91,8 +107,25 @@ def test_update_manifest_replaces_page_and_sorts(tmp_path: Path) -> None:
 
     updated = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert [page["page_no"] for page in updated["pages"]] == [64, 65]
-    assert updated["pages"][0]["engine"] == "true_hybrid"
+    assert updated["pages"][0]["engine"] == "clova_native"
     assert updated["pages"][0]["page_label"] == 65
+
+
+def test_update_manifest_can_record_true_hybrid_engine(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "manifest.json"
+    manifest = {"doc_short": "실무가이드", "total_pages": 330, "pages": []}
+
+    _update_manifest(
+        manifest_path,
+        manifest,
+        64,
+        65,
+        [],
+        engine="true_hybrid",
+    )
+
+    updated = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert updated["pages"][0]["engine"] == "true_hybrid"
 
 
 def test_process_page_clova_native_skips_ppstructure(monkeypatch, tmp_path: Path) -> None:
@@ -124,3 +157,13 @@ def test_process_page_clova_native_skips_ppstructure(monkeypatch, tmp_path: Path
     assert calls["layout_regions"] is None
     assert vision_available is True
     assert entries[0]["source_method"] == "ocr_clova"
+
+
+def test_arg_parser_defaults_to_clova_native_and_keeps_true_hybrid_flag() -> None:
+    parser = build_arg_parser()
+
+    default_args = parser.parse_args(["--doc", "all"])
+    true_hybrid_args = parser.parse_args(["--doc", "all", "--true-hybrid"])
+
+    assert default_args.clova_native is True
+    assert true_hybrid_args.clova_native is False
