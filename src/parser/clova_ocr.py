@@ -371,30 +371,31 @@ def reconstruct_table_from_fields(
 
 
 def _fields_to_lines(fields: list[dict], row_gap: float | None = None) -> str:
-    """Y 좌표 간격 기반으로 CLOVA field 목록을 텍스트 줄로 변환한다."""
+    """Y 좌표 간격으로 줄을 나누고 줄 안에서는 CLOVA 원본 순서를 보존한다."""
 
     if not fields:
         return ""
-    sorted_fields = sorted(fields, key=lambda value: (_field_center_y(value), _field_center_x(value)))
+    indexed = sorted(enumerate(fields), key=lambda pair: _field_center_y(pair[1]))
     if row_gap is None:
-        row_gap = _adaptive_row_gap(sorted_fields)
+        row_gap = _adaptive_row_gap([field for _, field in indexed])
 
     lines: list[list[str]] = []
-    current: list[str] = []
+    current_line: list[tuple[int, str]] = []
     prev_y: float | None = None
-    for field in sorted_fields:
+    for original_index, field in indexed:
         text = str(field.get("inferText", "")).strip()
-        if not text:
-            continue
         cy = _field_center_y(field)
         if prev_y is not None and (cy - prev_y) > row_gap:
-            if current:
-                lines.append(current)
-            current = []
-        current.append(text)
+            if current_line:
+                current_line.sort(key=lambda item: item[0])
+                lines.append([value for _, value in current_line if value])
+            current_line = []
+        if text:
+            current_line.append((original_index, text))
         prev_y = cy
-    if current:
-        lines.append(current)
+    if current_line:
+        current_line.sort(key=lambda item: item[0])
+        lines.append([value for _, value in current_line if value])
     return "\n".join(" ".join(line) for line in lines)
 
 

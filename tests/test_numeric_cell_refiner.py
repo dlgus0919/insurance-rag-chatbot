@@ -82,27 +82,10 @@ def test_refine_numeric_cells_applies_all_blank_text_row_corrections() -> None:
     completions = _Completions(
         """
         {
-          "headers": ["수술명", "수술해설", "1-3종", "1-5종", "신1-5종"],
-          "rows": [
-            {
-              "수술명": "손가락 핀고정술",
-              "수술해설": "손가락 골절시 관혈 또는 경피적으로 핀을 삽입",
-              "1-3종": "",
-              "1-5종": "",
-              "신1-5종": "",
-              "_corrections": {
-                "1-3종": {"from": "", "to": "1", "confidence": "high"},
-                "1-5종": {"from": "", "to": "1", "confidence": "medium"},
-                "신1-5종": {"from": "", "to": "1", "confidence": "low"}
-              }
-            },
-            {
-              "수술명": "골수염 골결핵 수술",
-              "수술해설": "뼈에 관한 모든 수술",
-              "1-3종": "2",
-              "1-5종": "3",
-              "신1-5종": "2"
-            }
+          "corrections": [
+            {"row_index": 0, "col": "1-3종", "to": "1", "confidence": "high"},
+            {"row_index": 0, "col": "1-5종", "to": "1", "confidence": "medium"},
+            {"row_index": 0, "col": "신1-5종", "to": "1", "confidence": "low"}
           ]
         }
         """
@@ -147,6 +130,7 @@ def test_refine_numeric_cells_applies_all_blank_text_row_corrections() -> None:
         },
     ]
     assert completions.calls[0]["model"] == "gpt-4.1"
+    assert completions.calls[0]["max_tokens"] == 512
     assert len(completions.calls[0]["messages"][0]["content"]) == 3
 
 
@@ -163,19 +147,9 @@ def test_refine_numeric_cells_includes_partial_missing_rows() -> None:
     completions = _Completions(
         """
         {
-          "headers": ["수술명", "수술해설", "1-3종", "1-5종", "신1-5종"],
-          "rows": [
-            {
-              "수술명": "근육내 양성종양 적출술",
-              "수술해설": "근육내 양성종양을 제거",
-              "1-3종": "1",
-              "1-5종": "",
-              "신1-5종": "",
-              "_corrections": {
-                "1-5종": {"from": "", "to": "1", "confidence": "high"},
-                "신1-5종": {"from": "", "to": "1", "confidence": "high"}
-              }
-            }
+          "corrections": [
+            {"row_index": 0, "col": "1-5종", "to": "1", "confidence": "high"},
+            {"row_index": 0, "col": "신1-5종", "to": "1", "confidence": "high"}
           ]
         }
         """
@@ -191,6 +165,7 @@ def test_refine_numeric_cells_includes_partial_missing_rows() -> None:
     prompt = completions.calls[0]["messages"][0]["content"][2]["text"]
     assert '"1-5종"' in prompt
     assert '"신1-5종"' in prompt
+    assert "현재 table_json" not in prompt
 
 
 def test_refine_numeric_cells_skips_figure_and_empty_all_blank_rows() -> None:
@@ -216,24 +191,11 @@ def test_refine_numeric_cells_validates_allowed_values_and_marks_unresolved() ->
     completions = _Completions(
         """
         {
-          "headers": ["수술명", "수술해설", "1-3종", "1-5종", "신1-5종"],
-          "rows": [
-            {
-              "수술명": "부분 누락",
-              "수술해설": "설명",
-              "1-3종": "N",
-              "1-5종": "",
-              "신1-5종": "N",
-              "_unresolved": {"1-5종": {"from": "", "reason": "not_readable"}}
-            },
-            {
-              "수술명": "잘못된 값",
-              "수술해설": "설명",
-              "1-3종": "4",
-              "1-5종": "3",
-              "신1-5종": "2",
-              "_corrections": {"1-3종": {"from": "4", "to": "9", "confidence": "high"}}
-            }
+          "corrections": [
+            {"row_index": 1, "col": "1-3종", "to": "9", "confidence": "high"}
+          ],
+          "unresolved": [
+            {"row_index": 0, "col": "1-5종", "reason": "not_readable"}
           ]
         }
         """
@@ -245,8 +207,8 @@ def test_refine_numeric_cells_validates_allowed_values_and_marks_unresolved() ->
     assert "numeric_refined" not in result[0].raw
     assert result[0].raw["numeric_candidate_rows"] == [0, 1]
     assert result[0].raw["numeric_unresolved_cells"] == [
-        {"row_index": 0, "col": "1-5종", "from": "", "reason": "not_readable"},
         {"row_index": 1, "col": "1-3종", "from": "4", "reason": "invalid_vision_value"},
+        {"row_index": 0, "col": "1-5종", "from": "", "reason": "not_readable"},
     ]
 
 
@@ -256,16 +218,8 @@ def test_refine_numeric_cells_supports_surgery_grade_headers() -> None:
     completions = _Completions(
         """
         {
-          "headers": ["수술명", "수술해설", "수술종수", "수술종수_2", "수술종수_3"],
-          "rows": [
-            {
-              "수술명": "핀고정술",
-              "수술해설": "설명",
-              "수술종수": "",
-              "수술종수_2": "2",
-              "수술종수_3": "2",
-              "_corrections": {"수술종수": {"from": "", "to": "1", "confidence": "medium"}}
-            }
+          "corrections": [
+            {"row_index": 0, "col": "수술종수", "to": "1", "confidence": "medium"}
           ]
         }
         """

@@ -47,23 +47,28 @@ VISION_PROMPT = """당신은 보험 약관 표의 수술종수 컬럼 값을 판
 
 규칙:
 - 수술종수 이외 컬럼은 절대 변경하지 마세요.
-- 표 구조(headers, row 수, key 이름)는 변경하지 마세요.
 - 후보 행의 대상 셀마다 가능한 한 반드시 값을 판정하세요.
 - 허용 값:
   - 1-3종 역할 컬럼: "N", "1", "2", "3"
   - 1-5종 / 신1-5종 역할 컬럼: "N", "1", "2", "3", "4", "5"
-- 수정할 셀은 rows[i]["_corrections"][col] = {"from": "기존값", "to": "새값", "confidence": "high|medium|low"} 형태로 추가하세요.
-- 판독이 불가능한 셀은 rows[i]["_unresolved"][col] = {"from": "기존값", "reason": "not_readable"} 형태로 추가하세요.
 - JSON 형식만 반환하고 다른 설명은 출력하지 마세요.
+- table_json 전체를 에코하지 마세요. 변경/판독불가 셀만 아래 형식으로 반환하세요.
 
 수술종수 컬럼 역할:
 __GRADE_COLUMN_ROLES__
 
-후보 row_index:
-__CANDIDATE_INDEXES__
+후보 row_index 및 각 행의 수술명:
+__CANDIDATE_ROWS__
 
-현재 table_json:
-__TABLE_JSON__
+반환 형식 (이 JSON 구조만 반환):
+{
+  "corrections": [
+    {"row_index": <int>, "col": "<컬럼명>", "to": "<값>", "confidence": "high|medium|low"}
+  ],
+  "unresolved": [
+    {"row_index": <int>, "col": "<컬럼명>", "reason": "not_readable"}
+  ]
+}
 """
 
 
@@ -199,10 +204,20 @@ def _build_prompt(table_json: dict, grade_roles: list[dict], candidate_indexes: 
         }
         for role in grade_roles
     ]
+    rows = table_json.get("rows", [])
+    candidate_rows_summary: list[dict] = []
+    for index in candidate_indexes:
+        row = rows[index] if index < len(rows) and isinstance(rows[index], dict) else {}
+        candidate_rows_summary.append(
+            {
+                "row_index": index,
+                "수술명": str(row.get("수술명", ""))[:50],
+                "현재값": {role["col"]: str(row.get(role["col"], "")) for role in grade_roles},
+            }
+        )
     return (
         VISION_PROMPT.replace("__GRADE_COLUMN_ROLES__", json.dumps(role_payload, ensure_ascii=False, indent=2))
-        .replace("__CANDIDATE_INDEXES__", json.dumps(candidate_indexes, ensure_ascii=False))
-        .replace("__TABLE_JSON__", json.dumps(table_json, ensure_ascii=False, indent=2))
+        .replace("__CANDIDATE_ROWS__", json.dumps(candidate_rows_summary, ensure_ascii=False, indent=2))
     )
 
 
@@ -218,7 +233,7 @@ def _call_vision(
     try:
         response = client.chat.completions.create(
             model=model,
-            max_tokens=3072,
+            max_tokens=512,
             messages=[
                 {
                     "role": "user",
@@ -240,83 +255,89 @@ def _call_vision(
 
 def _extract_valid_corrections_and_unresolved(
     original: dict,
-    candidate: dict,
+    delta: dict,
     grade_roles: list[dict],
     candidate_indexes: list[int],
 ) -> tuple[list[dict], list[dict]]:
     corrections: list[dict] = []
     unresolved: list[dict] = []
     original_rows = original.get("rows", [])
-    candidate_rows = candidate.get("rows", [])
     candidate_index_set = set(candidate_indexes)
     roles_by_col = {role["col"]: role for role in grade_roles}
+    target_cols_by_row = {
+        row_index: set(_target_cells_for_row(original_rows[row_index], grade_roles))
+        for row_index in candidate_indexes
+        if row_index < len(original_rows)
+    }
+    resolved: set[tuple[int, str]] = set()
 
-    for row_index in candidate_indexes:
-        if row_index >= len(original_rows):
+    for item in delta.get("corrections", []) or []:
+        if not isinstance(item, dict):
             continue
-        original_row = original_rows[row_index]
-        candidate_row = candidate_rows[row_index] if row_index < len(candidate_rows) else {}
-        raw_corrections = candidate_row.get("_corrections") if isinstance(candidate_row, dict) else None
-        raw_unresolved = candidate_row.get("_unresolved") if isinstance(candidate_row, dict) else None
-        target_cols = set(_target_cells_for_row(original_row, grade_roles))
-        resolved_cols: set[str] = set()
+        row_index = item.get("row_index")
+        col = str(item.get("col", ""))
+        to_value = _normalize_grade_value(item.get("to", ""))
+        if not isinstance(row_index, int) or row_index not in candidate_index_set:
+            continue
+        if col not in roles_by_col or col not in target_cols_by_row.get(row_index, set()):
+            continue
+        original_value = str(original_rows[row_index].get(col, "")) if row_index < len(original_rows) else ""
+        role = roles_by_col[col]
+        if to_value not in role["allowed"]:
+            unresolved.append(
+                {
+                    "row_index": row_index,
+                    "col": col,
+                    "from": original_value,
+                    "reason": "invalid_vision_value",
+                }
+            )
+            continue
+        corrections.append(
+            {
+                "row_index": row_index,
+                "col": col,
+                "from": original_value,
+                "to": to_value,
+                "method": "vision_llm",
+                "reason": CORRECTION_REASON,
+                "confidence": str(item.get("confidence", "medium")),
+            }
+        )
+        resolved.add((row_index, col))
 
-        if isinstance(raw_corrections, dict):
-            for col, change in raw_corrections.items():
-                if row_index not in candidate_index_set or col not in target_cols or col not in roles_by_col:
-                    continue
-                if not isinstance(change, dict):
-                    continue
-                before = str(change.get("from", original_row.get(col, "")))
-                original_value = str(original_row.get(col, ""))
-                after = _normalize_grade_value(change.get("to", ""))
-                role = roles_by_col[col]
-                if before != original_value or after not in role["allowed"]:
-                    unresolved.append(
-                        {
-                            "row_index": row_index,
-                            "col": col,
-                            "from": original_value,
-                            "reason": "invalid_vision_value",
-                        }
-                    )
-                    continue
-                corrections.append(
-                    {
-                        "row_index": row_index,
-                        "col": col,
-                        "from": original_value,
-                        "to": after,
-                        "method": "vision_llm",
-                        "reason": CORRECTION_REASON,
-                        "confidence": str(change.get("confidence", "medium")),
-                    }
-                )
-                resolved_cols.add(col)
+    for item in delta.get("unresolved", []) or []:
+        if not isinstance(item, dict):
+            continue
+        row_index = item.get("row_index")
+        col = str(item.get("col", ""))
+        if not isinstance(row_index, int) or (row_index, col) in resolved:
+            continue
+        if row_index not in candidate_index_set or col not in target_cols_by_row.get(row_index, set()):
+            continue
+        unresolved.append(
+            {
+                "row_index": row_index,
+                "col": col,
+                "from": str(original_rows[row_index].get(col, "")) if row_index < len(original_rows) else "",
+                "reason": str(item.get("reason", "not_readable")),
+            }
+        )
 
-        if isinstance(raw_unresolved, dict):
-            for col, change in raw_unresolved.items():
-                if col not in target_cols or col in resolved_cols:
-                    continue
-                unresolved.append(
-                    {
-                        "row_index": row_index,
-                        "col": col,
-                        "from": str(original_row.get(col, "")),
-                        "reason": str(change.get("reason", "not_readable")) if isinstance(change, dict) else "not_readable",
-                    }
-                )
-
-        for col in sorted(target_cols - resolved_cols):
-            if not any(item["row_index"] == row_index and item["col"] == col for item in unresolved):
-                unresolved.append(
-                    {
-                        "row_index": row_index,
-                        "col": col,
-                        "from": str(original_row.get(col, "")),
-                        "reason": "missing_vision_correction",
-                    }
-                )
+    for row_index, target_cols in target_cols_by_row.items():
+        for col in sorted(target_cols):
+            if (row_index, col) in resolved:
+                continue
+            if any(item["row_index"] == row_index and item["col"] == col for item in unresolved):
+                continue
+            unresolved.append(
+                {
+                    "row_index": row_index,
+                    "col": col,
+                    "from": str(original_rows[row_index].get(col, "")) if row_index < len(original_rows) else "",
+                    "reason": "missing_vision_correction",
+                }
+            )
     return corrections, unresolved
 
 
@@ -341,10 +362,26 @@ def _parse_with_retry(
 ) -> dict | None:
     for attempt in range(2):
         parsed = _call_vision(block, page_image, client, model, prompt)
-        if parsed is not None and _same_table_shape_allow_metadata(block.table_json, parsed):
+        if _is_valid_delta(parsed):
             return parsed
-        LOGGER.warning("Numeric cell refinement returned invalid JSON shape (attempt %s)", attempt + 1)
+        LOGGER.warning("Numeric cell refinement returned invalid delta format (attempt %s)", attempt + 1)
     return None
+
+
+def _is_valid_delta(parsed: dict | None) -> bool:
+    """Vision 응답이 corrections-only delta 형식인지 검증한다."""
+
+    if not isinstance(parsed, dict):
+        return False
+    corrections = parsed.get("corrections")
+    unresolved = parsed.get("unresolved")
+    if corrections is None and unresolved is None:
+        return False
+    if corrections is not None and not isinstance(corrections, list):
+        return False
+    if unresolved is not None and not isinstance(unresolved, list):
+        return False
+    return True
 
 
 def _refine_single_table(block: LayoutBlock, page_image: Image.Image, client: Any, model: str) -> LayoutBlock:
