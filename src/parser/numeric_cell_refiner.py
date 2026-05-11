@@ -1,4 +1,4 @@
-"""Vision LLM-based refinement for blank surgery grade cells."""
+"""Vision LLM-based refinement for surgery grade table cells."""
 
 from __future__ import annotations
 
@@ -27,20 +27,40 @@ NUMERIC_COL_PATTERNS = [
     r"^신[0-9]+-[0-9]+종$",
     r"^수술종수",
 ]
-ALLOWED_VALUES = {"1", "2", "3", ""}
+GRADE_ROLES = ("1-3종", "1-5종", "신1-5종")
+ALLOWED_VALUES_BY_ROLE = {
+    "1-3종": {"N", "1", "2", "3"},
+    "1-5종": {"N", "1", "2", "3", "4", "5"},
+    "신1-5종": {"N", "1", "2", "3", "4", "5"},
+}
+DEFAULT_NUMERIC_VISION_MODEL = "gpt-4.1"
+CORRECTION_REASON = "complete_surgery_grade_group"
 VISION_PROMPT = """당신은 보험 약관 표의 수술종수 컬럼 값을 판독하는 전문가입니다.
-첨부 이미지는 해당 표 영역의 크롭입니다.
+첨부 이미지는 같은 표의 전체 크롭과 수술종수 컬럼 영역 확대 크롭입니다.
 
-아래 JSON에서 blank("")로 기록된 수술종수 컬럼들이 실제 이미지에는
-어떤 값(1, 2, 3 또는 공란)이 적혀 있는지 확인하여 채워주세요.
+이 표에서 수술종수 3개 컬럼은 도메인 규칙상 다음 둘 중 하나여야 합니다.
+- 그림/공백 행: 3개 수술종수 컬럼이 모두 공란
+- 텍스트 행: 3개 수술종수 컬럼이 모두 N 또는 숫자로 채워짐
+
+아래 후보 행의 blank("") 또는 잘못 인식된 값이 실제 이미지에서 무엇인지 판독하세요.
+세로선처럼 보이는 아주 얇은 획도 숫자 "1"일 수 있습니다.
 
 규칙:
-- 허용 값: "1", "2", "3", "" (진짜 공란인 경우)
 - 수술종수 이외 컬럼은 절대 변경하지 마세요.
 - 표 구조(headers, row 수, key 이름)는 변경하지 마세요.
-- 수정한 셀에 대해서만 rows[i]["_corrections"][col] = {"from": "", "to": "새값"} 형태로
-  메타 정보를 추가하세요. ("_corrections" 키는 rows 내 임의 추가 허용)
+- 후보 행의 대상 셀마다 가능한 한 반드시 값을 판정하세요.
+- 허용 값:
+  - 1-3종 역할 컬럼: "N", "1", "2", "3"
+  - 1-5종 / 신1-5종 역할 컬럼: "N", "1", "2", "3", "4", "5"
+- 수정할 셀은 rows[i]["_corrections"][col] = {"from": "기존값", "to": "새값", "confidence": "high|medium|low"} 형태로 추가하세요.
+- 판독이 불가능한 셀은 rows[i]["_unresolved"][col] = {"from": "기존값", "reason": "not_readable"} 형태로 추가하세요.
 - JSON 형식만 반환하고 다른 설명은 출력하지 마세요.
+
+수술종수 컬럼 역할:
+__GRADE_COLUMN_ROLES__
+
+후보 row_index:
+__CANDIDATE_INDEXES__
 
 현재 table_json:
 __TABLE_JSON__
@@ -55,30 +75,88 @@ def _is_numeric_column(header: str) -> bool:
     return any(re.search(pattern, header) for pattern in NUMERIC_COL_PATTERNS)
 
 
-def _numeric_columns(headers: list[str]) -> list[str]:
-    return [header for header in headers if _is_numeric_column(header)]
+def _normalize_grade_value(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    return "N" if text == "N" else text
 
 
 def _has_context_text(row: dict) -> bool:
     return bool(str(row.get("수술명", "")).strip() or str(row.get("수술해설", "")).strip())
 
 
-def _candidate_row_indexes(table_json: dict, numeric_cols: list[str]) -> list[int]:
+def _is_figure_row(row: dict) -> bool:
+    joined = " ".join(str(row.get(key, "")) for key in ("수술명", "수술해설"))
+    return "[그림]" in joined
+
+
+def _grade_column_roles(headers: list[str]) -> list[dict]:
+    """Return the three surgery grade columns with their semantic roles."""
+
+    indexed_headers = {header: index for index, header in enumerate(headers)}
+    if all(role in indexed_headers for role in GRADE_ROLES):
+        return [
+            {"col": role, "role": role, "allowed": ALLOWED_VALUES_BY_ROLE[role]}
+            for role in GRADE_ROLES
+        ]
+
+    surgery_cols = [header for header in headers if re.search(r"^수술종수", header)]
+    if len(surgery_cols) >= 3:
+        return [
+            {"col": surgery_cols[index], "role": role, "allowed": ALLOWED_VALUES_BY_ROLE[role]}
+            for index, role in enumerate(GRADE_ROLES)
+        ]
+
+    numeric_cols = [header for header in headers if _is_numeric_column(header)]
+    role_map = []
+    for header in numeric_cols:
+        if header == "1-3종" or re.search(r"^1-[0-9]+종$", header):
+            role = "1-3종"
+        elif header == "신1-5종" or re.search(r"^신[0-9]+-[0-9]+종$", header):
+            role = "신1-5종"
+        else:
+            role = "1-5종"
+        role_map.append({"col": header, "role": role, "allowed": ALLOWED_VALUES_BY_ROLE[role]})
+    return role_map[:3]
+
+
+def _is_valid_for_role(value: Any, role: dict) -> bool:
+    return _normalize_grade_value(value) in role["allowed"]
+
+
+def _needs_refinement(row: dict, grade_roles: list[dict]) -> bool:
+    if not _has_context_text(row) or _is_figure_row(row):
+        return False
+
+    values = [_normalize_grade_value(row.get(role["col"], "")) for role in grade_roles]
+    if all(value == "" for value in values):
+        return True
+    if any(value == "" for value in values):
+        return True
+    return any(not _is_valid_for_role(row.get(role["col"], ""), role) for role in grade_roles)
+
+
+def _candidate_row_indexes(table_json: dict, grade_roles: list[dict]) -> list[int]:
     indexes: list[int] = []
     rows = table_json.get("rows", [])
-    if not isinstance(rows, list):
+    if not isinstance(rows, list) or len(grade_roles) != 3:
         return indexes
     for index, row in enumerate(rows):
-        if not isinstance(row, dict):
-            continue
-        if not _has_context_text(row):
-            continue
-        if all(str(row.get(col, "")).strip() == "" for col in numeric_cols):
+        if isinstance(row, dict) and _needs_refinement(row, grade_roles):
             indexes.append(index)
     return indexes
 
 
-def _same_table_shape_allow_corrections(original: dict, candidate: dict) -> bool:
+def _target_cells_for_row(row: dict, grade_roles: list[dict]) -> list[str]:
+    targets: list[str] = []
+    for role in grade_roles:
+        col = role["col"]
+        value = _normalize_grade_value(row.get(col, ""))
+        if value == "" or value not in role["allowed"]:
+            targets.append(col)
+    return targets
+
+
+def _same_table_shape_allow_metadata(original: dict, candidate: dict) -> bool:
     original_headers = [str(header) for header in original.get("headers", [])]
     candidate_headers = [str(header) for header in candidate.get("headers", [])]
     if candidate_headers != original_headers:
@@ -92,49 +170,154 @@ def _same_table_shape_allow_corrections(original: dict, candidate: dict) -> bool
         return False
 
     expected_keys = set(original_headers)
+    metadata_keys = {"_corrections", "_unresolved"}
     for row in candidate_rows:
         if not isinstance(row, dict):
             return False
-        row_keys = set(row.keys())
-        if "_corrections" in row_keys:
-            row_keys.remove("_corrections")
+        row_keys = set(row.keys()) - metadata_keys
         if row_keys != expected_keys:
             return False
     return True
 
 
-def _extract_valid_corrections(
+def _crop_grade_columns_image(page_image: Image.Image, bbox: list[int]) -> Image.Image:
+    table_crop = _crop_table_image(page_image, bbox)
+    width, height = table_crop.size
+    if width <= 1 or height <= 1:
+        return table_crop
+    left = max(0, int(width * 0.58))
+    grade_crop = table_crop.crop((left, 0, width, height))
+    return grade_crop.resize((grade_crop.width * 2, grade_crop.height * 2))
+
+
+def _build_prompt(table_json: dict, grade_roles: list[dict], candidate_indexes: list[int]) -> str:
+    role_payload = [
+        {
+            "col": role["col"],
+            "role": role["role"],
+            "allowed_values": sorted(role["allowed"]),
+        }
+        for role in grade_roles
+    ]
+    return (
+        VISION_PROMPT.replace("__GRADE_COLUMN_ROLES__", json.dumps(role_payload, ensure_ascii=False, indent=2))
+        .replace("__CANDIDATE_INDEXES__", json.dumps(candidate_indexes, ensure_ascii=False))
+        .replace("__TABLE_JSON__", json.dumps(table_json, ensure_ascii=False, indent=2))
+    )
+
+
+def _call_vision(
+    block: LayoutBlock,
+    page_image: Image.Image,
+    client: Any,
+    model: str,
+    prompt: str,
+) -> dict | None:
+    full_image_b64 = _encode_image(_crop_table_image(page_image, block.bbox))
+    grade_image_b64 = _encode_image(_crop_grade_columns_image(page_image, block.bbox))
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            max_tokens=3072,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{full_image_b64}"}},
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{grade_image_b64}"}},
+                        {"type": "text", "text": prompt},
+                    ],
+                }
+            ],
+        )
+    except Exception as exc:
+        if _is_auth_error(exc):
+            raise NumericCellRefinerAuthError("OpenAI Vision API authentication failed") from exc
+        LOGGER.warning("Numeric cell refinement failed: %s", exc)
+        return None
+    return _extract_json_object(_response_content(response))
+
+
+def _extract_valid_corrections_and_unresolved(
     original: dict,
     candidate: dict,
-    numeric_cols: list[str],
+    grade_roles: list[dict],
     candidate_indexes: list[int],
-) -> list[dict]:
+) -> tuple[list[dict], list[dict]]:
     corrections: list[dict] = []
+    unresolved: list[dict] = []
     original_rows = original.get("rows", [])
     candidate_rows = candidate.get("rows", [])
     candidate_index_set = set(candidate_indexes)
-    numeric_col_set = set(numeric_cols)
+    roles_by_col = {role["col"]: role for role in grade_roles}
 
-    for row_index, row in enumerate(candidate_rows):
-        if row_index not in candidate_index_set or not isinstance(row, dict):
-            continue
-        raw_corrections = row.get("_corrections")
-        if not isinstance(raw_corrections, dict):
+    for row_index in candidate_indexes:
+        if row_index >= len(original_rows):
             continue
         original_row = original_rows[row_index]
-        for col, change in raw_corrections.items():
-            if col not in numeric_col_set or not isinstance(change, dict):
-                continue
-            before = str(change.get("from", ""))
-            after = str(change.get("to", ""))
-            if before != "" or after not in ALLOWED_VALUES:
-                continue
-            if str(original_row.get(col, "")).strip() != "":
-                continue
-            if after == "":
-                continue
-            corrections.append({"row_index": row_index, "col": col, "from": "", "to": after})
-    return corrections
+        candidate_row = candidate_rows[row_index] if row_index < len(candidate_rows) else {}
+        raw_corrections = candidate_row.get("_corrections") if isinstance(candidate_row, dict) else None
+        raw_unresolved = candidate_row.get("_unresolved") if isinstance(candidate_row, dict) else None
+        target_cols = set(_target_cells_for_row(original_row, grade_roles))
+        resolved_cols: set[str] = set()
+
+        if isinstance(raw_corrections, dict):
+            for col, change in raw_corrections.items():
+                if row_index not in candidate_index_set or col not in target_cols or col not in roles_by_col:
+                    continue
+                if not isinstance(change, dict):
+                    continue
+                before = str(change.get("from", original_row.get(col, "")))
+                original_value = str(original_row.get(col, ""))
+                after = _normalize_grade_value(change.get("to", ""))
+                role = roles_by_col[col]
+                if before != original_value or after not in role["allowed"]:
+                    unresolved.append(
+                        {
+                            "row_index": row_index,
+                            "col": col,
+                            "from": original_value,
+                            "reason": "invalid_vision_value",
+                        }
+                    )
+                    continue
+                corrections.append(
+                    {
+                        "row_index": row_index,
+                        "col": col,
+                        "from": original_value,
+                        "to": after,
+                        "method": "vision_llm",
+                        "reason": CORRECTION_REASON,
+                        "confidence": str(change.get("confidence", "medium")),
+                    }
+                )
+                resolved_cols.add(col)
+
+        if isinstance(raw_unresolved, dict):
+            for col, change in raw_unresolved.items():
+                if col not in target_cols or col in resolved_cols:
+                    continue
+                unresolved.append(
+                    {
+                        "row_index": row_index,
+                        "col": col,
+                        "from": str(original_row.get(col, "")),
+                        "reason": str(change.get("reason", "not_readable")) if isinstance(change, dict) else "not_readable",
+                    }
+                )
+
+        for col in sorted(target_cols - resolved_cols):
+            if not any(item["row_index"] == row_index and item["col"] == col for item in unresolved):
+                unresolved.append(
+                    {
+                        "row_index": row_index,
+                        "col": col,
+                        "from": str(original_row.get(col, "")),
+                        "reason": "missing_vision_correction",
+                    }
+                )
+    return corrections, unresolved
 
 
 def _apply_corrections(table_json: dict, corrections: list[dict]) -> dict:
@@ -149,59 +332,56 @@ def _apply_corrections(table_json: dict, corrections: list[dict]) -> dict:
     return updated
 
 
+def _parse_with_retry(
+    block: LayoutBlock,
+    page_image: Image.Image,
+    client: Any,
+    model: str,
+    prompt: str,
+) -> dict | None:
+    for attempt in range(2):
+        parsed = _call_vision(block, page_image, client, model, prompt)
+        if parsed is not None and _same_table_shape_allow_metadata(block.table_json, parsed):
+            return parsed
+        LOGGER.warning("Numeric cell refinement returned invalid JSON shape (attempt %s)", attempt + 1)
+    return None
+
+
 def _refine_single_table(block: LayoutBlock, page_image: Image.Image, client: Any, model: str) -> LayoutBlock:
     if not block.table_json:
         return block
 
     headers = [str(header) for header in block.table_json.get("headers", [])]
-    numeric_cols = _numeric_columns(headers)
-    if not numeric_cols:
+    grade_roles = _grade_column_roles(headers)
+    if len(grade_roles) != 3:
         return block
 
-    candidate_indexes = _candidate_row_indexes(block.table_json, numeric_cols)
+    candidate_indexes = _candidate_row_indexes(block.table_json, grade_roles)
     if not candidate_indexes:
         return block
 
-    crop = _crop_table_image(page_image, block.bbox)
-    image_b64 = _encode_image(crop)
-    prompt = VISION_PROMPT.replace(
-        "__TABLE_JSON__",
-        json.dumps(block.table_json, ensure_ascii=False, indent=2),
+    prompt = _build_prompt(block.table_json, grade_roles, candidate_indexes)
+    parsed = _parse_with_retry(block, page_image, client, model, prompt)
+    if parsed is None:
+        return block
+
+    corrections, unresolved = _extract_valid_corrections_and_unresolved(
+        block.table_json,
+        parsed,
+        grade_roles,
+        candidate_indexes,
     )
-
-    try:
-        response = client.chat.completions.create(
-            model=model,
-            max_tokens=2048,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                        {"type": "text", "text": prompt},
-                    ],
-                }
-            ],
-        )
-    except Exception as exc:
-        if _is_auth_error(exc):
-            raise NumericCellRefinerAuthError("OpenAI Vision API authentication failed") from exc
-        LOGGER.warning("Numeric cell refinement failed: %s", exc)
-        return block
-
-    parsed = _extract_json_object(_response_content(response))
-    if parsed is None or not _same_table_shape_allow_corrections(block.table_json, parsed):
-        LOGGER.warning("Numeric cell refinement returned invalid JSON shape")
-        return block
-
-    corrections = _extract_valid_corrections(block.table_json, parsed, numeric_cols, candidate_indexes)
-    if not corrections:
+    if not corrections and not unresolved:
         return block
 
     updated_table = _apply_corrections(block.table_json, corrections)
     raw = dict(block.raw or {})
-    raw["numeric_corrections"] = corrections
-    raw["numeric_refined"] = True
+    raw["numeric_candidate_rows"] = candidate_indexes
+    if corrections:
+        raw["numeric_corrections"] = corrections
+        raw["numeric_refined"] = True
+    if unresolved:
+        raw["numeric_unresolved_cells"] = unresolved
     return replace(
         block,
         table_json=updated_table,
@@ -215,9 +395,9 @@ def refine_numeric_cells(
     blocks: list[LayoutBlock],
     page_image: Image.Image,
     client: Any,
-    model: str = "gpt-4o-mini",
+    model: str = DEFAULT_NUMERIC_VISION_MODEL,
 ) -> list[LayoutBlock]:
-    """수술종수 컬럼이 전부 blank인 행을 Vision LLM으로 재판독한다."""
+    """수술종수 3개 컬럼 그룹의 누락/invalid 셀을 Vision LLM으로 재판독한다."""
 
     refined: list[LayoutBlock] = []
     for block in blocks:

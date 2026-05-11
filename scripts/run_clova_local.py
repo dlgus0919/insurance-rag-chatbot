@@ -271,6 +271,7 @@ def run_clova_local(
         vision_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         clean_table_blocks = clean_table_blocks_func
         refine_numeric_cells = refine_numeric_cells_func
+        numeric_vision_model = os.getenv("OCR_NUMERIC_VISION_MODEL", "gpt-4.1")
 
     for page_no in pages:
         original_path = doc_dir / f"p{page_no:03d}_original.png"
@@ -302,7 +303,7 @@ def run_clova_local(
                 if clean_table_blocks is not None:
                     blocks = clean_table_blocks(blocks, image, vision_client)
                 if refine_numeric_cells is not None:
-                    blocks = refine_numeric_cells(blocks, image, vision_client)
+                    blocks = refine_numeric_cells(blocks, image, vision_client, model=numeric_vision_model)
             block_payload = _serialize_blocks(blocks)
             elapsed = time.perf_counter() - started
             result = _write_page_json(

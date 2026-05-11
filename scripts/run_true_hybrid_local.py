@@ -102,6 +102,7 @@ def run_true_hybrid_local(
         vision_client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         clean_table_blocks = clean_table_blocks_func
         refine_numeric_cells = refine_numeric_cells_func
+        numeric_vision_model = os.getenv("OCR_NUMERIC_VISION_MODEL", "gpt-4.1")
 
     for page_no in pages:
         page_name = f"p{page_no:03d}"
@@ -138,7 +139,7 @@ def run_true_hybrid_local(
                 if clean_table_blocks is not None:
                     blocks = clean_table_blocks(blocks, image, vision_client)
                 if refine_numeric_cells is not None:
-                    blocks = refine_numeric_cells(blocks, image, vision_client)
+                    blocks = refine_numeric_cells(blocks, image, vision_client, model=numeric_vision_model)
             elapsed = time.perf_counter() - started
             figures = _extract_figures(prep, doc_dir)
             block_payload = _serialize_blocks(blocks)
