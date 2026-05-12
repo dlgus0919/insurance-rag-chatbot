@@ -11,6 +11,8 @@ import numpy as np
 
 from src.retrieval import Hit
 
+DEFAULT_UPSERT_BATCH_SIZE = 1000
+
 
 def _encode_metadata(metadata: dict) -> dict:
     encoded = dict(metadata)
@@ -78,11 +80,20 @@ def _matches_doc_filter(metadata: dict, doc_filter: list[str] | None) -> bool:
 class VectorStore:
     """ChromaDB PersistentClient를 사용하는 벡터 저장소."""
 
-    def __init__(self, persist_dir: Path, collection_name: str = "insurance", reset: bool = False):
+    def __init__(
+        self,
+        persist_dir: Path,
+        collection_name: str = "insurance",
+        reset: bool = False,
+        upsert_batch_size: int = DEFAULT_UPSERT_BATCH_SIZE,
+    ):
         try:
             import chromadb
         except ImportError as exc:  # pragma: no cover - 환경 의존
             raise RuntimeError("chromadb가 설치되어 있지 않습니다.") from exc
+
+        if upsert_batch_size <= 0:
+            raise ValueError("upsert_batch_size must be positive")
 
         persist_dir.mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(path=str(persist_dir))
@@ -96,6 +107,7 @@ class VectorStore:
             metadata={"hnsw:space": "cosine"},
         )
         self._all_entries_cache: dict[str, Any] | None = None
+        self.upsert_batch_size = upsert_batch_size
 
     def upsert(
         self,
@@ -106,12 +118,25 @@ class VectorStore:
     ) -> None:
         """문서, 메타데이터, 임베딩을 Chroma에 저장한다."""
 
-        self.collection.upsert(
-            ids=ids,
-            embeddings=embeddings.tolist(),
-            metadatas=[_encode_metadata(metadata) for metadata in metadatas],
-            documents=documents,
-        )
+        if not ids:
+            self._all_entries_cache = None
+            return
+        if len(ids) != len(metadatas) or len(ids) != len(documents) or len(ids) != len(embeddings):
+            raise ValueError("ids, embeddings, metadatas, and documents must have the same length")
+
+        batch_size = int(getattr(self, "upsert_batch_size", DEFAULT_UPSERT_BATCH_SIZE))
+        if batch_size <= 0:
+            raise ValueError("upsert_batch_size must be positive")
+
+        encoded_metadatas = [_encode_metadata(metadata) for metadata in metadatas]
+        for start in range(0, len(ids), batch_size):
+            end = min(start + batch_size, len(ids))
+            self.collection.upsert(
+                ids=ids[start:end],
+                embeddings=embeddings[start:end].tolist(),
+                metadatas=encoded_metadatas[start:end],
+                documents=documents[start:end],
+            )
         self._all_entries_cache = None
 
     def query(self, query_embedding: np.ndarray, top_k: int, doc_filter: list[str] | None = None) -> list[Hit]:

@@ -3,6 +3,14 @@ import numpy as np
 from src.retrieval.vector_store import VectorStore
 
 
+class _FakeCollection:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    def upsert(self, **kwargs):  # noqa: ANN003
+        self.calls.append(kwargs)
+
+
 def test_vector_store_upsert_and_query_roundtrip(tmp_path) -> None:
     store = VectorStore(tmp_path / "chroma")
     store.upsert(
@@ -20,6 +28,34 @@ def test_vector_store_upsert_and_query_roundtrip(tmp_path) -> None:
     assert hits[0].id == "ch_000001"
     assert hits[0].metadata["codes"] == ["AA157"]
     assert hits[0].document == "재진 진찰료"
+
+
+def test_vector_store_upsert_splits_batches() -> None:
+    store = VectorStore.__new__(VectorStore)
+    store.collection = _FakeCollection()
+    store._all_entries_cache = {"stale": True}
+    store.upsert_batch_size = 2
+
+    store.upsert(
+        ids=["a", "b", "c", "d", "e"],
+        embeddings=np.asarray(
+            [[1.0, 0.0], [0.9, 0.1], [0.8, 0.2], [0.7, 0.3], [0.6, 0.4]],
+            dtype=np.float32,
+        ),
+        metadatas=[
+            {"codes": ["A"]},
+            {"codes": ["B"]},
+            {"codes": ["C"]},
+            {"codes": ["D"]},
+            {"codes": ["E"]},
+        ],
+        documents=["doc-a", "doc-b", "doc-c", "doc-d", "doc-e"],
+    )
+
+    assert [call["ids"] for call in store.collection.calls] == [["a", "b"], ["c", "d"], ["e"]]
+    assert [len(call["embeddings"]) for call in store.collection.calls] == [2, 2, 1]
+    assert store.collection.calls[0]["metadatas"][0]["codes"] == "A"
+    assert store._all_entries_cache is None
 
 
 def test_query_applies_doc_filter(tmp_path) -> None:
