@@ -24,6 +24,7 @@ from src.retrieval.vector_store import VectorStore
 
 SMOKE_QA_PATH = ROOT / "eval" / "smoke_qa.jsonl"
 SMOKE_QA_V2_PATH = ROOT / "eval" / "smoke_qa_v2.jsonl"
+OCR_QA_PATH = ROOT / "eval" / "ocr_qa.jsonl"
 
 
 def load_questions(path: Path = SMOKE_QA_PATH) -> list[dict]:
@@ -85,6 +86,65 @@ def answer_matches_verdict(answer: str, expected_verdict: str) -> bool:
     return True
 
 
+def answer_mentions_expected_grades(answer: str, expected_grades: dict | None) -> tuple[int, int]:
+    """
+    답변에서 수술종수 값이 올바르게 언급됐는지 확인한다.
+
+    Returns: (correct_count, total_count)
+    """
+
+    if not expected_grades:
+        return 0, 0
+
+    correct = 0
+    compact_answer = re.sub(r"\s+", "", answer)
+    for col, value in expected_grades.items():
+        col_text = str(col)
+        value_text = str(value)
+        col_pattern = re.escape(col_text)
+        value_pattern = re.escape(value_text)
+        direct_pattern = rf"{col_pattern}\s*(?:[:=]|은|는|이|가)?\s*{value_pattern}\s*종?"
+        if re.search(direct_pattern, answer):
+            correct += 1
+            continue
+
+        compact_col = re.sub(r"\s+", "", col_text)
+        compact_value = re.sub(r"\s+", "", value_text)
+        col_index = compact_answer.find(compact_col)
+        if col_index >= 0:
+            after_col = compact_answer[col_index + len(compact_col) : col_index + len(compact_col) + 16]
+            if re.search(rf"^(?:[:=]|은|는|이|가)?{re.escape(compact_value)}종?", after_col):
+                correct += 1
+                continue
+
+        if len(expected_grades) == 1 and re.search(rf"(?<!\d){value_pattern}\s*종?(?!\d)", answer):
+            correct += 1
+            continue
+
+        if value_text in answer and col_text in answer:
+            correct += 1
+
+    return correct, len(expected_grades)
+
+
+def answer_mentions_expected_rate(answer: str, expected_rate: str | None) -> bool:
+    """답변에 기대 지급률(숫자+%)이 포함됐는지 확인한다."""
+
+    if not expected_rate:
+        return False
+    value = str(expected_rate).rstrip("%")
+    return re.search(rf"(?<!\d){re.escape(value)}\s*%?(?!\d)", answer) is not None
+
+
+def answer_mentions_expected_keywords(answer: str, expected_keywords: list[str] | None) -> tuple[int, int]:
+    """expected_keywords 중 답변에 포함된 비율을 반환한다."""
+
+    if not expected_keywords:
+        return 1, 1
+    matched = sum(1 for keyword in expected_keywords if keyword in answer)
+    return matched, len(expected_keywords)
+
+
 def filter_chunks_by_doc(chunks, doc_sources: list[str] | None):
     """doc_sources가 있으면 해당 문서 출처의 청크/검색 결과만 남긴다."""
 
@@ -105,12 +165,21 @@ def parse_args(argv: list[str] | None = None):
 
     parser = ArgumentParser(description="Smoke QA 평가 스크립트")
     parser.add_argument("--v2", action="store_true", help="약관 정형 모드 평가 문항을 사용합니다.")
-    return parser.parse_args(argv)
+    parser.add_argument("--ocr", action="store_true", help="OCR 문서 평가 문항을 사용합니다.")
+    args = parser.parse_args(argv)
+    if args.v2 and args.ocr:
+        parser.error("--v2와 --ocr는 동시에 사용할 수 없습니다.")
+    return args
 
 
 def main() -> None:
     args = parse_args()
-    question_path = SMOKE_QA_V2_PATH if args.v2 else SMOKE_QA_PATH
+    if args.ocr:
+        question_path = OCR_QA_PATH
+    elif args.v2:
+        question_path = SMOKE_QA_V2_PATH
+    else:
+        question_path = SMOKE_QA_PATH
     questions = load_questions(question_path)
     if not questions:
         raise SystemExit("평가 문항이 없습니다.")
@@ -118,7 +187,10 @@ def main() -> None:
         raise SystemExit("BM25 인덱스가 없습니다. `python scripts/ingest.py --stage index`를 먼저 실행하세요.")
 
     llm = OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL)
-    if not llm.health():
+    llm_available = llm.health()
+    if not llm_available and args.ocr:
+        print("Ollama 서버에 연결할 수 없어 --ocr LLM 답변 평가는 skip하고 retrieval-only로 진행합니다.")
+    elif not llm_available:
         raise SystemExit("Ollama 서버에 연결할 수 없습니다. Ollama 데스크톱 앱 또는 `ollama serve`를 실행하세요.")
 
     embedder = Embedder(config.EMBEDDING_MODEL)
@@ -141,7 +213,14 @@ def main() -> None:
     verdict_hits = 0
     doc_hits = 0
     evaluated = 0
+    answer_evaluated = 0
     skipped = 0
+    grade_correct_total = 0
+    grade_total = 0
+    rate_hits = 0
+    rate_evaluated = 0
+    keyword_correct = 0
+    keyword_total = 0
 
     for index, item in enumerate(questions, start=1):
         question = item["question"]
@@ -154,24 +233,47 @@ def main() -> None:
             print(f"[{index:02d}] {item['type']} skipped({missing_label} 미인덱싱)")
             continue
 
-        fused_hits, _ = pipeline.retrieve_hits(question, top_k=8)
+        fused_hits, _ = pipeline.retrieve_hits(question, top_k=8, doc_filter=doc_sources)
         fused_hits = filter_chunks_by_doc(fused_hits, doc_sources)
         chunks = [_hit_to_chunk(hit) for hit in fused_hits]
 
         retrieved = any(hit_matches_expected_page(hit, expected_pages) for hit in fused_hits)
         recall_hits += int(retrieved)
 
-        prompt = build_user_prompt(question, chunks)
-        answer = llm.generate(prompt, system=SYSTEM_PROMPT, temperature=0.2)
-        answer = append_retrieved_source_citations(answer, chunks)
         item_type = item.get("type")
-        page_ok = answer_mentions_expected_page(answer, expected_pages)
-        code_ok = answer_mentions_expected_codes(answer, item.get("expected_codes", []))
-        verdict_ok = answer_matches_verdict(answer, item.get("expected_verdict", ""))
-        doc_ok = all(hit.metadata.get("doc_short") in set(doc_sources or []) for hit in fused_hits) if doc_sources else True
-        page_hits += int(page_ok)
-        verdict_hits += int(verdict_ok)
-        doc_hits += int(doc_ok)
+        page_ok = code_ok = verdict_ok = doc_ok = False
+        grade_result = None
+        rate_ok = None
+        keyword_result = None
+        if llm_available:
+            prompt = build_user_prompt(question, chunks)
+            num_ctx = None
+            if args.ocr:
+                prompt += "\n\n평가용 출력 지시: 정답에 필요한 수치와 핵심 근거만 2문장 이내로 답하세요."
+                num_ctx = min(config.OLLAMA_NUM_CTX, 4096)
+            answer = llm.generate(prompt, system=SYSTEM_PROMPT, temperature=0.2, num_ctx=num_ctx)
+            answer = append_retrieved_source_citations(answer, chunks)
+            page_ok = answer_mentions_expected_page(answer, expected_pages)
+            code_ok = answer_mentions_expected_codes(answer, item.get("expected_codes", []))
+            verdict_ok = answer_matches_verdict(answer, item.get("expected_verdict", ""))
+            doc_ok = all(hit.metadata.get("doc_short") in set(doc_sources or []) for hit in fused_hits) if doc_sources else True
+            page_hits += int(page_ok)
+            verdict_hits += int(verdict_ok)
+            doc_hits += int(doc_ok)
+            answer_evaluated += 1
+
+            if args.ocr and item_type == "surgery_grade":
+                grade_result = answer_mentions_expected_grades(answer, item.get("expected_grades"))
+                grade_correct_total += grade_result[0]
+                grade_total += grade_result[1]
+            if args.ocr and item_type == "disability_rate":
+                rate_ok = answer_mentions_expected_rate(answer, item.get("expected_rate"))
+                rate_hits += int(rate_ok)
+                rate_evaluated += 1
+            if args.ocr and item_type in {"surgery_description", "disability_criteria", "consultation"}:
+                keyword_result = answer_mentions_expected_keywords(answer, item.get("expected_keywords"))
+                keyword_correct += keyword_result[0]
+                keyword_total += keyword_result[1]
 
         top_pages = [
             f"{hit.metadata.get('page_start')}-{hit.metadata.get('page_end')}"
@@ -179,20 +281,47 @@ def main() -> None:
             else str(hit.metadata.get("page_start"))
             for hit in fused_hits[:3]
         ]
-        print(
-            f"[{index:02d}] {item['type']} recall={'OK' if retrieved else 'MISS'} "
-            f"page={'OK' if page_ok else 'MISS'} "
-            f"code={'OK' if code_ok else 'MISS'} top_pages={top_pages}"
-            + (f" verdict={'OK' if verdict_ok else 'MISS'} doc={'OK' if doc_ok else 'MISS'}" if item_type == "coverage_judgment" else "")
-        )
+        if llm_available:
+            metric_parts = []
+            if grade_result:
+                metric_parts.append(f"grade={grade_result[0]}/{grade_result[1]}")
+            if rate_ok is not None:
+                metric_parts.append(f"rate={'OK' if rate_ok else 'MISS'}")
+            if keyword_result:
+                metric_parts.append(f"keywords={keyword_result[0]}/{keyword_result[1]}")
+            print(
+                f"[{index:02d}] {item['type']} recall={'OK' if retrieved else 'MISS'} "
+                f"page={'OK' if page_ok else 'MISS'} "
+                f"code={'OK' if code_ok else 'MISS'} top_pages={top_pages}"
+                + (f" verdict={'OK' if verdict_ok else 'MISS'} doc={'OK' if doc_ok else 'MISS'}" if item_type == "coverage_judgment" else "")
+                + (f" {' '.join(metric_parts)}" if metric_parts else "")
+            )
+        else:
+            print(f"[{index:02d}] {item['type']} recall={'OK' if retrieved else 'MISS'} top_pages={top_pages} llm=SKIP")
         evaluated += 1
 
     if evaluated == 0:
         raise SystemExit("평가 가능한 문항이 없습니다.")
     recall = recall_hits / evaluated
-    page_accuracy = page_hits / evaluated
+    page_accuracy = page_hits / answer_evaluated if answer_evaluated else None
     print(f"retrieval recall@8: {recall:.3f}")
-    print(f"출처 페이지 정확도: {page_accuracy:.3f}")
+    if page_accuracy is None:
+        print("출처 페이지 정확도: N/A (LLM skip)")
+    else:
+        print(f"출처 페이지 정확도: {page_accuracy:.3f}")
+    if args.ocr:
+        if grade_total:
+            print(f"수술종수 정확도 (grade_accuracy): {grade_correct_total / grade_total:.3f}")
+        else:
+            print("수술종수 정확도 (grade_accuracy): N/A")
+        if rate_evaluated:
+            print(f"장해 지급률 정확도 (rate_accuracy): {rate_hits / rate_evaluated:.3f}")
+        else:
+            print("장해 지급률 정확도 (rate_accuracy): N/A")
+        if keyword_total:
+            print(f"키워드 포함율 (keyword_coverage): {keyword_correct / keyword_total:.3f}")
+        else:
+            print("키워드 포함율 (keyword_coverage): N/A")
     if args.v2:
         print(f"판정 키워드 일치율: {verdict_hits / evaluated:.3f}")
         print(f"문서 출처 일치율: {doc_hits / evaluated:.3f}")
@@ -201,6 +330,16 @@ def main() -> None:
 
     if args.v2:
         return
+    if args.ocr:
+        if recall < 0.7:
+            raise SystemExit(1)
+        if grade_total > 0 and grade_correct_total / grade_total < 0.6:
+            raise SystemExit(1)
+        if rate_evaluated > 0 and rate_hits / rate_evaluated < 0.7:
+            raise SystemExit(1)
+        return
+    if page_accuracy is None:
+        raise SystemExit(1)
     if recall < 0.7 or page_accuracy < 0.6:
         raise SystemExit(1)
 

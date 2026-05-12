@@ -1,0 +1,40 @@
+{"id":"ocr_001","type":"surgery_grade","question":"체외금속고정술(창외고정술)의 1-3종·1-5종·신1-5종 수술종수는?","expected_pages":[64],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1","1-5종":"2","신1-5종":"2"}}
+{"id":"ocr_002","type":"surgery_grade","question":"수족골 적출술의 1-3종·1-5종·신1-5종 수술종수는?","expected_pages":[64],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1","1-5종":"2","신1-5종":"2"}}
+{"id":"ocr_003","type":"surgery_grade","question":"주상골 적출술(골편적출술)의 수술종수는?","expected_pages":[64],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1","1-5종":"2","신1-5종":"2"}}
+{"id":"ocr_004","type":"surgery_grade","question":"제허니아 근본수술의 1-3종·1-5종·신1-5종 수술종수는?","expected_pages":[107],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1","1-5종":"1","신1-5종":"1"}}
+{"id":"ocr_005","type":"surgery_grade","question":"제대허니아수술의 수술종수는?","expected_pages":[107],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1","1-5종":"1","신1-5종":"1"}}
+{"id":"ocr_006","type":"surgery_grade","question":"결장경하 종양수술의 수술종수는?","expected_pages":[167],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1","1-5종":"2","신1-5종":"1"}}
+{"id":"ocr_007","type":"surgery_grade","question":"결장경하 폴립절제술의 수술종수는?","expected_pages":[167],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1","1-5종":"2","신1-5종":"1"}}
+{"id":"ocr_008","type":"surgery_grade","question":"결장경하 점막절제술의 수술종수는?","expected_pages":[167],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1","1-5종":"2","신1-5종":"1"}}
+{"id":"ocr_009","type":"surgery_grade","question":"충수절제술(맹장 수술)의 1-3종·1-5종·신1-5종은?","expected_pages":[109],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1","1-5종":"2","신1-5종":"2"}}
+{"id":"ocr_010","type":"surgery_grade","question":"전신성 복막염 수술의 수술종수는?","expected_pages":[108],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"2","1-5종":"3","신1-5종":"2"}}
+{"id":"ocr_011","type":"surgery_grade","question":"사지골 사지관절 가관절수술의 수술종수는?","expected_pages":[64],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1","1-5종":"2","신1-5종":"2"}}
+{"id":"ocr_012","type":"surgery_grade","question":"직시하심장내수술의 수술종류 분류(종)는?","expected_pages":[7],"doc_sources":["실무가이드"],"expected_grades":{"수술종류 분류(종)":"3"}}
+{"id":"ocr_013","type":"surgery_description","question":"체외금속고정술은 어떤 방법의 수술인가?","expected_pages":[64],"doc_sources":["실무가이드"],"expected_keywords":["피부 절개","금속물","고정"]}
+{"id":"ocr_014","type":"surgery_description","question":"주상골 적출술은 어떤 수술인가?","expected_pages":[64],"doc_sources":["실무가이드"],"expected_keywords":["손목뼈","골절","골편"]}
+{"id":"ocr_015","type":"surgery_description","question":"제허니아 근본수술의 수술 방법을 설명하라.","expected_pages":[107],"doc_sources":["실무가이드"],"expected_keywords":["복벽","근막","복막"]}
+{"id":"ocr_016","type":"surgery_description","question":"결장경하 종양수술은 어떤 도구를 사용하는가?","expected_pages":[167],"doc_sources":["실무가이드"],"expected_keywords":["결장경"]}
+{"id":"ocr_017","type":"disability_rate","question":"두 눈이 멀었을 때 장해 지급률은?","expected_pages":[236],"doc_sources":["실무가이드"],"expected_rate":"100"}
+{"id":"ocr_018","type":"disability_rate","question":"한 눈이 멀었을 때 장해 지급률은?","expected_pages":[236],"doc_sources":["실무가이드"],"expected_rate":"50"}
+{"id":"ocr_019","type":"disability_rate","question":"두 귀의 청력을 완전히 잃었을 때 장해 지급률은?","expected_pages":[242],"doc_sources":["실무가이드"],"expected_rate":"80"}
+{"id":"ocr_020","type":"disability_rate","question":"한 귀의 청력을 완전히 잃었을 때 장해 지급률은?","expected_pages":[242],"doc_sources":["실무가이드"],"expected_rate":"25"}
+{"id":"ocr_021","type":"disability_rate","question":"코의 기능을 완전히 잃었을 때 장해 지급률은?","expected_pages":[245],"doc_sources":["실무가이드"],"expected_rate":"15"}
+{"id":"ocr_022","type":"disability_rate","question":"척추에 심한 운동장해가 남은 경우 지급률은?","expected_pages":[251],"doc_sources":["실무가이드"],"expected_rate":"40"}
+{"id":"ocr_023","type":"disability_rate","question":"척추에 뚜렷한 운동장해가 남은 경우 지급률은?","expected_pages":[251],"doc_sources":["실무가이드"],"expected_rate":"30"}
+{"id":"ocr_024","type":"disability_rate","question":"두 팔의 손목 이상을 잃었을 때 장해 지급률은?","expected_pages":[255],"doc_sources":["실무가이드"],"expected_rate":"100"}
+{"id":"ocr_025","type":"disability_rate","question":"한 팔의 손목 이상을 잃었을 때 장해 지급률은?","expected_pages":[255],"doc_sources":["실무가이드"],"expected_rate":"60"}
+{"id":"ocr_026","type":"disability_rate","question":"한 팔의 3대관절 중 1관절의 기능을 완전히 잃었을 때 지급률은?","expected_pages":[255],"doc_sources":["실무가이드"],"expected_rate":"30"}
+{"id":"ocr_027","type":"disability_rate","question":"두 다리의 발목 이상을 잃었을 때 장해 지급률은?","expected_pages":[257],"doc_sources":["실무가이드"],"expected_rate":"100"}
+{"id":"ocr_028","type":"disability_rate","question":"한 손의 5개 손가락을 모두 잃었을 때 지급률은?","expected_pages":[264],"doc_sources":["실무가이드"],"expected_rate":"55"}
+{"id":"ocr_029","type":"disability_rate","question":"한 손의 첫째 손가락을 잃었을 때 지급률은?","expected_pages":[264],"doc_sources":["실무가이드"],"expected_rate":"15"}
+{"id":"ocr_030","type":"disability_rate","question":"씹어먹는 기능과 말하는 기능 모두에 심한 장해가 남은 경우 지급률은?","expected_pages":[247],"doc_sources":["실무가이드"],"expected_rate":"100"}
+{"id":"ocr_031","type":"disability_criteria","question":"장해에서 '영구적'이라 함은 어떤 상태를 의미하는가?","expected_pages":[232],"doc_sources":["실무가이드"],"expected_keywords":["치유","회복","영구"]}
+{"id":"ocr_032","type":"disability_criteria","question":"장해 판정 시 금속내고정물이 제거되지 않은 경우 언제 장해를 판정하는가?","expected_pages":[255],"doc_sources":["실무가이드"],"expected_keywords":["제거","의학적 소견"]}
+{"id":"ocr_033","type":"disability_criteria","question":"팔의 3대관절은 무엇인가?","expected_pages":[255],"doc_sources":["실무가이드"],"expected_keywords":["어깨관절","팔꿈치관절","손목관절"]}
+{"id":"ocr_034","type":"disability_criteria","question":"근력등급 G0(Zero)란 어떤 상태인가?","expected_pages":[262],"doc_sources":["실무가이드"],"expected_keywords":["운동기능","수축"]}
+{"id":"ocr_035","type":"consultation","question":"계약 전 알릴 의무를 위반한 경우 어떤 불이익이 있는가?","expected_pages":[65],"doc_sources":["상담사례집"],"expected_keywords":["고지의무","계약 전 알릴 의무","해지","지급 거절"]}
+{"id":"ocr_036","type":"consultation","question":"지정1인 한정운전 특약 가입 상태에서 지정 운전자가 다른 자동차를 운전 중 사고가 난 경우 보험금을 받을 수 있는가?","expected_pages":[189],"doc_sources":["상담사례집"],"expected_keywords":["지급하지 않","다른 자동차 운전담보"]}
+{"id":"ocr_037","type":"consultation","question":"2세대 실손의료보험에서 2016년 1월에 변경된 내용은 무엇인가?","expected_pages":[101],"doc_sources":["상담사례집"],"expected_keywords":["자동차보험","산재보험","40%","80%"]}
+{"id":"ocr_038","type":"consultation","question":"수술의 정의에서 '자택 등에서 치료가 곤란한 경우'의 의미는?","expected_pages":[273],"doc_sources":["상담사례집"],"expected_keywords":["병원","의원","의사"]}
+{"id":"ocr_039","type":"cross_doc","question":"제허니아 근본수술의 수술해설과 1-3종 수술종수를 함께 알려달라.","expected_pages":[107],"doc_sources":["실무가이드"],"expected_grades":{"1-3종":"1"},"expected_keywords":["복벽","근막","복막"]}
+{"id":"ocr_040","type":"cross_doc","question":"한 팔의 손목 이상을 잃었을 때 장해 지급률은 몇 %이고 판정기준은 무엇인가?","expected_pages":[255],"doc_sources":["실무가이드"],"expected_rate":"60","expected_keywords":["금속내고정물","제거","의학적 소견"]}
