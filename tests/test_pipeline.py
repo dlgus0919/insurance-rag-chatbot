@@ -5,7 +5,9 @@ import numpy as np
 from src.rag.pipeline import (
     DebugInfo,
     RagPipeline,
+    _build_structured_context,
     _boost_surgery_name_table_rows,
+    _extract_disability_region_from_query,
     _expand_retrieval_query,
     _extract_named_code_terms,
     _extract_query_codes,
@@ -14,6 +16,7 @@ from src.rag.pipeline import (
     _is_low_value_wide_range,
     _prefer_exact_text_hits,
 )
+from src.parser.chunker import Chunk
 from src.retrieval import Hit
 
 
@@ -103,6 +106,16 @@ class DummyReranker:
         return list(reversed(hits))[:top_k]
 
 
+def make_chunk(*, table_json="{}", doc_short="실무가이드", page_start=1, text="") -> Chunk:
+    metadata = {
+        "doc_short": doc_short,
+        "page_start": page_start,
+        "page_end": page_start,
+        "table_json": table_json,
+    }
+    return Chunk(id="test", text=text, metadata=metadata)
+
+
 def test_pipeline_builds_prompt_and_returns_sources() -> None:
     llm = DummyLLM()
     pipeline = RagPipeline(DummyEmbedder(), DummyVectorStore(), DummyBM25(), llm, top_k_final=8, reranker_enabled=False)
@@ -166,6 +179,84 @@ def test_extract_surgery_name_from_query_non_surgery() -> None:
     assert _extract_surgery_name_from_query("두 눈이 멀었을 때 장해 지급률은?") is None
     assert _extract_surgery_name_from_query("계약 전 알릴 의무를 위반한 경우 어떤 불이익이 있는가?") is None
     assert _extract_surgery_name_from_query("척추에 심한 운동장해가 남은 경우 지급률은?") is None
+
+
+def test_extract_disability_region_keyword_match() -> None:
+    assert _extract_disability_region_from_query("두 눈이 멀었을 때 장해 지급률은?") == "두 눈"
+    assert _extract_disability_region_from_query("한 팔의 손목 이상을 잃었을 때 지급률은?") == "한 팔"
+    assert _extract_disability_region_from_query("두 귀의 청력을 완전히 잃었을 때") == "두 귀"
+
+
+def test_extract_disability_region_non_disability() -> None:
+    assert _extract_disability_region_from_query("충수절제술의 수술종수는?") is None
+    assert _extract_disability_region_from_query("계약 전 알릴 의무 위반 시 불이익은?") is None
+
+
+def test_build_structured_context_surgery_grade() -> None:
+    chunk = make_chunk(
+        table_json=json.dumps(
+            {
+                "headers": ["수술명", "수술해설", "1-3종", "1-5종", "신1-5종"],
+                "rows": [
+                    {
+                        "수술명": "충수절제술(맹장 수술)",
+                        "수술해설": "...",
+                        "1-3종": "1",
+                        "1-5종": "2",
+                        "신1-5종": "2",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        doc_short="실무가이드",
+        page_start=109,
+    )
+
+    result = _build_structured_context("충수절제술의 1-5종 수술종수는?", [chunk])
+
+    assert result is not None
+    assert "충수절제술" in result
+    assert "1-5종: 2" in result
+
+
+def test_build_structured_context_disability_rate() -> None:
+    chunk = make_chunk(
+        table_json=json.dumps(
+            {
+                "headers": ["장해의 분류", "지급률"],
+                "rows": [{"장해의 분류": "1) 한 팔의 손목 이상을 잃었을 때", "지급률": "60"}],
+            },
+            ensure_ascii=False,
+        ),
+        doc_short="실무가이드",
+        page_start=255,
+    )
+
+    result = _build_structured_context("한 팔의 손목 이상을 잃었을 때 지급률은?", [chunk])
+
+    assert result is not None
+    assert "60%" in result
+
+
+def test_build_structured_context_no_match_returns_none() -> None:
+    chunk = make_chunk(table_json="{}", doc_short="실무가이드", page_start=1)
+
+    result = _build_structured_context("충수절제술의 수술종수는?", [chunk])
+
+    assert result is None
+
+
+def test_build_structured_context_non_structured_query_returns_none() -> None:
+    chunk = make_chunk(
+        table_json=json.dumps({"headers": ["수술명", "1-3종"], "rows": []}, ensure_ascii=False),
+        doc_short="실무가이드",
+        page_start=1,
+    )
+
+    result = _build_structured_context("계약 전 알릴 의무란?", [chunk])
+
+    assert result is None
 
 
 def test_boost_surgery_name_table_rows_matched_first() -> None:

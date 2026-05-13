@@ -24,6 +24,32 @@ _SURGERY_DESC_PATTERN = re.compile(
     r"([가-힣A-Za-z0-9 ·∙/()_-]{3,})\s*(?:은|이란)\s*(?:어떤|무엇)",
     re.UNICODE,
 )
+_DISABILITY_KEYWORDS = [
+    "두 눈",
+    "한 눈",
+    "두 귀",
+    "한 귀",
+    "코",
+    "척추",
+    "두 팔",
+    "한 팔",
+    "두 다리",
+    "한 다리",
+    "두 손",
+    "한 손",
+    "손가락",
+    "발가락",
+    "씹어먹는",
+    "말하는 기능",
+]
+_DISABILITY_QUERY_PATTERN = re.compile(
+    r"(.{2,15}?)\s*(?:을|를)\s*(?:완전히\s*)?(?:잃었을 때|상실)",
+    re.UNICODE,
+)
+_DISABILITY_DESC_PATTERN = re.compile(
+    r"(.{2,20}?)\s*(?:장해|운동장해|기능장해)\s*(?:가|이)\s*남은",
+    re.UNICODE,
+)
 
 
 @dataclass
@@ -145,6 +171,101 @@ def _extract_surgery_name_from_query(question: str) -> str | None:
         # 비수술 문항 오탐을 줄이기 위해 수술명 형태(수술 포함 또는 ...술)를 요구한다.
         if "수술" in candidate or candidate.endswith("술"):
             return candidate
+    return None
+
+
+def _extract_disability_region_from_query(question: str) -> str | None:
+    """장해 지급률 질의에서 핵심 신체 부위·상태 문자열을 추출한다."""
+
+    for keyword in _DISABILITY_KEYWORDS:
+        if keyword in question:
+            return keyword
+
+    for pattern in (_DISABILITY_QUERY_PATTERN, _DISABILITY_DESC_PATTERN):
+        match = pattern.search(question)
+        if not match:
+            continue
+        candidate = match.group(1).strip()
+        if len(candidate) >= 2:
+            return candidate
+    return None
+
+
+def _build_structured_context(
+    question: str,
+    chunks: list[Chunk],
+    table_store=None,
+) -> str | None:
+    """수술종수 또는 장해 지급률 질의에 대해 매칭된 구조화 표 행을 반환한다."""
+
+    # 방안 C 예약 지점: table_store를 통한 직접 조회 확장.
+    if table_store is not None:
+        try:
+            lookup = getattr(table_store, "lookup", None)
+            if callable(lookup):
+                result = lookup(question)
+                if result:
+                    return str(result)
+        except Exception:
+            return None
+
+    surgery_name = _extract_surgery_name_from_query(question)
+    disability_region = _extract_disability_region_from_query(question)
+    if not surgery_name and not disability_region:
+        return None
+
+    for chunk in chunks:
+        raw_table = chunk.metadata.get("table_json", "{}")
+        if raw_table in ("", "{}") or raw_table is None:
+            continue
+        try:
+            table_json = json.loads(raw_table) if isinstance(raw_table, str) else raw_table
+        except Exception:
+            continue
+        if not isinstance(table_json, dict):
+            continue
+
+        headers = table_json.get("headers")
+        rows = table_json.get("rows")
+        if not isinstance(headers, list) or not isinstance(rows, list):
+            continue
+
+        doc_short = str(chunk.metadata.get("doc_short", "")).strip() or "문서"
+        page_start = chunk.metadata.get("page_start", "?")
+
+        if surgery_name and "수술명" in headers:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                surgery_cell = str(row.get("수술명", "")).strip()
+                if not surgery_cell:
+                    continue
+                if surgery_name in surgery_cell or surgery_cell in surgery_name:
+                    row_parts = [f"수술명: {surgery_cell}"]
+                    for col in ("1-3종", "1-5종", "신1-5종"):
+                        if col in row:
+                            row_parts.append(f"{col}: {row[col]}")
+                    row_text = " | ".join(row_parts)
+                    return f"[구조화 데이터 — 검색 결과 기반]\n{row_text}\n출처: {doc_short} p.{page_start}"
+
+        if disability_region and "지급률" in headers:
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                category = str(row.get("장해의 분류", "")).strip()
+                if not category:
+                    continue
+                if disability_region in category:
+                    rate = str(row.get("지급률", "")).strip()
+                    if rate and not rate.endswith("%"):
+                        rate = f"{rate}%"
+                    return (
+                        "[구조화 데이터 — 검색 결과 기반]\n"
+                        f"장해 분류: {category[:80]}\n"
+                        f"지급률: {rate}\n"
+                        f"출처: {doc_short} p.{page_start}"
+                    )
+
     return None
 
 
@@ -351,15 +472,18 @@ class RagPipeline:
 
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
         prompt = build_user_prompt(question, chunks)
+        structured_ctx = _build_structured_context(question, chunks)
+        if structured_ctx:
+            prompt = f"{structured_ctx}\n\n{prompt}"
 
         llm_started = time.perf_counter()
-        answer = self.llm.generate(prompt, system=SYSTEM_PROMPT, temperature=temperature)
-        answer = append_retrieved_source_citations(answer, chunks)
+        answer_text = self.llm.generate(prompt, system=SYSTEM_PROMPT, temperature=temperature)
+        answer_text = append_retrieved_source_citations(answer_text, chunks)
         llm_ms = (time.perf_counter() - llm_started) * 1000
         total_ms = (time.perf_counter() - total_started) * 1000
 
         return RagAnswer(
-            answer=answer,
+            answer=answer_text,
             chunks=chunks,
             timing={
                 "retrieve_ms": retrieve_ms,
