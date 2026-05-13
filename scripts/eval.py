@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 from argparse import ArgumentParser
@@ -187,6 +188,7 @@ def main() -> None:
         raise SystemExit("BM25 인덱스가 없습니다. `python scripts/ingest.py --stage index`를 먼저 실행하세요.")
 
     llm = OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL)
+    eval_temperature = float(os.getenv("OLLAMA_TEMPERATURE", "0"))
     llm_available = llm.health()
     if not llm_available and args.ocr:
         print("Ollama 서버에 연결할 수 없어 --ocr LLM 답변 평가는 skip하고 retrieval-only로 진행합니다.")
@@ -255,7 +257,7 @@ def main() -> None:
             if args.ocr:
                 prompt += "\n\n평가용 출력 지시: 정답에 필요한 수치와 핵심 근거만 2문장 이내로 답하세요."
                 num_ctx = min(config.OLLAMA_NUM_CTX, 4096)
-            answer = llm.generate(prompt, system=SYSTEM_PROMPT, temperature=0.2, num_ctx=num_ctx)
+            answer = llm.generate(prompt, system=SYSTEM_PROMPT, temperature=eval_temperature, num_ctx=num_ctx)
             answer = append_retrieved_source_citations(answer, chunks)
             c_block_present = "[구조화 데이터 — 직접 조회 (C)]" in prompt
             page_ok = answer_mentions_expected_page(answer, expected_pages)

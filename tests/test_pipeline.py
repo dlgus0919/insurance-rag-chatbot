@@ -171,6 +171,11 @@ def test_extract_named_code_terms() -> None:
 def test_extract_surgery_name_from_query_surgery_grade() -> None:
     assert _extract_surgery_name_from_query("사지골 사지관절 가관절수술의 수술종수는?") == "사지골 사지관절 가관절수술"
     assert _extract_surgery_name_from_query("체외금속고정술의 수술종수는?") == "체외금속고정술"
+    assert (
+        _extract_surgery_name_from_query("체외금속고정술(창외고정술)의 1-3종·1-5종·신1-5종 수술종수는?")
+        == "체외금속고정술(창외고정술)"
+    )
+    assert _extract_surgery_name_from_query("충수절제술(맹장 수술)의 1-3종·1-5종·신1-5종은?") == "충수절제술(맹장 수술)"
     assert _extract_surgery_name_from_query("제허니아 근본수술의 1-3종·1-5종·신1-5종 수술종수는?") == "제허니아 근본수술"
     assert _extract_surgery_name_from_query("결장경하 종양수술은 어떤 도구를 사용하는가?") == "결장경하 종양수술"
 
@@ -223,6 +228,35 @@ def test_build_structured_context_surgery_grade() -> None:
     assert result is not None
     assert "충수절제술" in result
     assert "1-5종: 2" in result
+
+
+def test_build_structured_context_surgery_grade_alias_normalization() -> None:
+    chunk = make_chunk(
+        table_json=json.dumps(
+            {
+                "headers": ["수술명", "수술해설", "1-3종", "1-5종", "신1-5종"],
+                "rows": [
+                    {
+                        "수술명": "체외금속고정술 (= 창외고정술)",
+                        "수술해설": "...",
+                        "1-3종": "1",
+                        "1-5종": "2",
+                        "신1-5종": "2",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        doc_short="실무가이드",
+        page_start=64,
+    )
+
+    result = _build_structured_context("체외금속고정술(창외고정술)의 수술종수는?", [chunk])
+
+    assert result is not None
+    assert "1-3종: 1" in result
+    assert "1-5종: 2" in result
+    assert "신1-5종: 2" in result
 
 
 def test_build_structured_context_disability_rate() -> None:

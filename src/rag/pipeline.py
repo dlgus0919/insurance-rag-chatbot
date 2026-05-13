@@ -21,6 +21,10 @@ _SURGERY_QUERY_PATTERN = re.compile(
     r"([가-힣A-Za-z0-9 ·∙/()_-]{3,})\s*의\s*(?:[^?]{0,40}?)?(?:수술종수|수술해설|수술방법|수술 방법|수술종류|수술 종류|분류)",
     re.UNICODE,
 )
+_SURGERY_GRADE_COLUMN_PATTERN = re.compile(
+    r"([가-힣A-Za-z0-9 ·∙/()_-]{3,})\s*의\s*(?:1-3종|1-5종|신1-5종)",
+    re.UNICODE,
+)
 _SURGERY_DESC_PATTERN = re.compile(
     r"([가-힣A-Za-z0-9 ·∙/()_-]{3,})\s*(?:은|이란)\s*(?:어떤|무엇)",
     re.UNICODE,
@@ -166,16 +170,22 @@ def _extract_named_code_terms(question: str) -> list[str]:
     return terms
 
 
+def _normalize_surgery_match_text(text: str) -> str:
+    """수술명 비교를 위해 공백/기호를 제거한 정규화 문자열을 반환한다."""
+
+    return re.sub(r"[^0-9A-Za-z가-힣]", "", str(text)).lower()
+
+
 def _extract_surgery_name_from_query(question: str) -> str | None:
     """수술명 관련 질의에서 핵심 수술명 문자열을 추출한다."""
 
-    for pattern in (_SURGERY_QUERY_PATTERN, _SURGERY_DESC_PATTERN):
+    for pattern in (_SURGERY_QUERY_PATTERN, _SURGERY_DESC_PATTERN, _SURGERY_GRADE_COLUMN_PATTERN):
         match = pattern.search(question)
         if not match:
             continue
         candidate = match.group(1).strip()
-        # 비수술 문항 오탐을 줄이기 위해 수술명 형태(수술 포함 또는 ...술)를 요구한다.
-        if "수술" in candidate or candidate.endswith("술"):
+        # 비수술 문항 오탐을 줄이기 위해 수술명 형태(...술)를 요구한다.
+        if "술" in candidate:
             return candidate
     return None
 
@@ -273,13 +283,17 @@ def _build_structured_context(
         page_start = chunk.metadata.get("page_start", "?")
 
         if surgery_name and "수술명" in headers:
+            query_name_norm = _normalize_surgery_match_text(surgery_name)
             for row in rows:
                 if not isinstance(row, dict):
                     continue
                 surgery_cell = str(row.get("수술명", "")).strip()
                 if not surgery_cell:
                     continue
-                if surgery_name in surgery_cell or surgery_cell in surgery_name:
+                surgery_cell_norm = _normalize_surgery_match_text(surgery_cell)
+                if not query_name_norm or not surgery_cell_norm:
+                    continue
+                if query_name_norm in surgery_cell_norm or surgery_cell_norm in query_name_norm:
                     row_parts = [f"수술명: {surgery_cell}"]
                     for col in ("1-3종", "1-5종", "신1-5종"):
                         if col in row:
@@ -315,6 +329,7 @@ def _boost_surgery_name_table_rows(hits: list[Hit], surgery_name: str) -> list[H
         return hits
 
     query_name = surgery_name.strip()
+    query_name_norm = _normalize_surgery_match_text(query_name)
     matched: list[Hit] = []
     unmatched: list[Hit] = []
 
@@ -341,7 +356,10 @@ def _boost_surgery_name_table_rows(hits: list[Hit], surgery_name: str) -> list[H
                     cell = str(row.get("수술명", "")).strip()
                     if not cell:
                         continue
-                    if query_name in cell or cell in query_name:
+                    cell_norm = _normalize_surgery_match_text(cell)
+                    if not query_name_norm or not cell_norm:
+                        continue
+                    if query_name_norm in cell_norm or cell_norm in query_name_norm:
                         has_match = True
                         break
 
