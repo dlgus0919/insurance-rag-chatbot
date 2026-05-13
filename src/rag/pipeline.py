@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 import re
 from dataclasses import dataclass
@@ -15,6 +16,14 @@ from src.retrieval.reranker import build_reranker
 
 
 _CODE_PATTERN = re.compile(r"(?<![A-Z0-9.])(?:[A-Z]\d{2}(?:\.\d{1,2})?|[A-Z]{1,3}\d{2,5})(?![A-Z0-9.])")
+_SURGERY_QUERY_PATTERN = re.compile(
+    r"([가-힣A-Za-z0-9 ·∙/()_-]{3,})\s*의\s*(?:[^?]{0,40}?)?(?:수술종수|수술해설|수술방법|수술 방법|수술종류|수술 종류|분류)",
+    re.UNICODE,
+)
+_SURGERY_DESC_PATTERN = re.compile(
+    r"([가-힣A-Za-z0-9 ·∙/()_-]{3,})\s*(?:은|이란)\s*(?:어떤|무엇)",
+    re.UNICODE,
+)
 
 
 @dataclass
@@ -125,6 +134,65 @@ def _extract_named_code_terms(question: str) -> list[str]:
     return terms
 
 
+def _extract_surgery_name_from_query(question: str) -> str | None:
+    """수술명 관련 질의에서 핵심 수술명 문자열을 추출한다."""
+
+    for pattern in (_SURGERY_QUERY_PATTERN, _SURGERY_DESC_PATTERN):
+        match = pattern.search(question)
+        if not match:
+            continue
+        candidate = match.group(1).strip()
+        # 비수술 문항 오탐을 줄이기 위해 수술명 형태(수술 포함 또는 ...술)를 요구한다.
+        if "수술" in candidate or candidate.endswith("술"):
+            return candidate
+    return None
+
+
+def _boost_surgery_name_table_rows(hits: list[Hit], surgery_name: str) -> list[Hit]:
+    """수술명이 table_json의 '수술명' 컬럼에 매칭되는 청크를 앞으로 정렬한다."""
+
+    if not hits or not surgery_name:
+        return hits
+
+    query_name = surgery_name.strip()
+    matched: list[Hit] = []
+    unmatched: list[Hit] = []
+
+    for hit in hits:
+        raw_table = hit.metadata.get("table_json")
+        table_json: dict | None = None
+        if isinstance(raw_table, str) and raw_table and raw_table != "{}":
+            try:
+                loaded = json.loads(raw_table)
+            except Exception:
+                loaded = None
+            if isinstance(loaded, dict):
+                table_json = loaded
+        elif isinstance(raw_table, dict):
+            table_json = raw_table
+
+        has_match = False
+        if table_json:
+            rows = table_json.get("rows", [])
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    cell = str(row.get("수술명", "")).strip()
+                    if not cell:
+                        continue
+                    if query_name in cell or cell in query_name:
+                        has_match = True
+                        break
+
+        if has_match:
+            matched.append(hit)
+        else:
+            unmatched.append(hit)
+
+    return matched + unmatched
+
+
 def _is_low_value_wide_range(hit: Hit) -> bool:
     """목차처럼 넓은 페이지 범위에 짧게 걸친 청크를 검색 후보에서 제외한다."""
 
@@ -197,6 +265,7 @@ class RagPipeline:
         query_embedding = self.embedder.embed_query(retrieval_query)
         query_codes = _extract_query_codes(question)
         named_code_terms = _extract_named_code_terms(question)
+        surgery_name = _extract_surgery_name_from_query(question)
         code_hits: list[Hit] = []
 
         if query_codes and hasattr(self.vector_store, "query_with_filter"):
@@ -223,6 +292,9 @@ class RagPipeline:
         bm25_hits = [hit for hit in bm25_hits if not _is_low_value_wide_range(hit)]
         reranker_enabled = self.reranker is not None and getattr(self.reranker, "enabled", True)
         rrf_top_k = final_top_k * 2 if reranker_enabled else final_top_k
+        if surgery_name:
+            # 수술명 질의는 인접 페이지 표가 섞이기 쉬워 부스팅 전에 후보 풀을 확장한다.
+            rrf_top_k = max(rrf_top_k, final_top_k * 3)
         fused_hits = rrf_fuse(dense_hits, bm25_hits, top_k=rrf_top_k, rrf_k=self.rrf_k)
         debug_rrf = list(fused_hits)
         if code_hits:
@@ -236,6 +308,10 @@ class RagPipeline:
             fused_hits = ordered[:rrf_top_k]
         else:
             fused_hits = _prefer_exact_text_hits(fused_hits, named_code_terms)
+
+        if surgery_name:
+            fused_hits = _boost_surgery_name_table_rows(fused_hits, surgery_name)
+
         if self.reranker is not None:
             final_hits = self.reranker.rerank(question, fused_hits, top_k=final_top_k)
         else:

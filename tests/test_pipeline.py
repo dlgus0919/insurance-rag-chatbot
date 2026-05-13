@@ -1,11 +1,15 @@
+import json
+
 import numpy as np
 
 from src.rag.pipeline import (
     DebugInfo,
     RagPipeline,
+    _boost_surgery_name_table_rows,
     _expand_retrieval_query,
     _extract_named_code_terms,
     _extract_query_codes,
+    _extract_surgery_name_from_query,
     _hits_to_stage,
     _is_low_value_wide_range,
     _prefer_exact_text_hits,
@@ -149,6 +153,71 @@ def test_expand_retrieval_query_for_drunk_injury() -> None:
 
 def test_extract_named_code_terms() -> None:
     assert _extract_named_code_terms("식도조루술의 코드를 알려줘.") == ["식도조루술"]
+
+
+def test_extract_surgery_name_from_query_surgery_grade() -> None:
+    assert _extract_surgery_name_from_query("사지골 사지관절 가관절수술의 수술종수는?") == "사지골 사지관절 가관절수술"
+    assert _extract_surgery_name_from_query("체외금속고정술의 수술종수는?") == "체외금속고정술"
+    assert _extract_surgery_name_from_query("제허니아 근본수술의 1-3종·1-5종·신1-5종 수술종수는?") == "제허니아 근본수술"
+    assert _extract_surgery_name_from_query("결장경하 종양수술은 어떤 도구를 사용하는가?") == "결장경하 종양수술"
+
+
+def test_extract_surgery_name_from_query_non_surgery() -> None:
+    assert _extract_surgery_name_from_query("두 눈이 멀었을 때 장해 지급률은?") is None
+    assert _extract_surgery_name_from_query("계약 전 알릴 의무를 위반한 경우 어떤 불이익이 있는가?") is None
+    assert _extract_surgery_name_from_query("척추에 심한 운동장해가 남은 경우 지급률은?") is None
+
+
+def test_boost_surgery_name_table_rows_matched_first() -> None:
+    matched_hit = Hit(
+        id="p64",
+        score=0.7,
+        document="사지골 사지관절 | 수술해설 | 1 | 2 | 2",
+        metadata={
+            "doc_short": "실무가이드",
+            "page_start": 64,
+            "table_json": json.dumps(
+                {
+                    "headers": ["수술명", "수술해설", "1-3종", "1-5종", "신1-5종"],
+                    "rows": [
+                        {
+                            "수술명": "사지골 사지관절 가관절수술",
+                            "수술해설": "...",
+                            "1-3종": "1",
+                            "1-5종": "2",
+                            "신1-5종": "2",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        },
+    )
+    unmatched_hit = Hit(
+        id="p63",
+        score=0.9,
+        document="사지골 관련 다른 표",
+        metadata={"doc_short": "실무가이드", "page_start": 63, "table_json": "{}"},
+    )
+
+    result = _boost_surgery_name_table_rows(
+        [unmatched_hit, matched_hit],
+        surgery_name="사지골 사지관절 가관절수술",
+    )
+
+    assert result[0].id == "p64"
+    assert result[1].id == "p63"
+
+
+def test_boost_surgery_name_table_rows_no_match_preserves_order() -> None:
+    hits = [
+        Hit(id="a", score=0.9, document="text", metadata={"table_json": "{}"}),
+        Hit(id="b", score=0.8, document="text", metadata={"table_json": "{}"}),
+    ]
+
+    result = _boost_surgery_name_table_rows(hits, surgery_name="없는수술명")
+
+    assert [hit.id for hit in result] == ["a", "b"]
 
 
 def test_prefer_exact_text_hits() -> None:
