@@ -21,7 +21,9 @@ from src import config
 from src.parser.clova_ocr import ClovaOcrError, clova_ocr_page
 from src.parser.numeric_cell_refiner import NumericCellRefinerAuthError, refine_numeric_cells
 from src.parser.ocr_engine import LayoutBlock, run_ppstructure
+from src.parser.ocr_postprocess import is_noise_text_block, normalize_ocr_text
 from src.parser.pdf_extractor import extract_page_image, get_page_count
+from src.parser.table_quality import evaluate_table_quality
 from src.parser.table_vision_cleaner import TableVisionCleanerAuthError, clean_table_blocks
 
 DEFAULT_OUTPUT_DIR = ROOT / "data" / "extracted"
@@ -154,6 +156,25 @@ def _save_blocks(blocks: list[LayoutBlock], out_dir: Path, page_no: int) -> list
             text = _table_to_text(table_json).strip()
             if not text:
                 continue
+            should_downcast, downcast_reason = evaluate_table_quality(table_json)
+            if should_downcast:
+                stem = f"p{page_no:03d}_b{text_index:02d}"
+                text_path = text_dir / f"{stem}.txt"
+                text_path.write_text(text, encoding="utf-8")
+                entry = {
+                    "type": "text",
+                    "file": f"text/{stem}.txt",
+                    "bbox": _block_bbox(block),
+                    "confidence": _block_confidence(block),
+                    "chars": len(text),
+                    "source_method": block.source_method,
+                    "downcast_from_table": True,
+                }
+                if downcast_reason:
+                    entry["downcast_reason"] = downcast_reason
+                block_entries.append(entry)
+                text_index += 1
+                continue
 
             stem = f"p{page_no:03d}_t{table_index:02d}"
             text_path = table_dir / f"{stem}.txt"
@@ -187,8 +208,8 @@ def _save_blocks(blocks: list[LayoutBlock], out_dir: Path, page_no: int) -> list
             table_index += 1
             continue
 
-        text = str(block.text or "").strip()
-        if not text:
+        text = normalize_ocr_text(str(block.text or ""))
+        if not text or is_noise_text_block(text):
             continue
         stem = f"p{page_no:03d}_b{text_index:02d}"
         text_path = text_dir / f"{stem}.txt"

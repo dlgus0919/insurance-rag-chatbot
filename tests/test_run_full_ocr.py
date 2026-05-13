@@ -62,6 +62,12 @@ def test_save_blocks_writes_text_blocks(tmp_path: Path) -> None:
     assert (tmp_path / "text" / "p064_b00.txt").read_text(encoding="utf-8") == "본문 텍스트"
 
 
+def test_save_blocks_skips_noise_text_block(tmp_path: Path) -> None:
+    blocks = [LayoutBlock("text", [1, 2, 3, 4], "123\n456\n789", confidence=0.91)]
+    entries = _save_blocks(blocks, tmp_path, 64)
+    assert entries == []
+
+
 def test_save_blocks_writes_table_text_and_json(tmp_path: Path) -> None:
     table_json = {"headers": ["수술명", "1-3종"], "rows": [{"수술명": "봉합술", "1-3종": "1"}]}
     blocks = [
@@ -84,6 +90,26 @@ def test_save_blocks_writes_table_text_and_json(tmp_path: Path) -> None:
     assert (tmp_path / "tables" / "p068_t00.txt").read_text(encoding="utf-8") == "수술명 | 1-3종\n봉합술 | 1"
     saved_json = json.loads((tmp_path / "tables" / "p068_t00.json").read_text(encoding="utf-8"))
     assert saved_json == table_json
+
+
+def test_save_blocks_downcasts_prose_like_table_to_text(tmp_path: Path) -> None:
+    table_json = {
+        "headers": ["판례 요약"],
+        "rows": [
+            {"판례 요약": "보험금 지급 여부는 계약 체결 경위와 약관 문언을 종합하여 판단하여야 한다."},
+            {"판례 요약": "해당 블록은 표가 아닌 인용 박스 문단으로 분류하는 것이 타당하다."},
+        ],
+    }
+    blocks = [LayoutBlock("table", [10, 20, 30, 40], "ignored", table_json=table_json)]
+
+    entries = _save_blocks(blocks, tmp_path, 74)
+
+    assert entries[0]["type"] == "text"
+    assert entries[0]["file"] == "text/p074_b00.txt"
+    assert entries[0]["downcast_from_table"] is True
+    assert entries[0]["downcast_reason"] == "single_column_prose_like"
+    assert (tmp_path / "text" / "p074_b00.txt").exists()
+    assert not (tmp_path / "tables" / "p074_t00.json").exists()
 
 
 def test_update_manifest_replaces_page_and_sorts(tmp_path: Path) -> None:

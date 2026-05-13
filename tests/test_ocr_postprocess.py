@@ -1,4 +1,4 @@
-from src.parser.ocr_postprocess import normalize_ocr_text
+from src.parser.ocr_postprocess import is_noise_text_block, normalize_ocr_text
 
 
 def test_normalize_ocr_text_fixes_common_korean_suffix_errors() -> None:
@@ -20,3 +20,16 @@ def test_normalize_ocr_text_removes_repeated_noise_lines() -> None:
     assert "{" not in normalized
     assert "123" not in normalized
     assert "보험금 지급 기준" in normalized
+
+
+def test_normalize_ocr_text_removes_decorative_english_lines() -> None:
+    text = "Shares\nYear\n보험금 지급 기준"
+    normalized = normalize_ocr_text(text)
+    assert "Shares" not in normalized
+    assert "Year" not in normalized
+    assert "보험금 지급 기준" in normalized
+
+
+def test_is_noise_text_block_detects_numeric_only_block() -> None:
+    assert is_noise_text_block("123\n456\n789") is True
+    assert is_noise_text_block("보험금 지급 기준") is False

@@ -373,6 +373,30 @@ def test_clova_ocr_page_uses_native_tables_when_present(monkeypatch) -> None:
     assert "표 밖 텍스트" in blocks[-1].text
 
 
+def test_clova_ocr_page_splits_remainder_into_multiple_paragraph_blocks(monkeypatch) -> None:
+    def fake_request_clova(image, page_name: str, timeout_sec: int | None = None) -> dict:  # noqa: ANN001
+        return {
+            "fields": [
+                _field("제목", 20, 10, 80, 30, line_break=True),
+                _field("본문", 140, 34, 200, 54),
+            ],
+            "tables": [],
+        }
+
+    monkeypatch.setattr(clova_ocr, "_request_clova", fake_request_clova)
+
+    blocks = clova_ocr_page(
+        Image.new("RGB", (400, 200), "white"),
+        page_name="sample",
+        layout_regions=[],
+    )
+
+    text_blocks = [block for block in blocks if block.block_type == "text"]
+    assert len(text_blocks) == 2
+    assert text_blocks[0].text == "제목"
+    assert text_blocks[1].text == "본문"
+
+
 def test_clova_ocr_page_raises_on_http_error(monkeypatch) -> None:
     monkeypatch.setenv("CLOVA_OCR_URL", "https://example.test/ocr")
     monkeypatch.setenv("CLOVA_OCR_SECRET", "secret-key")

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.parser.chunker import Chunk, EXTENDED_META_DEFAULTS, _extract_codes, _split_text
+from src.parser.ocr_postprocess import is_noise_text_block, normalize_ocr_text
 
 if TYPE_CHECKING:
     from src.config import PdfSource
@@ -101,6 +102,7 @@ def chunk_from_extracted(
             if block_type == "figure":
                 caption_path = _figure_caption_path(file_path)
                 caption = caption_path.read_text(encoding="utf-8").strip() if caption_path.exists() else ""
+                caption = normalize_ocr_text(caption)
                 if not caption:
                     continue
                 metadata = _base_meta(doc_source, page_no, engine, "figure", block_info, caption)
@@ -109,8 +111,8 @@ def chunk_from_extracted(
                 next_index += 1
                 continue
 
-            text = file_path.read_text(encoding="utf-8").strip()
-            if not text:
+            text = normalize_ocr_text(file_path.read_text(encoding="utf-8"))
+            if not text or is_noise_text_block(text):
                 continue
             for piece in _split_text(text, target_chars=800, overlap_chars=100):
                 metadata = _base_meta(doc_source, page_no, engine, "text", block_info, piece)

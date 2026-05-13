@@ -65,3 +65,41 @@ def test_chunk_from_extracted_creates_text_and_table_chunks(tmp_path: Path) -> N
     assert chunks[1].metadata["source_method"] == "ocr_ppstructure"
     assert chunks[1].metadata["is_code_table"] is True
     assert "수술종수" in chunks[1].metadata["table_json"]
+
+
+def test_chunk_from_extracted_skips_noise_text_blocks(tmp_path: Path) -> None:
+    extracted_dir = tmp_path / "상담사례집"
+    (extracted_dir / "text").mkdir(parents=True)
+    (extracted_dir / "text" / "p010_b00.txt").write_text("123\n456\n789", encoding="utf-8")
+    (extracted_dir / "text" / "p010_b01.txt").write_text("보험금 지급 심사 기준", encoding="utf-8")
+    (extracted_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page_no": 10,
+                        "engine": "clova_native",
+                        "blocks": [
+                            {"type": "text", "file": "text/p010_b00.txt", "bbox": [0, 0, 10, 10], "confidence": 0.9},
+                            {"type": "text", "file": "text/p010_b01.txt", "bbox": [0, 0, 10, 10], "confidence": 0.9},
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    source = PdfSource(
+        path=Path("상담사례집.pdf"),
+        doc_type="ops_guide_scanned",
+        doc_name="상담사례집",
+        doc_short="상담사례집",
+        requires_ocr=True,
+    )
+
+    chunks = chunk_from_extracted("상담사례집", extracted_dir, source)
+
+    assert len(chunks) == 1
+    assert "보험금 지급 심사 기준" in chunks[0].text

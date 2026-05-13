@@ -411,6 +411,27 @@ def _compute_para_gap(rows: list[list[dict]]) -> float:
     return max(median_gap * 2.0, 30.0)
 
 
+def _row_left_x(row: list[dict]) -> float:
+    return min((_field_bbox(field)[0] for field in row), default=0.0)
+
+
+def _row_top_y(row: list[dict]) -> float:
+    return min((_field_bbox(field)[1] for field in row), default=0.0)
+
+
+def _should_split_paragraph(prev_row: list[dict], curr_row: list[dict], *, row_gap: float, para_gap: float) -> bool:
+    prev_y = _row_top_y(prev_row)
+    curr_y = _row_top_y(curr_row)
+    vertical_gap = curr_y - prev_y
+    if vertical_gap > para_gap:
+        return True
+
+    indent_delta = abs(_row_left_x(curr_row) - _row_left_x(prev_row))
+    if vertical_gap > row_gap * 1.2 and indent_delta >= 80:
+        return True
+    return False
+
+
 def _rows_to_text(rows: list[list[dict]]) -> str:
     lines: list[str] = []
     for row in rows:
@@ -578,12 +599,12 @@ def clova_ocr_page(
         rem_rows = _group_fields_into_rows(remainder)
         paragraphs: list[list[list[dict]]] = []
         if rem_rows:
+            row_gap = _adaptive_row_gap(remainder)
             para_gap = _compute_para_gap(rem_rows)
             paragraphs = [[rem_rows[0]]]
             for row in rem_rows[1:]:
-                prev_row_y = _field_center_y(paragraphs[-1][-1][-1])
-                curr_row_y = _field_center_y(row[0])
-                if curr_row_y - prev_row_y > para_gap:
+                prev_row = paragraphs[-1][-1]
+                if _should_split_paragraph(prev_row, row, row_gap=row_gap, para_gap=para_gap):
                     paragraphs.append([])
                 paragraphs[-1].append(row)
 
