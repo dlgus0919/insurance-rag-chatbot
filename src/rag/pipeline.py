@@ -51,6 +51,11 @@ _DISABILITY_DESC_PATTERN = re.compile(
     r"(.{2,20}?)\s*(?:장해|운동장해|기능장해)\s*(?:가|이)\s*남은",
     re.UNICODE,
 )
+_DISABILITY_RATE_QUESTION_PATTERN = re.compile(
+    r"^(.{4,60}?)\s*(?:장해\s*)?지급률",
+    re.UNICODE,
+)
+_OLD_SURGERY_TABLE_MARKERS = ("수술종류분류", "종류분류(종)", "수술분류표")
 
 
 @dataclass
@@ -178,6 +183,13 @@ def _extract_surgery_name_from_query(question: str) -> str | None:
 def _extract_disability_region_from_query(question: str) -> str | None:
     """장해 지급률 질의에서 핵심 신체 부위·상태 문자열을 추출한다."""
 
+    match = _DISABILITY_RATE_QUESTION_PATTERN.search(question.strip())
+    if match:
+        phrase = match.group(1).strip()
+        phrase = re.sub(r"(인)?\s*경우$", "", phrase).strip()
+        if len(phrase) >= 4:
+            return phrase
+
     for keyword in _DISABILITY_KEYWORDS:
         if keyword in question:
             return keyword
@@ -201,6 +213,9 @@ def _build_structured_context(
 
     surgery_name = _extract_surgery_name_from_query(question)
     disability_region = _extract_disability_region_from_query(question)
+    compact_question = re.sub(r"\s+", "", question)
+    if surgery_name and any(marker in compact_question for marker in _OLD_SURGERY_TABLE_MARKERS):
+        surgery_name = None
 
     if table_store is not None:
         try:

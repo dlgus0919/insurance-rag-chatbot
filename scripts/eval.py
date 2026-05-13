@@ -17,7 +17,7 @@ from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.llm.ollama_client import OllamaClient
 from src.parser.chunker import Chunk
-from src.rag.pipeline import RagPipeline
+from src.rag.pipeline import RagPipeline, _build_structured_context
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
 from src.retrieval.vector_store import VectorStore
@@ -245,14 +245,19 @@ def main() -> None:
         grade_result = None
         rate_ok = None
         keyword_result = None
+        c_block_present = None
         if llm_available:
             prompt = build_user_prompt(question, chunks)
+            structured_ctx = _build_structured_context(question, chunks, table_store=getattr(pipeline, "_table_store", None))
+            if structured_ctx:
+                prompt = f"{structured_ctx}\n\n{prompt}"
             num_ctx = None
             if args.ocr:
                 prompt += "\n\n평가용 출력 지시: 정답에 필요한 수치와 핵심 근거만 2문장 이내로 답하세요."
                 num_ctx = min(config.OLLAMA_NUM_CTX, 4096)
             answer = llm.generate(prompt, system=SYSTEM_PROMPT, temperature=0.2, num_ctx=num_ctx)
             answer = append_retrieved_source_citations(answer, chunks)
+            c_block_present = "[구조화 데이터 — 직접 조회 (C)]" in prompt
             page_ok = answer_mentions_expected_page(answer, expected_pages)
             code_ok = answer_mentions_expected_codes(answer, item.get("expected_codes", []))
             verdict_ok = answer_matches_verdict(answer, item.get("expected_verdict", ""))
@@ -283,6 +288,8 @@ def main() -> None:
         ]
         if llm_available:
             metric_parts = []
+            if args.ocr and item_type == "surgery_grade":
+                metric_parts.append(f"[C_DEBUG] C블록 존재:{c_block_present}")
             if grade_result:
                 metric_parts.append(f"grade={grade_result[0]}/{grade_result[1]}")
             if rate_ok is not None:

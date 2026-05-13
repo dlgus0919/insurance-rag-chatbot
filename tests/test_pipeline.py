@@ -182,14 +182,19 @@ def test_extract_surgery_name_from_query_non_surgery() -> None:
 
 
 def test_extract_disability_region_keyword_match() -> None:
-    assert _extract_disability_region_from_query("두 눈이 멀었을 때 장해 지급률은?") == "두 눈"
-    assert _extract_disability_region_from_query("한 팔의 손목 이상을 잃었을 때 지급률은?") == "한 팔"
+    assert _extract_disability_region_from_query("두 눈이 멀었을 때 장해 지급률은?") == "두 눈이 멀었을 때"
+    assert _extract_disability_region_from_query("한 팔의 손목 이상을 잃었을 때 지급률은?") == "한 팔의 손목 이상을 잃었을 때"
     assert _extract_disability_region_from_query("두 귀의 청력을 완전히 잃었을 때") == "두 귀"
 
 
 def test_extract_disability_region_non_disability() -> None:
     assert _extract_disability_region_from_query("충수절제술의 수술종수는?") is None
     assert _extract_disability_region_from_query("계약 전 알릴 의무 위반 시 불이익은?") is None
+
+
+def test_extract_disability_region_full_phrase_priority() -> None:
+    query = "한 팔의 3대관절 중 1관절의 기능을 완전히 잃었을 때 지급률은?"
+    assert _extract_disability_region_from_query(query) == "한 팔의 3대관절 중 1관절의 기능을 완전히 잃었을 때"
 
 
 def test_build_structured_context_surgery_grade() -> None:
@@ -257,6 +262,36 @@ def test_build_structured_context_non_structured_query_returns_none() -> None:
     result = _build_structured_context("계약 전 알릴 의무란?", [chunk])
 
     assert result is None
+
+
+def test_build_structured_context_skips_old_surgery_table_marker_for_c_hook() -> None:
+    class StubTableStore:
+        def __init__(self):
+            self.called = False
+
+        def is_available(self) -> bool:
+            return True
+
+        def lookup_surgery_grade(self, surgery_name: str):
+            self.called = True
+            return {
+                "수술명": surgery_name,
+                "종_1_3": "1",
+                "종_1_5": "1",
+                "종_신1_5": "1",
+                "source_page_label": "7",
+            }
+
+        def lookup_disability_rate(self, query_region: str):
+            return None
+
+    store = StubTableStore()
+    chunk = make_chunk(table_json="{}", doc_short="실무가이드", page_start=7)
+
+    result = _build_structured_context("직시하심장내수술의 수술종류 분류(종)는?", [chunk], table_store=store)
+
+    assert result is None
+    assert store.called is False
 
 
 def test_boost_surgery_name_table_rows_matched_first() -> None:
