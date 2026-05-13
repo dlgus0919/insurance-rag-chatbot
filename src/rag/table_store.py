@@ -11,11 +11,13 @@ import pandas as pd
 
 SURGERY_GRADES_PATH = Path("data/index/surgery_grades.parquet")
 DISABILITY_RATES_PATH = Path("data/index/disability_rates.parquet")
+_MIDDLE_DOT_PATTERN = re.compile(r"[\s\u00B7\u2022\u2027\u22C5\u30FB\uFF65]")
+_GRADE_COLUMNS = ("종_1_3", "종_1_5", "종_신1_5")
 
 
 def _normalize_lookup_text(value: Any) -> str:
     text = "" if value is None else str(value)
-    return re.sub(r"\s+", "", text).lower()
+    return _MIDDLE_DOT_PATTERN.sub("", text).lower()
 
 
 def _clean_record(record: dict) -> dict:
@@ -83,7 +85,12 @@ class TableStore:
         hits = df[mask]
         if hits.empty:
             return None
-        return _clean_record(hits.iloc[0].to_dict())
+
+        for _, row in hits.iterrows():
+            if all(str(row.get(col, "N")) == "N" for col in _GRADE_COLUMNS if col in row.index):
+                continue
+            return _clean_record(row.to_dict())
+        return None
 
     def lookup_disability_rate(self, query_region: str) -> dict | None:
         """장해 부위/유형 문자열로 장해분류 행을 부분 일치 조회한다."""

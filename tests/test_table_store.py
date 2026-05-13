@@ -3,7 +3,15 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.rag.table_store import TableStore
+from src.rag.table_store import TableStore, _normalize_lookup_text
+
+
+def _make_store(tmp_path: Path, rows: list[dict]) -> TableStore:
+    surgery_path = tmp_path / "surgery_grades.parquet"
+    pd.DataFrame(rows).to_parquet(surgery_path)
+    disability_path = tmp_path / "disability_rates.parquet"
+    pd.DataFrame({"장해분류": [], "지급률": []}).to_parquet(disability_path)
+    return TableStore(surgery_path=surgery_path, disability_path=disability_path)
 
 
 @pytest.fixture
@@ -101,3 +109,79 @@ def test_lookup_returns_none_when_unavailable(tmp_path: Path) -> None:
 
     assert store.lookup_surgery_grade("충수절제술") is None
     assert store.lookup_disability_rate("두 눈") is None
+
+
+def test_normalize_removes_middle_dot() -> None:
+    assert _normalize_lookup_text("수 · 족골 적출술\n(=수,족골 적제술)") == "수족골적출술(=수,족골적제술)"
+    assert _normalize_lookup_text("수족골 적출술") == "수족골적출술"
+
+
+def test_lookup_surgery_grade_middle_dot_match(tmp_path: Path) -> None:
+    store = _make_store(
+        tmp_path,
+        rows=[
+            {
+                "수술명": "수 · 족골 적출술 (=수,족골 적제술)",
+                "수술명_원문": "수 · 족골 적출술\n(=수,족골 적제술)",
+                "수술해설": "",
+                "종_1_3": "1",
+                "종_1_5": "2",
+                "종_신1_5": "2",
+                "source_page_label": "63",
+                "source_file": "실무가이드",
+                "table_type": "new",
+                "table_group_id": 0,
+                "group_page_range": "63-63",
+                "is_page_continued": False,
+            }
+        ],
+    )
+
+    result = store.lookup_surgery_grade("수족골 적출술")
+
+    assert result is not None
+    assert result["종_1_3"] == "1"
+    assert result["종_1_5"] == "2"
+    assert result["종_신1_5"] == "2"
+
+
+def test_lookup_surgery_grade_skips_all_n_rows(tmp_path: Path) -> None:
+    store = _make_store(
+        tmp_path,
+        rows=[
+            {
+                "수술명": "절개술",
+                "수술명_원문": "절개술",
+                "수술해설": "",
+                "종_1_3": "N",
+                "종_1_5": "N",
+                "종_신1_5": "N",
+                "source_page_label": "25",
+                "source_file": "실무가이드",
+                "table_type": "new",
+                "table_group_id": 0,
+                "group_page_range": "25-25",
+                "is_page_continued": False,
+            },
+            {
+                "수술명": "충수절제술",
+                "수술명_원문": "충수절제술",
+                "수술해설": "",
+                "종_1_3": "2",
+                "종_1_5": "3",
+                "종_신1_5": "2",
+                "source_page_label": "64",
+                "source_file": "실무가이드",
+                "table_type": "new",
+                "table_group_id": 1,
+                "group_page_range": "64-64",
+                "is_page_continued": False,
+            },
+        ],
+    )
+
+    assert store.lookup_surgery_grade("절개술") is None
+
+    result = store.lookup_surgery_grade("충수절제술")
+    assert result is not None
+    assert result["종_1_3"] == "2"
