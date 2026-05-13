@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.parser.chunker import Chunk
+from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
 from src.retrieval.reranker import build_reranker
@@ -198,19 +199,42 @@ def _build_structured_context(
 ) -> str | None:
     """수술종수 또는 장해 지급률 질의에 대해 매칭된 구조화 표 행을 반환한다."""
 
-    # 방안 C 예약 지점: table_store를 통한 직접 조회 확장.
-    if table_store is not None:
-        try:
-            lookup = getattr(table_store, "lookup", None)
-            if callable(lookup):
-                result = lookup(question)
-                if result:
-                    return str(result)
-        except Exception:
-            return None
-
     surgery_name = _extract_surgery_name_from_query(question)
     disability_region = _extract_disability_region_from_query(question)
+
+    if table_store is not None:
+        try:
+            if table_store.is_available():
+                if surgery_name:
+                    result = table_store.lookup_surgery_grade(surgery_name)
+                    if result:
+                        lines = [
+                            "[구조화 데이터 — 직접 조회 (C)]",
+                            f"수술명: {result['수술명']}",
+                            f"1-3종: {result['종_1_3']} | 1-5종: {result['종_1_5']} | 신1-5종: {result['종_신1_5']}",
+                            f"출처: 실무가이드 p.{result['source_page_label']}",
+                        ]
+                        return "\n".join(lines)
+
+                if disability_region:
+                    result = table_store.lookup_disability_rate(disability_region)
+                    if result:
+                        rate = result.get("지급률")
+                        if rate:
+                            rate_str = f"{rate}%"
+                        else:
+                            rate_str = f"{result['지급률_범위_최소']}~{result['지급률_범위_최대']}%"
+                        lines = [
+                            "[구조화 데이터 — 직접 조회 (C)]",
+                            f"신체부위: {result['신체부위']}",
+                            f"장해 분류: {result['장해분류']}",
+                            f"지급률: {rate_str}",
+                            f"출처: 실무가이드 p.{result['source_page_label']}",
+                        ]
+                        return "\n".join(lines)
+        except Exception:
+            pass
+
     if not surgery_name and not disability_region:
         return None
 
@@ -357,6 +381,7 @@ class RagPipeline:
         rrf_k: int = 60,
         reranker=None,
         reranker_enabled: bool | None = None,
+        table_store: TableStore | None = None,
     ):
         self.embedder = embedder
         self.vector_store = vector_store
@@ -371,6 +396,7 @@ class RagPipeline:
         else:
             enabled = config.RERANKER_ENABLED if reranker_enabled is None else reranker_enabled
             self.reranker = build_reranker(enabled=enabled)
+        self._table_store = table_store if table_store is not None else TableStore()
 
     def retrieve_hits(
         self,
@@ -472,7 +498,7 @@ class RagPipeline:
 
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
         prompt = build_user_prompt(question, chunks)
-        structured_ctx = _build_structured_context(question, chunks)
+        structured_ctx = _build_structured_context(question, chunks, table_store=self._table_store)
         if structured_ctx:
             prompt = f"{structured_ctx}\n\n{prompt}"
 
