@@ -99,6 +99,14 @@ PDF_SOURCES: list[PdfSource] = [
         effective_date="2026-01-01",
     ),
     PdfSource(
+        path=ROOT_DIR / "(별첨3)[별표 15] 표준약관(제5-13조제1항관련) (6).pdf",
+        doc_type="insurance_policy",
+        doc_name="표준약관(제5-13조제1항관련)",
+        doc_short="표준약관",
+        cloud_safe=True,
+        product_type="표준약관",
+    ),
+    PdfSource(
         path=ROOT_DIR / "Claim 실무종합가이드.pdf",
         doc_type="ops_guide_scanned",
         doc_name="Claim 실무종합가이드",
