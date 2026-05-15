@@ -35,3 +35,50 @@ data/index/graph/*
 !data/index/relational/
 data/index/relational/*
 !data/index/relational/.gitkeep
+
+# --- DGX runtime / private artifacts ---
+# Secrets / local auth
+.env
+.env.*
+!.env.example
+*secret*
+*key*
+CLOVA_OCR_CUSTOM_API_EXTERNAL*.json
+users.json
+users.json.tmp
+
+# Runtime logs / local state
+logs/
+data/chat_history/
+
+# Raw private sources
+raw/
+backup/
+backups/
+/*.pdf
+/*.xlsx
+/*.xls
+
+# OCR and generated data artifacts
+data/extracted/
+data/extracted_v2_manual/
+data/processed_backup*/
+data/index_backup*/
+
+# Chroma / runtime databases
+data/index/chroma/
+data/index/relational/*.sqlite
+*.sqlite
+*.db
+
+# Python / local env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Generated review outputs / local archives
+reports/
+insurance-rag-ocr-changes-*/
+assets.zip
