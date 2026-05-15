@@ -82,3 +82,6 @@ __pycache__/
 reports/
 insurance-rag-ocr-changes-*/
 assets.zip
+
+# Local AI agent working logs
+.ai-ops/
