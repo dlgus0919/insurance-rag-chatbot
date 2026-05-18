@@ -1,0 +1,39 @@
+단계,영역,툴/기술,용도,현재 상태
+Alpha,웹앱/UI,Streamlit,"챗봇 UI, 관리자 페이지, 로그인/대화 화면 구현",사용 중
+Alpha,인증,users.json + PBKDF2-SHA256,"직원/관리자 계정 관리, 비밀번호 해시 저장",사용 중
+Alpha,감사 로그,JSONL 로그,"로그인, 질문, 답변, 내보내기, 관리자 조회 이벤트 기록",사용 중
+Alpha,PDF 파싱,PyMuPDF / pdfplumber 계열,"네이티브 PDF 텍스트와 페이지 정보 추출",사용 중
+Alpha,청킹,자체 계층형 chunker,"문서명, 페이지, 조항, 코드 등 메타데이터 포함 청크 생성",사용 중
+Alpha,임베딩,BAAI/bge-m3,"Dense vector 검색용 문서/질의 임베딩 생성",사용 중
+Alpha,벡터DB,ChromaDB,"청크 벡터 인덱스 저장 및 Dense 검색",사용 중
+Alpha,키워드 검색,BM25 / rank_bm25 / kiwipiepy fallback,"코드와 키워드 기반 검색",사용 중
+Alpha,검색 결합,RRF,"Dense 검색과 BM25 결과 융합",사용 중
+Alpha,리랭킹,BAAI/bge-reranker-v2-m3,"검색 후보 재정렬",옵션 사용
+Alpha,LLM,Ollama,"로컬 LLM 답변 생성",로컬 사용
+Alpha,LLM,OpenAI API,"클라우드 LLM 답변 생성",클라우드 사용
+Alpha,OpenAI 모델,GPT-5.x 후보군,"클라우드 배포 시 외부 LLM 응답 생성",사용 중
+Alpha,대화 저장,data/chat_history,"사용자별 멀티 채팅 영속화",사용 중
+Alpha,평가,pytest,"단위/회귀 테스트 자동 검증",사용 중
+Alpha,평가,smoke QA / smoke_qa v2,"검색과 약관 정형 질의 품질 점검",사용 중
+Alpha,배포,Streamlit Cloud,"웹앱 클라우드 실행",사용 중
+Alpha,배포,GitHub Release assets,"클라우드 부팅 시 인덱스 자산 다운로드",사용 중
+Beta Stage 1,원본 보호,.gitignore,"PDF/XLSX/민감 산출물 Git 추적 방지",사용 중
+Beta Stage 1,원본 보호,scripts/check_raw_assets.py,"staged 원본 자료와 민감 산출물 커밋 차단",사용 중
+Beta Stage 1,관계형 DB,SQLite,"비급여 표준 모델 D8 적재",구축 완료
+Beta Stage 1,관계형 DB,src/db/standard_codes.py,"비급여 표준코드 조회",구축 완료
+Beta Stage 2,다중 약관,확장 PdfSource 메타데이터,"보험사, 자사 여부, 상품명, 상품 유형, 시행일 등 관리",반영 완료
+Beta Stage 2,다중 약관,scripts/ingest.py,"D3/D4 자사 약관 인덱싱, OCR 필요 문서 기본 제외",반영 완료
+Beta Stage 2,검색 필터,Chroma/청크 메타 기반 필터,"자사·타사, 상품 유형 필터 재도입 예정",재설계 필요
+Beta Stage 2,약관 비교,약관 비교 모드,"동일 보장종목을 여러 약관에서 비교",미구현
+Beta OCR,OCR 검증,EasyOCR,"D6/D7 스캔본 OCR 샘플 품질 확인",검증 완료
+Beta OCR,OCR 검증,Tesseract,"OCR 비교 후보",시스템 패키지 미설치로 미검증
+Beta OCR,OCR 파이프라인,PaddleOCR PP-Structure,"표, 텍스트, figure 영역 탐지",구현/검증 중
+Beta OCR,OCR 보강,Naver CLOVA OCR,"한글 OCR 및 native table 추출",샘플 검증 완료
+Beta OCR,하이브리드 OCR,True Hybrid,"PP-Structure 레이아웃과 CLOVA OCR 조합",구현/검증 중
+Beta OCR,OCR 후처리,ocr_postprocess.py,"한글 OCR 텍스트 보정",구현 완료
+Beta OCR,OCR 청킹,ocr_chunker.py,"OCR 추출물을 RAG 청크로 변환",구현 완료
+Beta OCR,OCR 결과 비교,HTML 비교 리포트,"OCR 결과 품질 시각 비교",사용 중
+Beta OCR,표 후처리,table_vision_cleaner,"다중 헤더와 표 구조 정리 실험",실험/개선 중
+Future,Graph,NetworkX / Neo4j 후보,"GraphDB 또는 GraphRAG PoC",평가 예정
+Future,보험금 계산,pandas DataFrame,"영수증/진단서/세부내역서 표 정규화",예정
+Future,보험금 계산,룰 엔진,"면·부책 판정과 보험금 계산 자동화",예정
