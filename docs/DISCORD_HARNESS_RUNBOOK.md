@@ -1,7 +1,8 @@
 # Discord Harness Runbook
 ## 1. Purpose
-Discord Harness는 Discord 서버에서 DGX Spark 운영 상태를 확인하고, 향후 공용 Codex/Claude wrapper를 안전하게 호출하기 위한 최소 봇이다.
-초기 MVP에서는 다음 명령을 활성화한다.
+Discord Harness는 Discord 서버에서 DGX Spark 운영 상태를 확인하고, 공용 Codex/Claude wrapper를 안전하게 호출하기 위한 봇이다.
+
+활성화된 명령:
 - `/help`
 - `/rag`
 - `/status`
@@ -9,10 +10,16 @@ Discord Harness는 Discord 서버에서 DGX Spark 운영 상태를 확인하고,
 - `/agent-policy`
 - `/workspace`
 - `/logs`
-다음 명령은 등록되어 있지만 MVP에서는 비활성화되어 있다.
 - `/codex`
 - `/claude`
-`ENABLE_AGENT_COMMANDS=false` 상태에서는 `/codex`, `/claude`를 실행해도 실제 agent wrapper가 호출되지 않는다.
+- `/codex-apply`
+- `/apply-from-workspace`
+- `/repo-diff`
+- `/repo-guard`
+
+`ENABLE_AGENT_COMMANDS=true` 상태에서 `/codex`, `/claude`, `/codex-apply`, `/apply-from-workspace`가 실제 agent wrapper를 호출한다.
+`/repo-diff`, `/repo-guard`는 ENABLE_AGENT_COMMANDS 여부와 관계없이 agent role이 있으면 실행 가능하다.
+
 ---
 ## 2. Runtime Paths
 ```text
@@ -30,6 +37,22 @@ Run script:
   /srv/ai-ops/bin/run-discord-harness
 Check script:
   /srv/ai-ops/bin/check-discord-harness
+
+Wrappers:
+  /srv/ai-ops/bin/codex-task          (read-only Codex)
+  /srv/ai-ops/bin/codex-apply-task    (Codex with workspace-write)
+  /srv/ai-ops/bin/claude-review       (Claude review)
+
+Logs by type:
+  /srv/ai-ops/logs/codex/             (codex-task 전체 로그)
+  /srv/ai-ops/logs/codex-apply/       (codex-apply-task 전체 로그)
+  /srv/ai-ops/logs/claude/            (claude-review 전체 로그)
+  /srv/ai-ops/logs/discord/           (Discord bot 로그)
+
+Shared repo:
+  /srv/shared/projects/insurance-rag-chatbot
+Team workspaces:
+  /srv/shared/workspaces/<user>/insurance-rag-chatbot
 ```
 ⸻
 
@@ -53,7 +76,7 @@ Discord Developer Portal에서 봇을 생성하고 서버에 초대한다.
 현재 MVP는 guild-scoped slash command로 동기화한다. 정상 동기화 시 로그에 다음이 표시된다.
 
 ```
-Synced 9 commands to guild <guild_id>
+Synced 13 commands to guild <guild_id>
 Logged in as <bot_name>
 Shard ID None has connected to Gateway
 ```
@@ -85,14 +108,16 @@ REPO_DIR
 INSURANCE_RAG_URL_HELP
 CHECK_INSURANCE_RAG
 CODEX_TASK
+CODEX_APPLY_TASK
 CLAUDE_REVIEW
+WORKSPACE_ROOT
 DISCORD_LOG_DIR
 ```
 
 값을 노출하지 않고 키만 확인:
 
 ```bash
-grep -nE 'DISCORD|ENABLE|REPO_DIR|CHECK|CODEX|CLAUDE' \
+grep -nE 'DISCORD|ENABLE|REPO_DIR|CHECK|CODEX|CLAUDE|WORKSPACE' \
   /srv/ai-ops/secrets/discord-harness/env.sh | sed 's/=.*/=<hidden>/'
 ```
 
@@ -158,7 +183,7 @@ Discord Harness 상태 확인:
 [1] Process
 ... /srv/ai-ops/discord-harness/.venv/bin/python bot.py
 [2] Log tail
-Synced 9 commands to guild ...
+Synced 13 commands to guild ...
 Logged in as ...
 Shard ID None has connected to Gateway ...
 ```
@@ -183,16 +208,7 @@ ssh -L 8501:localhost:8501 <user>@100.88.5.57 then open http://localhost:8501
 
 ### /workflow
 
-개인 에이전트와 공용 에이전트의 협업 흐름을 안내한다.
-
-요약:
-
-1. VS Code Remote SSH로 개인 DGX Linux 계정에 접속
-2. 개인 Codex/Claude Extension을 개인 계정/workspace에서 사용
-3. /srv/shared/workspaces/<user>/insurance-rag-chatbot 에서 작업
-4. 공용 운영 repo는 직접 수정하지 않음
-5. Discord에 branch/diff 요약 공유
-6. 공용 Claude/Codex wrapper가 리뷰 및 검증
+개인 에이전트와 공용 에이전트의 협업 흐름을 안내한다. (자세한 흐름은 [9. Recommended Workflow](#9-recommended-workflow) 참조)
 
 ### /agent-policy
 
@@ -243,31 +259,143 @@ Discord 메시지 길이 제한 때문에 긴 출력은 ...[truncated]로 잘릴
 
 ```
 Codex logs: /srv/ai-ops/logs/codex/
+Codex apply logs: /srv/ai-ops/logs/codex-apply/
 Claude logs: /srv/ai-ops/logs/claude/
 Discord logs: /srv/ai-ops/logs/discord/
 ```
 
-MVP에서는 보안상 로그 tail을 Discord에 출력하지 않는다.
+보안상 로그 tail을 Discord에 출력하지 않는다.
 
 ### /codex
 
-MVP에서는 비활성화되어 있다.
+**용도:**
+- read-only 조사, 요약, 계획, 리뷰 보조.
+- 파일 수정용으로 쓰지 않는다.
 
-정상 응답:
+**옵션:**
 
-```
-Agent commands are disabled in MVP.
-```
+| 옵션 | 필수 | 선택지 |
+|------|------|--------|
+| task | 필수 | (자유 텍스트) |
+| model | 선택 | gpt-5.5 (기본), gpt-5.4, gpt-5.3-codex |
+| reasoning | 선택 | minimal, low, medium, high (기본), xhigh |
+
+**정책:**
+- read-only wrapper `/srv/ai-ops/bin/codex-task` 호출.
+- 모델/추론 강도는 환경변수(`CODEX_MODEL`, `CODEX_REASONING_EFFORT`)로 wrapper에 전달.
+- 전체 exec 로그 대신 요약 결과와 로그 경로만 Discord에 표시.
+- 전체 로그는 `/srv/ai-ops/logs/codex/task_<timestamp>.log`에 저장.
 
 ### /claude
 
-MVP에서는 비활성화되어 있다.
+**용도:**
+- diff 리뷰, 운영 리스크 분석, 문서 검토, 커밋 가능성 판단.
+- 기본적으로 파일을 수정하지 않는다.
 
-정상 응답:
+**옵션:**
+
+| 옵션 | 필수 | 선택지 |
+|------|------|--------|
+| task | 필수 | (자유 텍스트) |
+| model | 선택 | sonnet (기본), opus, haiku |
+
+**로그:** `/srv/ai-ops/logs/claude/review_<timestamp>.log`
+
+내부적으로 최신 Codex 로그를 `.ai-ops/codex-logs/latest-codex.log`에 복사하여 Claude가 참조할 수 있게 한다.
+
+### /codex-apply
+
+**용도:**
+- 공용 운영 repo `/srv/shared/projects/insurance-rag-chatbot`를 직접 수정할 수 있는 Codex apply 명령.
+- 작은 코드 수정, 문서 수정, 팀 공용 repo 반영 작업에 사용.
+- 자동 commit/push는 하지 않는다.
+
+**옵션:**
+
+| 옵션 | 필수 | 선택지 |
+|------|------|--------|
+| task | 필수 | (자유 텍스트) |
+| model | 선택 | gpt-5.5 (기본), gpt-5.4, gpt-5.3-codex |
+| reasoning | 선택 | minimal, low, medium, high (기본), xhigh |
+
+**내부 동작:**
+- `/srv/ai-ops/bin/codex-apply-task` 호출.
+- `--sandbox workspace-write` 사용.
+- `--dangerously-bypass-approvals-and-sandbox`, `--yolo` 사용 금지.
+- 작업 전후 `git status --short`, `git diff --stat`, `git diff --name-only` 출력.
+- protected path guard 수행 (변경 감지 시 WARNING 표시).
+- 전체 로그는 `/srv/ai-ops/logs/codex-apply/apply_<timestamp>.log`에 저장.
+- Discord에는 `=== CODEX APPLY SUMMARY ===` 구간만 표시.
+
+**사용 후 필수 점검:**
+1. `/repo-diff` — 변경된 파일 확인
+2. `/repo-guard` — protected path 변경 확인
+3. 필요 시 `/claude` 리뷰
+
+### /apply-from-workspace
+
+**용도:**
+- 팀원 개인 workspace의 변경사항을 검토하고 공용 repo에 필요한 변경을 반영.
+- 핵심 통합 명령.
+
+**옵션:**
+
+| 옵션 | 필수 | 선택지 |
+|------|------|--------|
+| user | 필수 | DGX 계정명 |
+| task | 필수 | (자유 텍스트) |
+| branch | 선택 | 참조용 브랜치명 (자동 checkout 하지 않음) |
+| model | 선택 | gpt-5.5 (기본), gpt-5.4, gpt-5.3-codex |
+| reasoning | 선택 | minimal, low, medium, high (기본), xhigh |
+
+**source workspace:** `/srv/shared/workspaces/<user>/insurance-rag-chatbot`
+
+**정책:**
+- `branch`가 제공되어도 자동 checkout하지 않는다. 현재 브랜치와 비교 정보만 출력.
+- source workspace와 공용 repo 경로를 Codex에게 명확히 제공.
+- 필요한 변경만 공용 repo에 반영.
+- `git add`, `git commit`, `git push` 금지.
+- 실행 후 `/repo-diff`, `/repo-guard`, `/claude` 리뷰 권장.
+
+### /repo-diff
+
+**용도:** 공용 repo의 현재 변경 요약 확인.
+
+**출력:**
+- `git status --short`
+- `git diff --stat`
+- `git diff --name-only`
+
+Full diff는 Discord에 출력하지 않는다.
+
+### /repo-guard
+
+**용도:** 공용 repo의 현재 변경 중 protected path 변경 감지.
+
+**현재 protected path:**
 
 ```
-Agent commands are disabled in MVP.
+.env
+.env.*
+users.json
+users.json.tmp
+CLOVA_OCR_CUSTOM_API_EXTERNAL*.json
+raw/
+*.pdf
+*.xlsx
+*.xls
+data/extracted/
+data/extracted_v2_manual/
+data/index/
+data/chat_history/
+logs/
+.ai-ops/
+.venv/
 ```
+
+**주의:**
+- 현재 보류 중인 기존 변경(`data/index/bm25.pkl`)으로 인해 WARNING이 나오는 것은 예상된 상태다.
+- 새 protected path 변경이 감지되면 반드시 사람이 확인해야 한다.
 
 ⸻
 
@@ -314,32 +442,59 @@ exaone3.5:7.8b
 
 ## 9. Security Policy
 
-금지 사항:
+**허용:**
 
-* Discord에서 임의 shell command 실행
-* sudo 실행
-* secret/env 출력
-* Discord에 로그 전체 출력
-* 승인 없는 git push
-* 승인 없는 ingest/reindex 실행
-* 운영 데이터 삭제
-* Bot token을 채팅, Git, 문서에 기록
+- `/codex-apply`를 통한 공용 repo 파일 수정
+- `/apply-from-workspace`를 통한 팀원 workspace 변경 반영
+- 모델/추론 강도 선택
+- 공용 repo diff 요약 확인 (`/repo-diff`, `/repo-guard`)
 
-현재 MVP는 /codex, /claude를 비활성화하여 agent wrapper 실행을 막는다.
+**금지:**
 
-향후 활성화 전 확인할 사항:
+- Discord Bot을 통한 자동 `git add`
+- 자동 `git commit`
+- 자동 `git push`
+- secret/env 값 출력
+- raw PDF/XLSX 수정
+- generated index/data 임의 수정
+- `sudo`
+- `rm -rf`류 대규모 삭제
+- `--dangerously-bypass-approvals-and-sandbox`
+- `--yolo`
+- Bot token을 채팅, Git, 문서에 기록
+- Discord에 로그 전체 출력
 
-- ENABLE_AGENT_COMMANDS=true 전환 여부
-- 명령별 role 제한
-- timeout
-- 동시 실행 lock
-- 출력 마스킹
-- 로그 저장 위치
-- 실패 시 중단 정책
+**수정 후 원칙:**
+
+모든 파일 수정(`/codex-apply`, `/apply-from-workspace`)은 자동 commit 없이 종료된다.
+사람이 `/repo-diff`와 `/repo-guard`로 결과를 확인하고 commit 여부를 직접 판단한다.
 
 ⸻
 
-## 10. Troubleshooting
+## 10. Recommended Workflow
+
+### 개인 작업 → 공용 repo 반영 흐름
+
+1. 팀원이 VS Code Remote SSH에서 자기 workspace(`/srv/shared/workspaces/<user>/insurance-rag-chatbot`)에서 작업.
+2. 개인 Codex/Claude extension으로 구현 보조.
+3. Discord에 작업 요약 공유.
+4. `/apply-from-workspace user=<user> task="..."` 로 공용 repo 반영 요청.
+5. `/repo-diff` 로 변경 파일 확인.
+6. `/repo-guard` 로 protected path 확인.
+7. `/claude task="diff 리뷰"` 로 diff 리뷰.
+8. 사람이 최종 확인 후 수동 commit/push.
+
+### 공용 repo 직접 수정 흐름
+
+1. `/codex-apply task="..."` 로 작은 단위 수정 요청.
+2. `/repo-diff` 확인.
+3. `/repo-guard` 확인.
+4. `/claude task="diff 리뷰"` 리뷰.
+5. 사람이 수동 commit/push 판단.
+
+⸻
+
+## 11. Troubleshooting
 
 ### Slash commands do not appear
 
@@ -390,13 +545,38 @@ tmux new -s insurance-rag
 ### Token exposed
 
 1. Discord Developer Portal에서 Reset Token
-2. /srv/ai-ops/secrets/discord-harness/env.sh 업데이트
+2. `/srv/ai-ops/secrets/discord-harness/env.sh` 업데이트
 3. Bot 재시작
 4. 로그와 문서에 토큰이 남았는지 확인
 
+### /codex-apply 후 protected path warning이 나오는 경우
+
+- 기존 `data/index/bm25.pkl` warning은 현재 보류 중인 기존 변경으로 인해 예상 가능한 상태다.
+- 새로 추가된 protected path 변경이 있는지 확인한다.
+- 새 warning이 생겼다면 commit 전 반드시 사람이 직접 확인한다.
+
+### /apply-from-workspace가 source workspace를 못 찾는 경우
+
+- `/srv/shared/workspaces/<user>/insurance-rag-chatbot` 디렉터리가 존재하는지 확인한다.
+- 팀원이 자신의 계정으로 workspace를 생성했는지 확인한다.
+- `user` 옵션에 DGX 계정명을 정확히 입력했는지 확인한다.
+
+### Git dubious ownership 문제가 나는 경우
+
+- 팀원 workspace는 해당 팀원 계정으로 조작해야 한다.
+- 예: eundeo workspace는 eundeo 계정에서 작업.
+- 관리자가 임시 확인이 필요할 때만 `git config --global --add safe.directory` 추가 가능.
+
+### /codex-apply가 변경을 만들었지만 의도와 다를 경우
+
+- commit하지 않는다.
+- `/repo-diff`로 변경 내용을 확인한다.
+- 사람이 수동으로 수정하거나 `git checkout -- <file>`로 되돌린다.
+- 자동 revert는 현재 정책상 수행하지 않는다.
+
 ⸻
 
-## 11. MVP Completion Criteria
+## 12. MVP Completion Criteria
 
 Discord Harness MVP 완료 기준:
 
@@ -407,27 +587,38 @@ Discord Harness MVP 완료 기준:
 - /workspace responds
 - /status returns DGX health
 - /logs returns log directories
-- /codex returns disabled message
-- /claude returns disabled message
+- /codex runs read-only Codex task
+- /claude runs Claude review
+- /codex-apply applies task to shared repo (no auto-commit)
+- /apply-from-workspace applies workspace changes to shared repo (no auto-commit)
+- /repo-diff returns shared repo diff summary
+- /repo-guard detects protected path changes
 - tmux discord-harness session is running
-- check-discord-harness shows Synced 9 commands
+- check-discord-harness shows Synced 13 commands
 
-현재 MVP에서는 OpenClaw를 사용하지 않는다. OpenClaw 연동은 Discord Harness와 권한 정책이 안정화된 후 진행한다.
+현재 OpenClaw를 사용하지 않는다. OpenClaw 연동은 Discord Harness와 권한 정책이 안정화된 후 진행한다.
+systemd 전환은 하지 않고 tmux로 운영 중이다.
 
 ⸻
 
-## 12. Current Status
+## 13. Current Status
 
 As of 2026-05-18:
 
-```Plain text
-Bot invited to Discord server
-Slash commands synced: 9
-/status works
-/logs works
-Streamlit process running
-Ollama active
+```plain text
+Discord Harness MVP 완료
+공용 에이전트 명령 활성화 완료 (ENABLE_AGENT_COMMANDS=true)
+Slash commands synced: 13
+/codex 정상 (read-only)
+/claude 정상
+/codex-apply 정상 테스트 완료 (소규모 문서 생성)
+/apply-from-workspace 정상 테스트 완료 (팀원 workspace 변경 반영)
+/repo-diff 정상
+/repo-guard 정상
+  - data/index/bm25.pkl warning은 기존 변경으로 인해 예상된 상태
+Streamlit 정상
+Ollama 정상
 Chroma count: 7825
-Agent commands disabled
-OpenClaw not enabled
+OpenClaw 미적용
+systemd 전환 없음 (tmux 운영 중)
 ```
