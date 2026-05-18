@@ -1,19 +1,42 @@
-# 보험 문서 RAG 챗봇 (Alpha)
+# 보험 문서 RAG 챗봇 (Beta)
 
-1,429페이지 건강보험 고시 PDF를 로컬에서 검색하고 답변하는 RAG 챗봇입니다.  
-PDF 파싱, 계층형 청킹, BGE-M3 임베딩, ChromaDB, BM25, RRF 융합, Ollama LLM 호출로 구성됩니다.  
-현재 버전은 사용자 계정 로그인, 관리자 로그 대시보드, Ollama 로컬 모델, OpenAI API 모델 선택을 지원합니다.
+자사 약관·심평원 고시·실무가이드 등 보험 문서 7종을 검색하고 답변하는 RAG 챗봇입니다.  
+CLOVA OCR 파이프라인, BGE-M3 임베딩, ChromaDB, BM25, RRF 융합, Parquet 테이블 인덱스, Ollama/OpenAI LLM 호출로 구성됩니다.  
+현재 버전은 사용자 계정 로그인, 관리자 로그 대시보드, 사이드바 문서 필터, Ollama 로컬 모델, OpenAI API 모델 선택을 지원합니다.
 
-현재 단계: 베타 Stage 2 — D3·D4 자사 약관 인덱싱 + 사이드바 필터 보강.
+현재 단계: 베타 Stage 2 — D3·D4 자사 약관 인덱싱 **완료** / 사이드바 필터 보강 진행 중 (`feature/eundeo/apply-smoke-test`).
 
 원본 PDF/XLSX, OCR 추출본, 백업 자료는 GitHub에 절대 푸시하지 않습니다.
+
+## 현재 인덱스 현황
+
+| 문서 (doc_short) | 청크 수 | 비고 |
+|---|---|---|
+| 심평원 | 2,286 | 건강보험 요양급여 고시 |
+| 자사_SOL건강 | 1,494 | SOL건강보험 약관 (D3) |
+| 상담사례집 | 1,117 | 보험 분쟁 상담 사례 (OCR) |
+| 실무가이드 | 927 | 수술·장해 실무가이드 (OCR) |
+| 표준약관 | 856 | 표준 보험 약관 |
+| 자사_SOL운전자 | 761 | SOL운전자보험 약관 (D4) |
+| 약관 | 384 | 신한 이지로운 실손 약관 |
+| **합계** | **7,825** | ChromaDB + BM25 인덱스 |
+
+Parquet 테이블 인덱스: `data/index/surgery_grades.parquet` (2,408행), `data/index/disability_rates.parquet` (100행).
+
+## 운영 환경
+
+DGX Spark (`aitopatom-255d`, Tailscale `100.88.5.57`) 에서 팀 공용 서버로 운영합니다.  
+Streamlit은 `127.0.0.1:8501`에서 실행 중이며 SSH 터널로 팀원이 접속합니다.  
+Discord `#dgx-ops` 채널에서 `/status`, `/codex`, `/claude` 등 13개 명령으로 서버를 조작합니다.  
+운영 상세 절차는 `docs/DGX_SPARK_ENV_SETUP_20260518.md` 및 `docs/DISCORD_HARNESS_RUNBOOK.md`를 참고하세요.
 
 ## 사전 요구사항
 
 - Python 3.11 권장
 - macOS Apple Silicon 또는 Linux
 - Ollama 설치 및 실행
-- 기본 모델: `ollama pull qwen2.5:3b-instruct`
+- 권장 모델 (DGX 운영): `ollama pull exaone3.5:7.8b`
+- 최소 사양 (로컬): `ollama pull qwen2.5:3b-instruct`
 - Ollama 데스크톱 앱 실행 또는 `ollama serve`
 - BGE-M3 모델 사전 다운로드
 - OpenAI 모델을 사용할 경우 OpenAI API 키
@@ -39,8 +62,6 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-입력 PDF `BZ202603053039374.pdf`는 프로젝트 루트에 있어야 합니다.
-
 최초 실행 전 관리자 계정을 만듭니다.
 
 ```bash
@@ -58,8 +79,16 @@ python scripts/manage_users.py list
 
 ## 인덱싱
 
+일반 문서(PDF 텍스트 추출 가능):
+
 ```bash
 python scripts/ingest.py --stage all
+```
+
+OCR 문서(실무가이드·상담사례집) 포함:
+
+```bash
+python scripts/ingest.py --include-ocr --stage all
 ```
 
 단계별 실행도 가능합니다.
@@ -69,7 +98,13 @@ python scripts/ingest.py --stage chunks
 python scripts/ingest.py --stage index
 ```
 
-M4 Mac CPU 기준 BGE-M3 임베딩은 30분에서 수 시간까지 걸릴 수 있습니다. 한 번 생성된 `data/index/`는 재사용합니다.
+BGE-M3 임베딩은 DGX GPU 기준 수십 분, M4 Mac CPU 기준 수 시간까지 걸릴 수 있습니다. 한 번 생성된 `data/index/`는 재사용합니다.
+
+Parquet 테이블 인덱스 재생성 (OCR 데이터 변경 시):
+
+```bash
+python scripts/build_table_index.py
+```
 
 ## 실행
 
@@ -122,7 +157,20 @@ python scripts/ingest.py --cloud-only --stage all
 python scripts/eval.py
 ```
 
-평가 문항은 `eval/smoke_qa.jsonl`에 있으며, 코드 조회 5개와 의미 검색 5개로 구성됩니다. 기준은 retrieval recall@8 0.7 이상, 출처 페이지 정확도 0.6 이상입니다.
+평가 문항은 `eval/smoke_qa_v2.jsonl`에 있으며 10건(실손·상해·면책 시나리오)으로 구성됩니다. 기준은 retrieval recall@8 0.7 이상, 출처 페이지 정확도 0.6 이상입니다.
+
+OCR 문서(실무가이드·상담사례집) 포함 평가:
+
+```bash
+python scripts/eval.py --ocr
+```
+
+retrieval-only 평가 (Ollama 불필요):
+
+```bash
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 RERANKER_ENABLED=false \
+  OLLAMA_HOST=http://localhost:9 python scripts/eval.py --ocr
+```
 
 ## 트러블슈팅
 
@@ -140,15 +188,19 @@ Chroma 또는 BM25 인덱스 없음: `python scripts/ingest.py --stage index`를
 
 OpenAI 모델이 보이지 않음: `.env` 또는 클라우드 secrets에 `OPENAI_API_KEY`가 설정되어 있는지 확인하세요.
 
-## 알파 범위 외 / 베타 이월
+## 베타 이월 / 진행 중
 
-- OCR
-- bge-reranker-v2 리랭킹
-- 멀티턴 질의 재작성
-- 코드 정확매칭 우선 라우팅
-- 인덱스 버전 관리와 증분 업데이트
-- 세션 영속화와 사용자별 히스토리
-- LLM 7B/8B 업그레이드 평가
-- SSO/OAuth/OIDC
-- 클라우드 로그 영속 저장소 연동
-- Top-K·온도 자동 설정
+| 항목 | 상태 |
+|---|---|
+| 사이드바 필터 보강 (자사/타사 토글, 상품 유형) | 진행 중 (`feature/eundeo/apply-smoke-test`) |
+| smoke_qa_v2 recall 개선 (약관 청크 재분할) | 명세 완료 (#61), 착수 예정 |
+| Streamlit 수동 QA (S01~S14 시나리오) | `docs/59_STREAMLIT_OCR_QA_SCENARIO.md` |
+| 보험금 자동 계산 (Task 2) | 미착수, Parquet 데이터 활용 예정 |
+| unresolved 수술종수 셀 133개 수동 검토 | 미착수 |
+| bge-reranker-v2 리랭킹 | 미착수 |
+| 멀티턴 질의 재작성 | 미착수 |
+| 인덱스 버전 관리와 증분 업데이트 | 미착수 |
+| 세션 영속화와 사용자별 히스토리 | 미착수 |
+| SSO/OAuth/OIDC | 미착수 |
+| 클라우드 로그 영속 저장소 연동 | 미착수 |
+| Top-K·온도 자동 설정 | 미착수 |
