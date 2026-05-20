@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from src.llm import factory
@@ -42,7 +44,7 @@ def test_model_info_and_label_for_known_and_custom_models() -> None:
     assert info["family"] == "GPT-5"
     assert info["size"] == "mini"
     assert "Cloud · OpenAI · GPT-5 mini" in factory.format_model_label("gpt-5-mini", "openai")
-    assert "Local · SGLang · gpt-oss-20b" == factory.format_model_label("gpt-oss-20b", "sglang")
+    assert "Local · SGLang · GPT-OSS · 20B · 검증완료" == factory.format_model_label("gpt-oss-20b", "sglang")
     assert custom["use_case"] == "사용자 정의"
 
 
@@ -57,6 +59,9 @@ def test_list_available_models_respects_env(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
     monkeypatch.setattr(factory.config, "OFFLINE_MODE", False)
     monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", False)
 
     grouped = factory.list_available_models()
 
@@ -71,6 +76,9 @@ def test_list_available_models_hides_cloud_in_offline_mode(monkeypatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
     monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
     monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", False)
 
     assert factory.list_available_models() == {"sglang": ["gpt-oss-20b"], "ollama": [], "openai": []}
 
@@ -109,3 +117,42 @@ def test_build_llm_rejects_openai_without_key(monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         factory.build_llm("gpt-5-mini", provider="openai")
+
+
+def test_list_available_models_discovers_local_sglang_models(monkeypatch, tmp_path) -> None:
+    staged = tmp_path / "gemma-4-26b-a4b-nvfp4"
+    staged.mkdir()
+    (staged / "config.json").write_text("{}", encoding="utf-8")
+    (staged / "tokenizer.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", tmp_path)
+    monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", False)
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setenv("ALLOW_OLLAMA", "false")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+
+    grouped = factory.list_available_models()
+
+    assert grouped["sglang"] == ["gpt-oss-20b", "gemma-4-26b-a4b-nvfp4"]
+
+
+def test_strict_sglang_models_only_exposes_served_models(monkeypatch) -> None:
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
+    monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", True)
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b", "gemma-4-26b-a4b-nvfp4"])
+    monkeypatch.setattr(
+        factory.config,
+        "SGLANG_MODEL_ENDPOINTS",
+        {"gpt-oss-20b": "http://127.0.0.1:30000/v1", "gemma-4-26b-a4b-nvfp4": "http://127.0.0.1:30001/v1"},
+    )
+    monkeypatch.setattr(factory.config, "sglang_base_url_for_model", lambda model: factory.config.SGLANG_MODEL_ENDPOINTS.get(model, "http://127.0.0.1:30000/v1"))
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint: ["gpt-oss-20b"] if endpoint.endswith("30000/v1") else [])
+    monkeypatch.setenv("ALLOW_OLLAMA", "false")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+
+    grouped = factory.list_available_models()
+
+    assert grouped["sglang"] == ["gpt-oss-20b"]

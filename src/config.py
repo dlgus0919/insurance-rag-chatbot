@@ -178,6 +178,32 @@ SGLANG_CANDIDATE_MODELS: list[str] = [
     for model in os.getenv("SGLANG_CANDIDATE_MODELS", SGLANG_DEFAULT_MODEL).split(",")
     if model.strip()
 ]
+SGLANG_MODEL_DIR: Path = Path(os.getenv("SGLANG_MODEL_DIR", "/srv/ai-ops/llm/models"))
+SGLANG_STRICT_AVAILABLE_MODELS: bool = os.getenv("SGLANG_STRICT_AVAILABLE_MODELS", "false").lower() == "true"
+
+
+def _parse_sglang_model_endpoints(raw: str) -> dict[str, str]:
+    """Parse `model=http://host/v1,other=http://host2/v1` endpoint mapping."""
+
+    endpoints: dict[str, str] = {}
+    for item in raw.split(","):
+        if not item.strip() or "=" not in item:
+            continue
+        model, url = item.split("=", 1)
+        model = model.strip()
+        url = url.strip().rstrip("/")
+        if model and url:
+            endpoints[model] = url
+    return endpoints
+
+
+SGLANG_MODEL_ENDPOINTS: dict[str, str] = _parse_sglang_model_endpoints(os.getenv("SGLANG_MODEL_ENDPOINTS", ""))
+
+
+def sglang_base_url_for_model(model: str) -> str:
+    """Return the OpenAI-compatible endpoint for a SGLang served model."""
+
+    return SGLANG_MODEL_ENDPOINTS.get(model, SGLANG_BASE_URL).rstrip("/")
 OLLAMA_CANDIDATE_MODELS: list[str] = [
     "exaone3.5:7.8b",
     "exaone3.5:7.8b-instruct",

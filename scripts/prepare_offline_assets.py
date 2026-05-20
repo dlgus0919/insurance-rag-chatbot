@@ -11,9 +11,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ class SnapshotAsset:
     repo_id: str
     target: Path
     required_files: tuple[str, ...]
+    handoff_sources: tuple[Path, ...] = field(default_factory=tuple)
 
 
 @dataclass
@@ -41,6 +43,7 @@ DEFAULT_ROOT = Path("/srv/ai-ops")
 DEFAULT_ENV_PATH = DEFAULT_ROOT / "secrets" / "insurance-rag-chatbot" / "offline.env"
 DEFAULT_MANIFEST_PATH = DEFAULT_ROOT / "manifests" / "insurance-rag-offline-assets.json"
 DEFAULT_PROJECT_DIR = Path("/srv/shared/projects/insurance-rag-chatbot")
+DEFAULT_HANDOFF_DIR = DEFAULT_PROJECT_DIR / "handoff"
 
 
 def _asset_plan(root: Path) -> list[SnapshotAsset]:
@@ -58,13 +61,64 @@ def _asset_plan(root: Path) -> list[SnapshotAsset]:
             required_files=("config.json",),
         ),
         SnapshotAsset(
-            name="llm",
+            name="llm_gpt_oss",
             repo_id="openai/gpt-oss-20b",
             target=root / "llm" / "models" / "gpt-oss-20b",
             required_files=("config.json", "tokenizer.json"),
         ),
+        SnapshotAsset(
+            name="llm_gemma4_nvfp4",
+            repo_id="nvidia/Gemma-4-26B-A4B-NVFP4",
+            target=root / "llm" / "models" / "gemma-4-26b-a4b-nvfp4",
+            required_files=("config.json", "tokenizer.json", "model.safetensors.index.json", "chat_template.jinja", "hf_quant_config.json"),
+            handoff_sources=(
+                DEFAULT_HANDOFF_DIR / "llm_stage1_20260519" / "downloads" / "models" / "Gemma-4-26B-A4B-NVFP4",
+            ),
+        ),
     ]
 
+
+
+def _required_status_at(path: Path, required_files: tuple[str, ...]) -> dict[str, bool]:
+    return {name: (path / name).exists() for name in required_files}
+
+
+def _promote_handoff_snapshot(asset: SnapshotAsset, force: bool) -> AssetResult | None:
+    """Copy a complete handoff snapshot into the DGX runtime model directory."""
+
+    if force:
+        return None
+    for source in asset.handoff_sources:
+        source_status = _required_status_at(source, asset.required_files)
+        if not all(source_status.values()):
+            continue
+        asset.target.mkdir(parents=True, exist_ok=True)
+        try:
+            shutil.copytree(
+                source,
+                asset.target,
+                dirs_exist_ok=True,
+                ignore=shutil.ignore_patterns("._*", ".DS_Store"),
+            )
+        except OSError as exc:
+            return AssetResult(
+                name=asset.name,
+                repo_id=asset.repo_id,
+                target=str(asset.target),
+                status="failed",
+                required_files_present=_required_status(asset),
+                error=f"failed to promote handoff source {source}: {exc}",
+            )
+        promoted_status = _required_status(asset)
+        return AssetResult(
+            name=asset.name,
+            repo_id=asset.repo_id,
+            target=str(asset.target),
+            status="promoted_handoff" if all(promoted_status.values()) else "incomplete",
+            required_files_present=promoted_status,
+            error=None if all(promoted_status.values()) else f"handoff promotion incomplete from {source}",
+        )
+    return None
 
 def _required_status(asset: SnapshotAsset) -> dict[str, bool]:
     return {name: (asset.target / name).exists() for name in asset.required_files}
@@ -81,6 +135,10 @@ def _download_snapshot(asset: SnapshotAsset, force: bool) -> AssetResult:
             status="skipped_existing",
             required_files_present=before,
         )
+
+    promoted = _promote_handoff_snapshot(asset, force=force)
+    if promoted is not None and promoted.status != "failed":
+        return promoted
 
     try:
         from huggingface_hub import snapshot_download
@@ -179,7 +237,9 @@ def _write_offline_env(root: Path, env_path: Path) -> dict[str, str]:
         "SGLANG_API_KEY": "EMPTY",
         "SGLANG_DEFAULT_MODEL": "gpt-oss-20b",
         "SGLANG_REASONING_EFFORT": "low",
-        "SGLANG_CANDIDATE_MODELS": "gpt-oss-20b",
+        "SGLANG_CANDIDATE_MODELS": "gpt-oss-20b,gemma-4-26b-a4b-nvfp4",
+        "SGLANG_MODEL_ENDPOINTS": "gpt-oss-20b=http://127.0.0.1:30000/v1,gemma-4-26b-a4b-nvfp4=http://127.0.0.1:30001/v1",
+        "SGLANG_STRICT_AVAILABLE_MODELS": "true",
         "LOCAL_LLM_PROVIDER": "sglang",
         "ALLOW_OLLAMA": "true",
         "OLLAMA_HOST": "http://127.0.0.1:11434",
@@ -262,14 +322,14 @@ def main() -> int:
     parser.add_argument("--manifest-path", type=Path, default=DEFAULT_MANIFEST_PATH)
     parser.add_argument("--project-dir", type=Path, default=DEFAULT_PROJECT_DIR)
     parser.add_argument("--force", action="store_true", help="Re-download assets even when required files exist.")
-    parser.add_argument("--skip-llm", action="store_true", help="Skip the GPT-OSS model snapshot download/verification.")
+    parser.add_argument("--skip-llm", action="store_true", help="Skip all LLM snapshot downloads/verification.")
     parser.add_argument("--no-verify-load", action="store_true", help="Skip local_files_only load checks.")
     args = parser.parse_args()
 
     root = args.root
     assets = _asset_plan(root)
     if args.skip_llm:
-        assets = [asset for asset in assets if asset.name != "llm"]
+        assets = [asset for asset in assets if not asset.name.startswith("llm_")]
 
     print(f"[INFO] offline asset root: {root}", flush=True)
     results: list[AssetResult] = []

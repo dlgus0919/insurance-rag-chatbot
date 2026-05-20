@@ -39,7 +39,7 @@ class OpenAICompatibleClient:
         provider: str = "sglang",
     ):
         self.model = model
-        self.base_url = (base_url or config.SGLANG_BASE_URL).rstrip("/")
+        self.base_url = (base_url or config.sglang_base_url_for_model(model)).rstrip("/")
         self.api_key = api_key if api_key is not None else config.SGLANG_API_KEY
         self.max_tokens = max_tokens or config.OPENAI_MAX_TOKENS
         self.provider = provider
@@ -139,9 +139,15 @@ class OpenAICompatibleClient:
             raise RuntimeError(f"SGLang 스트림 호출 실패: {exc}") from exc
 
     def list_models(self) -> list[str]:
-        """Return configured candidate models; avoids requiring the server during UI startup."""
+        """Return model IDs reported by the configured endpoint."""
 
-        return list(config.SGLANG_CANDIDATE_MODELS)
+        try:
+            response = requests.get(f"{self.base_url}/models", headers=self._headers(), timeout=5)
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError):
+            return []
+        return [item.get("id") for item in payload.get("data", []) if item.get("id")]
 
     def health(self) -> bool:
         """Return whether the OpenAI-compatible /models endpoint is reachable."""

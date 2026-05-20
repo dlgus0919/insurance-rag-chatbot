@@ -42,7 +42,9 @@ def load_pipeline() -> RagPipeline:
 
     if not config.BM25_PATH.exists():
         raise RuntimeError("BM25 인덱스가 없습니다. `python scripts/ingest.py --stage index`를 먼저 실행하세요.")
-    llm = build_llm(config.SGLANG_DEFAULT_MODEL, provider=os.getenv("LOCAL_LLM_PROVIDER", "ollama"))
+    selected_provider = os.getenv("LOCAL_LLM_PROVIDER", "sglang")
+    selected_model = config.SGLANG_DEFAULT_MODEL if selected_provider == "sglang" else config.OLLAMA_MODEL
+    llm = build_llm(selected_model, provider=selected_provider)
     health = getattr(llm, "health", lambda: True)
     if not health():
         raise RuntimeError("선택된 LLM provider에 연결할 수 없습니다. SGLang 또는 Ollama 서버 상태를 확인하세요.")

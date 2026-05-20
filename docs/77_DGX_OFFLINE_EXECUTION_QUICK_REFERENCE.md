@@ -114,3 +114,25 @@ For each new model, record:
 - memory pressure and restart/OOM behavior
 
 Gemma-family NVFP4 models should be treated as SGLang-first candidates until an Ollama-compatible GGUF or Modelfile path is separately validated.
+
+## Gemma4 SGLang Candidate
+
+`nvidia/Gemma-4-26B-A4B-NVFP4` handoff assets are promoted to:
+
+```text
+/srv/ai-ops/llm/models/gemma-4-26b-a4b-nvfp4
+```
+
+The default UI uses `SGLANG_STRICT_AVAILABLE_MODELS=true`, so Gemma4 is shown only when its SGLang endpoint is actually running. To run Gemma4 for a controlled smoke test, stop or avoid competing large SGLang sessions first, then start:
+
+```bash
+/srv/ai-ops/bin/run-sglang-gemma4-local
+```
+
+In another shell:
+
+```bash
+SGLANG_BASE_URL=http://127.0.0.1:30001/v1 SGLANG_DEFAULT_MODEL=gemma-4-26b-a4b-nvfp4 /srv/ai-ops/bin/check-sglang-local
+```
+
+For Streamlit A/B tests, keep `gpt-oss-20b` on port `30000` and Gemma4 on port `30001` only if memory pressure is acceptable. Otherwise run them one at a time and compare saved answers/logs.

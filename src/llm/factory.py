@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import os
+from collections import OrderedDict
+
+import requests
 
 from src import config
 from src.llm.base import LLMClient
@@ -21,6 +24,94 @@ PROVIDER_LABELS: dict[str, str] = {
     "ollama": "Local · Ollama",
     "openai": "Cloud · OpenAI",
 }
+
+SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
+    "gpt-oss-20b": {
+        "family": "GPT-OSS",
+        "size": "20B",
+        "status": "validated",
+        "use_case": "기본 로컬 답변",
+    },
+    "gemma-4-26b-a4b-nvfp4": {
+        "family": "Gemma 4",
+        "size": "26B A4B NVFP4",
+        "status": "staged",
+        "use_case": "고성능 후보",
+    },
+}
+
+
+def _ordered_unique(items: list[str]) -> list[str]:
+    """Return items without duplicates while preserving order."""
+
+    return list(OrderedDict((item, None) for item in items if item).keys())
+
+
+def _discover_local_sglang_models() -> list[str]:
+    """Discover locally staged SGLang model directories."""
+
+    model_dir = config.SGLANG_MODEL_DIR
+    if not model_dir.exists():
+        return []
+    discovered: list[str] = []
+    for child in sorted(model_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        if (child / "config.json").exists() and (child / "tokenizer.json").exists():
+            discovered.append(child.name)
+    return discovered
+
+
+def _configured_sglang_models() -> list[str]:
+    """Return all configured or locally staged SGLang model names."""
+
+    return _ordered_unique(
+        [config.SGLANG_DEFAULT_MODEL]
+        + list(config.SGLANG_CANDIDATE_MODELS)
+        + list(config.SGLANG_MODEL_ENDPOINTS.keys())
+        + _discover_local_sglang_models()
+    )
+
+
+def _served_models_for_endpoint(base_url: str) -> list[str]:
+    """Return model IDs advertised by a SGLang/OpenAI-compatible endpoint."""
+
+    try:
+        response = requests.get(f"{base_url.rstrip('/')}/models", headers={"Authorization": "Bearer EMPTY"}, timeout=1.5)
+        response.raise_for_status()
+    except requests.RequestException:
+        return []
+    try:
+        payload = response.json()
+    except ValueError:
+        return []
+    models = []
+    for item in payload.get("data", []):
+        model_id = item.get("id")
+        if model_id:
+            models.append(model_id)
+    return models
+
+
+def _available_sglang_models() -> list[str]:
+    """Return SGLang models that should be exposed in the UI."""
+
+    candidates = _configured_sglang_models()
+    if not config.SGLANG_STRICT_AVAILABLE_MODELS:
+        return candidates
+
+    served_by_endpoint: dict[str, list[str]] = {}
+    for model in candidates:
+        endpoint = config.sglang_base_url_for_model(model)
+        served_by_endpoint.setdefault(endpoint, _served_models_for_endpoint(endpoint))
+
+    available: list[str] = []
+    for model in candidates:
+        served = served_by_endpoint.get(config.sglang_base_url_for_model(model), [])
+        if model in served:
+            available.append(model)
+    return _ordered_unique(available)
+
 
 
 def parse_openai_candidate_models(raw: str | None, default: list[str] | None = None) -> list[str]:
@@ -107,6 +198,10 @@ def format_model_label(model: str, provider: str) -> str:
         suffix = f" {info['size']}" if info["size"] != "standard" else ""
         return f"Cloud · OpenAI · {info['family']}{suffix} · {info['use_case']}"
     if provider == "sglang":
+        info = SGLANG_MODEL_INFO.get(normalized)
+        if info:
+            status = "검증완료" if info["status"] == "validated" else "검증대상"
+            return f"Local · SGLang · {info['family']} · {info['size']} · {status}"
         return f"Local · SGLang · {normalized}"
     return f"Local · Ollama · {normalized}"
 
@@ -114,7 +209,7 @@ def format_model_label(model: str, provider: str) -> str:
 def list_available_models() -> dict[str, list[str]]:
     """Return model candidates grouped by provider."""
 
-    grouped: dict[str, list[str]] = {"sglang": list(config.SGLANG_CANDIDATE_MODELS), "ollama": [], "openai": []}
+    grouped: dict[str, list[str]] = {"sglang": _available_sglang_models(), "ollama": [], "openai": []}
     if is_ollama_allowed():
         try:
             installed = set(OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL).list_models())
