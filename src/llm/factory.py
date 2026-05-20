@@ -35,8 +35,8 @@ SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
     "gemma-4-26b-a4b-nvfp4": {
         "family": "Gemma 4",
         "size": "26B A4B NVFP4",
-        "status": "staged",
-        "use_case": "고성능 후보",
+        "status": "disabled",
+        "use_case": "SGLang 비활성: NVFP4/vLLM 후보",
     },
 }
 
@@ -62,15 +62,22 @@ def _discover_local_sglang_models() -> list[str]:
     return discovered
 
 
+def is_sglang_model_disabled(model: str) -> bool:
+    """Return whether a staged model is blocked for the current SGLang runtime."""
+
+    return normalize_model_id(model) in config.SGLANG_DISABLED_MODELS
+
+
 def _configured_sglang_models() -> list[str]:
     """Return all configured or locally staged SGLang model names."""
 
-    return _ordered_unique(
+    candidates = _ordered_unique(
         [config.SGLANG_DEFAULT_MODEL]
         + list(config.SGLANG_CANDIDATE_MODELS)
         + list(config.SGLANG_MODEL_ENDPOINTS.keys())
         + _discover_local_sglang_models()
     )
+    return [model for model in candidates if not is_sglang_model_disabled(model)]
 
 
 def _served_models_for_endpoint(base_url: str) -> list[str]:
@@ -206,7 +213,8 @@ def format_model_label(model: str, provider: str) -> str:
     if provider == "sglang":
         info = SGLANG_MODEL_INFO.get(normalized)
         if info:
-            status = "검증완료" if info["status"] == "validated" else "검증대상"
+            status_labels = {"validated": "검증완료", "staged": "검증대상", "disabled": "비활성"}
+            status = status_labels.get(info["status"], "검증대상")
             return f"Local · SGLang · {info['family']} · {info['size']} · {status}"
         return f"Local · SGLang · {normalized}"
     return f"Local · Ollama · {normalized}"
@@ -234,6 +242,11 @@ def build_llm(model: str, provider: str | None = None) -> LLMClient:
 
     selected_provider, selected_model = split_model_selection(model, provider)
     if selected_provider == "sglang":
+        if is_sglang_model_disabled(selected_model):
+            raise RuntimeError(
+                f"{selected_model} 모델은 현재 SGLang 런타임에서 비활성화되어 있습니다. "
+                "직접 생성 테스트에서 <pad> 반복이 발생했으므로 gpt-oss-20b 또는 별도 vLLM 검증 경로를 사용하세요."
+            )
         from src.llm.openai_compatible_client import OpenAICompatibleClient
 
         return OpenAICompatibleClient(selected_model)

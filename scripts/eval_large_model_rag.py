@@ -29,7 +29,11 @@ from src.retrieval.vector_store import VectorStore
 
 DEFAULT_CASE_PATH = ROOT / "eval" / "large_model_rag_qa.jsonl"
 DEFAULT_REPORT_DIR = ROOT / "reports" / "large_model_rag_eval"
-DEFAULT_MODELS = "gpt-oss-20b,gemma-4-26b-a4b-nvfp4"
+DEFAULT_MODELS = ",".join(
+    model
+    for model in (config.SGLANG_CANDIDATE_MODELS or [config.SGLANG_DEFAULT_MODEL])
+    if model not in config.SGLANG_DISABLED_MODELS
+) or config.SGLANG_DEFAULT_MODEL
 PAD_RE = re.compile(r"(?:<pad>\s*){3,}")
 SOURCE_RE = re.compile(r"\[출처:")
 

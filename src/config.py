@@ -178,6 +178,13 @@ SGLANG_CANDIDATE_MODELS: list[str] = [
     for model in os.getenv("SGLANG_CANDIDATE_MODELS", SGLANG_DEFAULT_MODEL).split(",")
     if model.strip()
 ]
+# `nvidia/Gemma-4-26B-A4B-NVFP4` is a vLLM-oriented NVFP4 checkpoint.
+# On the current native SGLang stack it serves but generates repeated <pad> tokens.
+SGLANG_DISABLED_MODELS: set[str] = {
+    model.strip()
+    for model in os.getenv("SGLANG_DISABLED_MODELS", "gemma-4-26b-a4b-nvfp4").split(",")
+    if model.strip()
+}
 SGLANG_MODEL_DIR: Path = Path(os.getenv("SGLANG_MODEL_DIR", "/srv/ai-ops/llm/models"))
 SGLANG_STRICT_AVAILABLE_MODELS: bool = os.getenv("SGLANG_STRICT_AVAILABLE_MODELS", "false").lower() == "true"
 SGLANG_ENABLE_APP_SWITCH: bool = os.getenv("SGLANG_ENABLE_APP_SWITCH", "true").lower() == "true"

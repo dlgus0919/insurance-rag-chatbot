@@ -62,6 +62,7 @@ def test_list_available_models_respects_env(monkeypatch) -> None:
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
     monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", False)
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
 
     grouped = factory.list_available_models()
 
@@ -79,6 +80,7 @@ def test_list_available_models_hides_cloud_in_offline_mode(monkeypatch) -> None:
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
     monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", False)
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
 
     assert factory.list_available_models() == {"sglang": ["gpt-oss-20b"], "ollama": [], "openai": []}
 
@@ -130,6 +132,7 @@ def test_list_available_models_discovers_local_sglang_models(monkeypatch, tmp_pa
     monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
     monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
     monkeypatch.setenv("ALLOW_OLLAMA", "false")
     monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
 
@@ -138,9 +141,32 @@ def test_list_available_models_discovers_local_sglang_models(monkeypatch, tmp_pa
     assert grouped["sglang"] == ["gpt-oss-20b", "gemma-4-26b-a4b-nvfp4"]
 
 
+def test_disabled_sglang_models_are_hidden_and_rejected(monkeypatch, tmp_path) -> None:
+    staged = tmp_path / "gemma-4-26b-a4b-nvfp4"
+    staged.mkdir()
+    (staged / "config.json").write_text("{}", encoding="utf-8")
+    (staged / "tokenizer.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", tmp_path)
+    monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", False)
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b", "gemma-4-26b-a4b-nvfp4"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", {"gemma-4-26b-a4b-nvfp4"})
+    monkeypatch.setenv("ALLOW_OLLAMA", "false")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+
+    grouped = factory.list_available_models()
+
+    assert grouped["sglang"] == ["gpt-oss-20b"]
+    with pytest.raises(RuntimeError, match="비활성화"):
+        factory.build_llm("gemma-4-26b-a4b-nvfp4", provider="sglang")
+
+
 def test_strict_sglang_models_only_exposes_served_models(monkeypatch) -> None:
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
     monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", True)
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
     monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
     monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b", "gemma-4-26b-a4b-nvfp4"])
     monkeypatch.setattr(

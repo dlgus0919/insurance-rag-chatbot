@@ -29,13 +29,15 @@ source .venv/bin/activate
 python scripts/eval_large_model_rag.py --models gpt-oss-20b --no-switch
 ```
 
-운영 wrapper로 두 모델을 순차 전환하며 평가:
+기본 후보 모델 평가:
 
 ```bash
 cd /srv/shared/projects/insurance-rag-chatbot
 source .venv/bin/activate
-python scripts/eval_large_model_rag.py   --models gpt-oss-20b,gemma-4-26b-a4b-nvfp4
+python scripts/eval_large_model_rag.py
 ```
+
+`gemma-4-26b-a4b-nvfp4`는 현재 native SGLang 경로에서 `<pad>` 반복을 반환해 기본 후보에서 제외한다. 재검증이 필요하면 `SGLANG_DISABLED_MODELS=`로 명시적으로 해제한 별도 실험 환경에서만 실행한다.
 
 빠른 부분 평가:
 
