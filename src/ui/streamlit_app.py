@@ -7,6 +7,7 @@ import io
 import json
 import logging as _logging
 import os
+import subprocess
 import re as _re
 import sys
 import time
@@ -14,6 +15,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import requests
 import streamlit as st
 
 _logging.getLogger("transformers.utils.versions").setLevel(_logging.ERROR)
@@ -26,7 +28,7 @@ if str(ROOT) not in sys.path:
 from src import config
 from src.auth import users as user_store
 from src.auth.users import ROLE_ADMIN
-from src.llm.factory import build_llm, format_model_label, get_openai_model_info, is_openai_model, list_available_models, provider_prefixed_model, split_model_selection
+from src.llm.factory import build_llm, format_model_label, get_openai_model_info, is_openai_model, list_available_models, list_sglang_large_models, provider_prefixed_model, split_model_selection
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.rag.insurance_form import (
     COVERAGE_TOPICS,
@@ -120,6 +122,75 @@ def _ensure_session_id() -> str:
         st.session_state.session_id = str(uuid.uuid4())[:8]
     return st.session_state.session_id
 
+
+
+def _served_sglang_models() -> list[str]:
+    """Return models currently served by the single SGLang slot."""
+
+    try:
+        response = requests.get(f"{config.SGLANG_BASE_URL.rstrip('/')}/models", timeout=2)
+        response.raise_for_status()
+        payload = response.json()
+    except (requests.RequestException, ValueError):
+        return []
+    return [item.get("id") for item in payload.get("data", []) if item.get("id")]
+
+
+def _switch_sglang_model(model: str) -> None:
+    """Switch the single local SGLang slot to an allowed large model."""
+
+    allowed = set(list_sglang_large_models())
+    if model not in allowed:
+        raise RuntimeError(f"허용되지 않은 SGLang 모델입니다: {model}")
+    if not config.SGLANG_ENABLE_APP_SWITCH:
+        raise RuntimeError("앱 기반 SGLang 모델 전환이 비활성화되어 있습니다.")
+    if not config.SGLANG_SWITCH_SCRIPT.exists():
+        raise RuntimeError(f"SGLang 전환 스크립트가 없습니다: {config.SGLANG_SWITCH_SCRIPT}")
+
+    try:
+        completed = subprocess.run(
+            [str(config.SGLANG_SWITCH_SCRIPT), model],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=config.SGLANG_SWITCH_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"SGLang 모델 로딩 시간이 초과되었습니다: {model}") from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()[-1200:]
+        raise RuntimeError(f"SGLang 모델 전환 실패: {model}\n{detail}")
+
+
+def _ensure_selected_large_model_ready() -> None:
+    """Load the login-selected large SGLang model before the chat UI is used."""
+
+    if config.CLOUD_DEPLOY:
+        return
+    models = list_sglang_large_models()
+    if not models:
+        return
+    selected = st.session_state.get("selected_large_model") or config.SGLANG_DEFAULT_MODEL
+    if selected not in models:
+        selected = config.SGLANG_DEFAULT_MODEL if config.SGLANG_DEFAULT_MODEL in models else models[0]
+        st.session_state.selected_large_model = selected
+
+    served = _served_sglang_models()
+    if selected in served:
+        st.session_state.loaded_large_model = selected
+        return
+
+    with st.spinner(f"대형 로컬 모델을 로딩 중입니다: {format_model_label(selected, 'sglang')}"):
+        _switch_sglang_model(selected)
+    try:
+        _get_available_models_grouped.clear()
+    except AttributeError:
+        pass
+    try:
+        _load_llm.clear()
+    except AttributeError:
+        pass
+    st.session_state.loaded_large_model = selected
 
 def _admin_bootstrap_message() -> str:
     """관리자 계정 부트스트랩 안내 문구를 반환한다."""
@@ -215,9 +286,23 @@ def _check_auth(session_id: str) -> bool:
         )
         st.markdown("---")
         st.subheader("🔐 로그인")
+        large_models = list_sglang_large_models()
+        selected_large_model = None
+        if large_models:
+            default_large = st.session_state.get("selected_large_model") or config.SGLANG_DEFAULT_MODEL
+            default_index = large_models.index(default_large) if default_large in large_models else 0
+            selected_large_model = st.selectbox(
+                "대형 로컬 모델",
+                large_models,
+                index=default_index,
+                format_func=lambda model: format_model_label(model, "sglang"),
+                help="로그인 후 선택한 SGLang 모델 1개만 로딩합니다.",
+            )
         username = st.text_input("사용자명", placeholder="사용자명")
         password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
         if st.button("로그인", use_container_width=True, type="primary"):
+            if selected_large_model:
+                st.session_state.selected_large_model = selected_large_model
             user = user_store.authenticate(username.strip(), password)
             if user is None:
                 st.error("사용자명 또는 비밀번호가 올바르지 않습니다.")
@@ -892,6 +977,12 @@ def main() -> None:
     if not _check_auth(session_id):
         st.stop()
 
+    try:
+        _ensure_selected_large_model_ready()
+    except RuntimeError as exc:
+        st.error(str(exc))
+        st.stop()
+
     user_id = st.session_state.get("user_id", "")
     if "chat_list" not in st.session_state:
         st.session_state.chat_list = list_user_chats(user_id)
@@ -910,6 +1001,8 @@ def main() -> None:
         role = st.session_state.get("user_role", "")
         role_label = "관리자" if role == ROLE_ADMIN else "직원"
         st.markdown(f"**{display}** · _{role_label}_")
+        if st.session_state.get("selected_large_model"):
+            st.caption(f"대형 모델: {format_model_label(st.session_state.selected_large_model, 'sglang')}")
         if st.button("로그아웃", use_container_width=True):
             _log(EVENT_LOGOUT)
             for key in (
@@ -921,6 +1014,7 @@ def main() -> None:
                 "last_debug",
                 "current_chat_id",
                 "chat_list",
+                "loaded_large_model",
             ):
                 st.session_state.pop(key, None)
             st.rerun()

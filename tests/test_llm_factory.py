@@ -156,3 +156,9 @@ def test_strict_sglang_models_only_exposes_served_models(monkeypatch) -> None:
     grouped = factory.list_available_models()
 
     assert grouped["sglang"] == ["gpt-oss-20b"]
+
+
+def test_extract_final_content_strips_pad_tokens() -> None:
+    from src.llm.openai_compatible_client import _extract_final_content
+
+    assert _extract_final_content("<pad><pad>완료<pad>") == "완료"

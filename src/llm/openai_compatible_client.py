@@ -12,7 +12,7 @@ from src import config
 
 DEFAULT_TIMEOUT = 120
 FINAL_MARKER_RE = re.compile(r"<\|channel\|>final<\|message\|>")
-HARMONY_TOKEN_RE = re.compile(r"<\|(?:channel|message|end|start|return)\|>")
+HARMONY_TOKEN_RE = re.compile(r"<\|(?:channel|message|end|start|return)\|>|<pad>")
 
 
 def _extract_final_content(content: str) -> str:

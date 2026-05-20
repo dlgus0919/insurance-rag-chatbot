@@ -93,6 +93,12 @@ def _served_models_for_endpoint(base_url: str) -> list[str]:
     return models
 
 
+def list_sglang_large_models() -> list[str]:
+    """Return configured large SGLang models, including staged local assets."""
+
+    return _configured_sglang_models()
+
+
 def _available_sglang_models() -> list[str]:
     """Return SGLang models that should be exposed in the UI."""
 
@@ -147,7 +153,7 @@ def split_model_selection(selection: str, default_provider: str | None = None) -
     if default_provider is not None:
         return default_provider, normalize_model_id(selection)
     normalized = normalize_model_id(selection)
-    if normalized.startswith("gpt-") and normalized not in config.SGLANG_CANDIDATE_MODELS:
+    if normalized.startswith("gpt-") and normalized not in list_sglang_large_models():
         return "openai", normalized
     return "ollama", selection
 
@@ -162,7 +168,7 @@ def is_openai_model(model: str) -> bool:
         normalized = model
     else:
         normalized = normalize_model_id(model)
-    return normalized.startswith("gpt-") and normalized not in config.SGLANG_CANDIDATE_MODELS
+    return normalized.startswith("gpt-") and normalized not in list_sglang_large_models()
 
 
 def is_ollama_allowed() -> bool:

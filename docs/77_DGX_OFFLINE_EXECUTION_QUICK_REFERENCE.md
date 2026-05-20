@@ -136,3 +136,14 @@ SGLANG_BASE_URL=http://127.0.0.1:30001/v1 SGLANG_DEFAULT_MODEL=gemma-4-26b-a4b-n
 ```
 
 For Streamlit A/B tests, keep `gpt-oss-20b` on port `30000` and Gemma4 on port `30001` only if memory pressure is acceptable. Otherwise run them one at a time and compare saved answers/logs.
+
+## Login-time Large Model Loading
+
+The app uses one SGLang serving slot for large local models. At login, choose the large SGLang model to load:
+
+- `gpt-oss-20b`: current validated default.
+- `gemma-4-26b-a4b-nvfp4`: staged Gemma4 NVFP4 candidate for runtime testing.
+
+After successful login, Streamlit calls `/srv/ai-ops/bin/switch-sglang-model <model>` with an allowlisted model name. This avoids running arbitrary shell commands from the app. Ollama remains selectable from the sidebar for small/local fallback models such as `exaone3.5:7.8b`.
+
+Gemma4 currently loads on SGLang only after a local SGLang runtime patch for the NVFP4 `gelu` activation mapping. It reaches `/v1/chat/completions`, but first smoke output currently repeats `<pad>` tokens, so it is exposed as a validation candidate rather than a production default.

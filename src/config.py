@@ -180,6 +180,9 @@ SGLANG_CANDIDATE_MODELS: list[str] = [
 ]
 SGLANG_MODEL_DIR: Path = Path(os.getenv("SGLANG_MODEL_DIR", "/srv/ai-ops/llm/models"))
 SGLANG_STRICT_AVAILABLE_MODELS: bool = os.getenv("SGLANG_STRICT_AVAILABLE_MODELS", "false").lower() == "true"
+SGLANG_ENABLE_APP_SWITCH: bool = os.getenv("SGLANG_ENABLE_APP_SWITCH", "true").lower() == "true"
+SGLANG_SWITCH_SCRIPT: Path = Path(os.getenv("SGLANG_SWITCH_SCRIPT", "/srv/ai-ops/bin/switch-sglang-model"))
+SGLANG_SWITCH_TIMEOUT: int = int(os.getenv("SGLANG_SWITCH_TIMEOUT", "900"))
 
 
 def _parse_sglang_model_endpoints(raw: str) -> dict[str, str]:
