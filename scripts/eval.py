@@ -16,7 +16,7 @@ if str(ROOT) not in sys.path:
 
 from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
-from src.llm.ollama_client import OllamaClient
+from src.llm.factory import build_llm
 from src.parser.chunker import Chunk
 from src.rag.pipeline import RagPipeline, _build_structured_context
 from src.retrieval.bm25 import BM25Index
@@ -187,15 +187,17 @@ def main() -> None:
     if not config.BM25_PATH.exists():
         raise SystemExit("BM25 인덱스가 없습니다. `python scripts/ingest.py --stage index`를 먼저 실행하세요.")
 
-    llm = OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL)
+    selected_provider = os.getenv("LOCAL_LLM_PROVIDER", "ollama")
+    selected_model = config.SGLANG_DEFAULT_MODEL if selected_provider == "sglang" else config.OLLAMA_MODEL
+    llm = build_llm(selected_model, provider=selected_provider)
     eval_temperature = float(os.getenv("OLLAMA_TEMPERATURE", "0"))
-    llm_available = llm.health()
+    llm_available = getattr(llm, "health", lambda: True)()
     if not llm_available and args.ocr:
-        print("Ollama 서버에 연결할 수 없어 --ocr LLM 답변 평가는 skip하고 retrieval-only로 진행합니다.")
+        print("선택된 LLM provider에 연결할 수 없어 --ocr LLM 답변 평가는 skip하고 retrieval-only로 진행합니다.")
     elif not llm_available:
-        raise SystemExit("Ollama 서버에 연결할 수 없습니다. Ollama 데스크톱 앱 또는 `ollama serve`를 실행하세요.")
+        raise SystemExit("선택된 LLM provider에 연결할 수 없습니다. SGLang 또는 Ollama 서버 상태를 확인하세요.")
 
-    embedder = Embedder(config.EMBEDDING_MODEL)
+    embedder = Embedder(config.EMBEDDING_MODEL, allow_remote_download=config.HF_MODEL_DOWNLOAD)
     vector_store = VectorStore(config.CHROMA_DIR)
     bm25 = BM25Index.load(config.BM25_PATH)
     pipeline = RagPipeline(

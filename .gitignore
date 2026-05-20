@@ -85,3 +85,7 @@ assets.zip
 
 # Local AI agent working logs
 .ai-ops/
+# DGX local LLM runtime/handoff artifacts
+.venv-sglang/
+handoff/
+sglang_storage/

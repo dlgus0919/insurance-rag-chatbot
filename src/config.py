@@ -155,8 +155,10 @@ BM25_PATH: Path = ROOT_DIR / "data" / "index" / "bm25.pkl"
 RELATIONAL_INDEX_DIR: Path = ROOT_DIR / "data" / "index" / "relational"
 STANDARD_CODES_DB_PATH: Path = RELATIONAL_INDEX_DIR / "standard_codes.sqlite"
 
+OFFLINE_MODE: bool = os.getenv("OFFLINE_MODE", "false").lower() == "true"
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 HF_MODEL_DOWNLOAD: bool = os.getenv("HF_MODEL_DOWNLOAD", "false").lower() == "true"
+RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma3:4b")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
@@ -167,6 +169,15 @@ OPENAI_DEFAULT_MODEL: str = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.2-chat-late
 OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", "1500"))
 ALLOW_OLLAMA: bool = os.getenv("ALLOW_OLLAMA", "true").lower() == "true"
 CLOUD_DEPLOY: bool = os.getenv("CLOUD_DEPLOY", "false").lower() == "true"
+SGLANG_BASE_URL: str = os.getenv("SGLANG_BASE_URL", "http://127.0.0.1:30000/v1")
+SGLANG_API_KEY: str = os.getenv("SGLANG_API_KEY", "EMPTY")
+SGLANG_DEFAULT_MODEL: str = os.getenv("SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
+SGLANG_REASONING_EFFORT: str = os.getenv("SGLANG_REASONING_EFFORT", "low")
+SGLANG_CANDIDATE_MODELS: list[str] = [
+    model.strip()
+    for model in os.getenv("SGLANG_CANDIDATE_MODELS", SGLANG_DEFAULT_MODEL).split(",")
+    if model.strip()
+]
 OLLAMA_CANDIDATE_MODELS: list[str] = [
     "exaone3.5:7.8b",
     "exaone3.5:7.8b-instruct",

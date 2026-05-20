@@ -590,3 +590,88 @@ chunks.jsonl: 7825 lines
 - users.json은 Git에 올리지 않는다.
 - ingest 전에는 반드시 processed/index를 백업한다.
 - 재부팅 후에는 Ollama, Chroma count, Streamlit 실행 상태를 확인한다.
+
+## SGLang local provider 운영 (gpt-oss-20b)
+
+기준일: 2026-05-20
+
+### 목적
+
+DGX Spark에서 `gpt-oss-20b`를 SGLang OpenAI-compatible provider로 제공한다. 기존 Ollama `exaone3.5:7.8b`는 fallback으로 유지한다.
+
+### 운영 파일
+
+Git에 포함하지 않는 DGX 운영 산출물:
+
+- `/srv/ai-ops/llm/models/gpt-oss-20b/`
+- `/srv/ai-ops/llm/templates/gpt_oss_harmony.jinja`
+- `/srv/ai-ops/bin/run-sglang-local`
+- `/srv/ai-ops/bin/check-sglang-local`
+- `/srv/ai-ops/logs/sglang/sglang-local.log`
+
+`gpt-oss-20b`는 Harmony chat template이 없으면 `/v1/chat/completions`가 400으로 실패한다. 반드시 wrapper의 `--chat-template /srv/ai-ops/llm/templates/gpt_oss_harmony.jinja`를 유지한다.
+
+### 기동
+
+```bash
+tmux new-session -d -s sglang-local /srv/ai-ops/bin/run-sglang-local
+```
+
+재기동:
+
+```bash
+tmux kill-session -t sglang-local
+pkill -f 'sglang serve.*gpt-oss-20b' || true
+tmux new-session -d -s sglang-local /srv/ai-ops/bin/run-sglang-local
+```
+
+상태 확인:
+
+```bash
+/srv/ai-ops/bin/check-sglang-local
+```
+
+### 앱 env
+
+```env
+OFFLINE_MODE=true
+HF_MODEL_DOWNLOAD=false
+HF_HUB_OFFLINE=1
+TRANSFORMERS_OFFLINE=1
+EMBEDDING_MODEL=/srv/ai-ops/models/embedding/bge-m3
+RERANKER_MODEL=/srv/ai-ops/models/reranker/bge-reranker-v2-m3
+SGLANG_BASE_URL=http://127.0.0.1:30000/v1
+SGLANG_API_KEY=EMPTY
+SGLANG_DEFAULT_MODEL=gpt-oss-20b
+SGLANG_REASONING_EFFORT=low
+SGLANG_CANDIDATE_MODELS=gpt-oss-20b
+ALLOW_OLLAMA=true
+OLLAMA_HOST=http://127.0.0.1:11434
+OLLAMA_MODEL=exaone3.5:7.8b
+```
+
+### 회귀 검증
+
+SGLang이 GPU 메모리를 점유한 상태에서는 retrieval-only eval을 CPU 임베딩으로 실행한다.
+
+```bash
+CUDA_VISIBLE_DEVICES= HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 RERANKER_ENABLED=false OLLAMA_HOST=http://localhost:9 .venv/bin/python scripts/eval.py --ocr
+```
+
+정상 기준:
+
+- `pytest -q`: 전체 통과
+- `retrieval recall@8: 1.000`
+- `data/processed/chunks.jsonl`: `7825` lines
+- Chroma collection count: `7825`
+
+### 롤백
+
+앱에서 provider를 `Ollama`로 선택하거나 env를 다음처럼 되돌린다.
+
+```env
+LOCAL_LLM_PROVIDER=ollama
+ALLOW_OLLAMA=true
+OLLAMA_HOST=http://127.0.0.1:11434
+OLLAMA_MODEL=exaone3.5:7.8b
+```

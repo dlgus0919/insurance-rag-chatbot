@@ -26,7 +26,7 @@ if str(ROOT) not in sys.path:
 from src import config
 from src.auth import users as user_store
 from src.auth.users import ROLE_ADMIN
-from src.llm.factory import build_llm, format_model_label, get_openai_model_info, is_openai_model, list_available_models
+from src.llm.factory import build_llm, format_model_label, get_openai_model_info, is_openai_model, list_available_models, provider_prefixed_model, split_model_selection
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.rag.insurance_form import (
     COVERAGE_TOPICS,
@@ -479,35 +479,45 @@ def _get_available_models_grouped() -> dict[str, list[str]]:
 
 
 def _select_model_widget() -> str:
-    """모델 선택 위젯을 렌더링하고 선택 모델 ID를 반환한다."""
+    """Provider and model selection widgets; returns a provider-prefixed model ID."""
 
     grouped = _get_available_models_grouped()
-    options: list[str] = []
-    labels: dict[str, str] = {}
-    for model in grouped["local"]:
-        options.append(model)
-        labels[model] = format_model_label(model, "ollama")
-    for model in grouped["cloud"]:
-        options.append(model)
-        labels[model] = format_model_label(model, "openai")
-
-    if not options:
-        st.error("사용 가능한 LLM 모델이 없습니다. .env의 OPENAI_API_KEY 설정 또는 Ollama 설치를 확인하세요.")
+    provider_labels = {
+        "sglang": "SGLang",
+        "ollama": "Ollama",
+        "openai": "OpenAI Cloud",
+    }
+    providers = [provider for provider in ("sglang", "ollama", "openai") if grouped.get(provider)]
+    if not providers:
+        st.error("사용 가능한 LLM provider가 없습니다. SGLang/Ollama 실행 또는 OpenAI 설정을 확인하세요.")
         st.stop()
 
-    default_index = 0
-    if config.OLLAMA_MODEL in options:
-        default_index = options.index(config.OLLAMA_MODEL)
-    elif config.OPENAI_DEFAULT_MODEL in options:
-        default_index = options.index(config.OPENAI_DEFAULT_MODEL)
-
-    selected = st.selectbox(
-        "LLM 모델",
-        options,
-        index=default_index,
-        format_func=lambda model: labels.get(model, model),
+    default_provider = "sglang" if "sglang" in providers else providers[0]
+    provider = st.selectbox(
+        "LLM Provider",
+        providers,
+        index=providers.index(default_provider),
+        format_func=lambda value: provider_labels.get(value, value),
     )
-    if is_openai_model(selected):
+    models = grouped[provider]
+    if not models:
+        st.error("선택한 provider에 사용 가능한 모델이 없습니다.")
+        st.stop()
+
+    default_model = {
+        "sglang": config.SGLANG_DEFAULT_MODEL,
+        "ollama": config.OLLAMA_MODEL,
+        "openai": config.OPENAI_DEFAULT_MODEL,
+    }.get(provider, models[0])
+    default_index = models.index(default_model) if default_model in models else 0
+    selected_model = st.selectbox(
+        "LLM 모델",
+        models,
+        index=default_index,
+        format_func=lambda model: format_model_label(model, provider),
+    )
+    selected = provider_prefixed_model(provider, selected_model)
+    if provider == "openai" or is_openai_model(selected):
         st.info("⚠ OpenAI 모델은 외부 서버를 호출합니다. 입력된 질문과 검색된 청크가 OpenAI로 전송됩니다.")
     return selected
 
@@ -528,9 +538,10 @@ def _load_heavy_components():
 
 @st.cache_resource
 def _load_llm(model: str):
-    """선택된 모델 전용 LLM 클라이언트를 생성한다."""
+    """선택된 provider/model 전용 LLM 클라이언트를 생성한다."""
 
-    return build_llm(model)
+    provider, model_id = split_model_selection(model)
+    return build_llm(model_id, provider=provider)
 
 
 def _get_pipeline(model: str, top_k: int) -> RagPipeline:

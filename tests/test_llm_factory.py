@@ -21,9 +21,17 @@ class FakeOpenAI:
         self.model = model
 
 
+class FakeSGLang:
+    provider = "sglang"
+
+    def __init__(self, model: str, **kwargs):
+        self.model = model
+
+
 def test_is_openai_model_accepts_prefix_and_gpt_models() -> None:
     assert factory.is_openai_model("gpt-5-mini") is True
     assert factory.is_openai_model("openai:gpt-4.1-nano") is True
+    assert factory.is_openai_model("sglang:gpt-oss-20b") is False
     assert factory.is_openai_model("gemma3:4b") is False
 
 
@@ -34,6 +42,7 @@ def test_model_info_and_label_for_known_and_custom_models() -> None:
     assert info["family"] == "GPT-5"
     assert info["size"] == "mini"
     assert "Cloud · OpenAI · GPT-5 mini" in factory.format_model_label("gpt-5-mini", "openai")
+    assert "Local · SGLang · gpt-oss-20b" == factory.format_model_label("gpt-oss-20b", "sglang")
     assert custom["use_case"] == "사용자 정의"
 
 
@@ -46,33 +55,57 @@ def test_list_available_models_respects_env(monkeypatch) -> None:
     monkeypatch.setattr(factory, "OllamaClient", FakeOllama)
     monkeypatch.setenv("ALLOW_OLLAMA", "true")
     monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", False)
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
 
     grouped = factory.list_available_models()
 
-    assert grouped["local"] == ["gemma3:4b", "gemma3:1b"]
-    assert "gpt-5-mini" in grouped["cloud"]
+    assert grouped["sglang"] == ["gpt-oss-20b"]
+    assert grouped["ollama"] == ["gemma3:4b", "gemma3:1b"]
+    assert "gpt-5-mini" in grouped["openai"]
 
 
-def test_list_available_models_hides_groups(monkeypatch) -> None:
+def test_list_available_models_hides_cloud_in_offline_mode(monkeypatch) -> None:
     monkeypatch.setattr(factory, "OllamaClient", FakeOllama)
     monkeypatch.setenv("ALLOW_OLLAMA", "false")
-    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
 
-    assert factory.list_available_models() == {"local": [], "cloud": []}
+    assert factory.list_available_models() == {"sglang": ["gpt-oss-20b"], "ollama": [], "openai": []}
 
 
 def test_build_llm_routes_to_ollama(monkeypatch) -> None:
     monkeypatch.setattr(factory, "OllamaClient", FakeOllama)
     monkeypatch.setenv("ALLOW_OLLAMA", "true")
 
-    llm = factory.build_llm("gemma3:4b")
+    llm = factory.build_llm("gemma3:4b", provider="ollama")
 
     assert isinstance(llm, FakeOllama)
     assert llm.provider == "ollama"
 
 
+def test_build_llm_routes_to_sglang(monkeypatch) -> None:
+    class FakeClient:
+        provider = "sglang"
+
+        def __init__(self, model: str):
+            self.model = model
+
+    import src.llm.openai_compatible_client as module
+
+    monkeypatch.setattr(module, "OpenAICompatibleClient", FakeClient)
+
+    llm = factory.build_llm("gpt-oss-20b", provider="sglang")
+
+    assert isinstance(llm, FakeClient)
+    assert llm.provider == "sglang"
+    assert llm.model == "gpt-oss-20b"
+
+
 def test_build_llm_rejects_openai_without_key(monkeypatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", False)
 
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
-        factory.build_llm("gpt-5-mini")
+        factory.build_llm("gpt-5-mini", provider="openai")

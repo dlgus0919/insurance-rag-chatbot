@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -11,7 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src import config
-from src.llm.ollama_client import OllamaClient
+from src.llm.factory import build_llm
 from src.rag.pipeline import RagPipeline
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
@@ -41,10 +42,11 @@ def load_pipeline() -> RagPipeline:
 
     if not config.BM25_PATH.exists():
         raise RuntimeError("BM25 인덱스가 없습니다. `python scripts/ingest.py --stage index`를 먼저 실행하세요.")
-    llm = OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL)
-    if not llm.health():
-        raise RuntimeError("Ollama 서버에 연결할 수 없습니다. Ollama 데스크톱 앱 또는 `ollama serve`를 실행하세요.")
-    embedder = Embedder(config.EMBEDDING_MODEL)
+    llm = build_llm(config.SGLANG_DEFAULT_MODEL, provider=os.getenv("LOCAL_LLM_PROVIDER", "ollama"))
+    health = getattr(llm, "health", lambda: True)
+    if not health():
+        raise RuntimeError("선택된 LLM provider에 연결할 수 없습니다. SGLang 또는 Ollama 서버 상태를 확인하세요.")
+    embedder = Embedder(config.EMBEDDING_MODEL, allow_remote_download=config.HF_MODEL_DOWNLOAD)
     vector_store = VectorStore(config.CHROMA_DIR)
     bm25 = BM25Index.load(config.BM25_PATH)
     return RagPipeline(
