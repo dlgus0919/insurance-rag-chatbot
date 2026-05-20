@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.parser.chunker import Chunk
+from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context
 from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
@@ -534,10 +535,14 @@ class RagPipeline:
         structured_ctx = _build_structured_context(question, chunks, table_store=self._table_store)
         if structured_ctx:
             prompt = f"{structured_ctx}\n\n{prompt}"
+        evidence_ctx = build_strict_evidence_context(question, chunks)
+        if evidence_ctx:
+            prompt = f"{evidence_ctx}\n\n{prompt}"
 
         llm_started = time.perf_counter()
         answer_text = self.llm.generate(prompt, system=SYSTEM_PROMPT, temperature=temperature)
         answer_text = append_retrieved_source_citations(answer_text, chunks)
+        answer_text = append_evidence_validation_warning(answer_text, question, chunks)
         llm_ms = (time.perf_counter() - llm_started) * 1000
         total_ms = (time.perf_counter() - total_started) * 1000
 

@@ -704,6 +704,9 @@ def _stream_answer(
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
 
     prompt = build_user_prompt(question, chunks)
+    evidence_ctx = build_strict_evidence_context(question, chunks)
+    if evidence_ctx:
+        prompt = f"{evidence_ctx}\n\n{prompt}"
     llm_started = time.perf_counter()
     placeholder = st.empty()
     tokens: list[str] = []
@@ -713,6 +716,7 @@ def _stream_answer(
 
     raw_answer = "".join(tokens).strip()
     answer = append_retrieved_source_citations(_sanitize_answer_markdown(raw_answer), chunks)
+    answer = append_evidence_validation_warning(answer, question, chunks)
     placeholder.markdown(answer)
     llm_ms = (time.perf_counter() - llm_started) * 1000
     total_ms = (time.perf_counter() - total_started) * 1000
