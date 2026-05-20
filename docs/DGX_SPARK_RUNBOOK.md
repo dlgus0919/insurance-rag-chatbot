@@ -675,3 +675,43 @@ ALLOW_OLLAMA=true
 OLLAMA_HOST=http://127.0.0.1:11434
 OLLAMA_MODEL=exaone3.5:7.8b
 ```
+
+## 완전 오프라인 자산 준비
+
+DGX를 망분리 또는 완전 오프라인 모드로 운영하기 전에는 네트워크가 연결된 상태에서 다음 통합 스크립트를 한 번 실행한다.
+
+```bash
+cd /srv/shared/projects/insurance-rag-chatbot
+source .venv/bin/activate
+python scripts/prepare_offline_assets.py
+```
+
+스크립트가 준비하는 운영 자산은 다음과 같다.
+
+- 임베딩 모델: `/srv/ai-ops/models/embedding/bge-m3`
+- reranker 모델: `/srv/ai-ops/models/reranker/bge-reranker-v2-m3`
+- SGLang 기본 LLM: `/srv/ai-ops/llm/models/gpt-oss-20b`
+- GPT-OSS Harmony chat template: `/srv/ai-ops/llm/templates/gpt_oss_harmony.jinja`
+- 오프라인 실행 env: `/srv/ai-ops/secrets/insurance-rag-chatbot/offline.env`
+- 자산 manifest: `/srv/ai-ops/manifests/insurance-rag-offline-assets.json`
+
+`offline.env`에는 secret이 없으며, `/srv/ai-ops/secrets/insurance-rag-chatbot/env.sh` 이후에 source되어 오프라인 기본값을 덮어쓴다. 기존 API key나 사용자 계정 정보는 계속 `env.sh` 또는 `users.json`에서 관리한다.
+
+오프라인 자산 준비 후 기본 실행은 아래 wrapper를 사용한다.
+
+```bash
+/srv/ai-ops/bin/run-sglang-local
+/srv/ai-ops/bin/run-insurance-rag
+```
+
+검증은 다음 순서로 수행한다.
+
+```bash
+/srv/ai-ops/bin/check-sglang-local
+/srv/ai-ops/bin/check-insurance-rag
+HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 OFFLINE_MODE=true \
+  RERANKER_ENABLED=false CUDA_VISIBLE_DEVICES= \
+  .venv/bin/python scripts/eval.py --ocr
+```
+
+기준값은 `chunks.jsonl` 7,825건, Chroma count 7,825, retrieval `recall@8 = 1.000`이다. SGLang 장애 시에는 `LOCAL_LLM_PROVIDER=ollama` 또는 Streamlit Provider 드롭다운의 Ollama 선택으로 `exaone3.5:7.8b` fallback을 사용한다.
