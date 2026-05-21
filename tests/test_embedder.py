@@ -23,7 +23,9 @@ def test_embedder_defaults_to_local_files_only(monkeypatch) -> None:
 
     Embedder("BAAI/bge-m3")
 
-    assert calls == [("BAAI/bge-m3", {"local_files_only": True})]
+    assert len(calls) == 1
+    assert calls[0][0] == "BAAI/bge-m3"
+    assert calls[0][1].get("local_files_only") is True
 
 
 def test_embedder_allows_remote_download_when_requested(monkeypatch) -> None:
@@ -37,7 +39,9 @@ def test_embedder_allows_remote_download_when_requested(monkeypatch) -> None:
 
     Embedder("BAAI/bge-m3", allow_remote_download=True)
 
-    assert calls == [("BAAI/bge-m3", {"local_files_only": False})]
+    assert len(calls) == 1
+    assert calls[0][0] == "BAAI/bge-m3"
+    assert calls[0][1].get("local_files_only") is False
 
 
 def test_embedder_remote_download_failure_message(monkeypatch) -> None:

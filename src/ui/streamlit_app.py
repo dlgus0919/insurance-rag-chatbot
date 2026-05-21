@@ -62,7 +62,7 @@ from src.utils.logger import (
 )
 
 _DOC_SHORT_TO_FILENAME: dict[str, str] = {source.doc_short: source.path.name for source in config.PDF_SOURCES}
-SEARCH_MODES = ["일반 질의", "퀵 코드 검색", "약관 정형 검색"]
+SEARCH_MODES = ["일반 질의", "퀵 코드 검색", "약관 정형 검색", "보험금 계산"]
 INSURANCE_SUB_MODES = {
     "보상가능 여부 판정": "coverage_judgment",
     "약관 조문 검색": "clause_lookup",
@@ -1005,6 +1005,230 @@ def render_insurance_form_panel() -> tuple[InsuranceFormInput | None, bool]:
     return form, True
 
 
+def render_claim_calculation_panel(model: str, get_pipeline_or_show_error, session_id: str) -> None:
+    st.subheader("📋 보험금 지급예상액 계산 (MVP)")
+
+    # Session state initialization for results
+    if "claim_calc_result" not in st.session_state:
+        st.session_state["claim_calc_result"] = None
+    if "claim_calc_error" not in st.session_state:
+        st.session_state["claim_calc_error"] = None
+    if "claim_calc_rag_failed" not in st.session_state:
+        st.session_state["claim_calc_rag_failed"] = False
+    if "claim_input_code" not in st.session_state:
+        st.session_state["claim_input_code"] = ""
+
+    # Layout: Two columns for inputs
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("#### 1. 청구 항목 입력")
+        input_name = st.text_input("청구 항목명", value="도수치료", placeholder="예: 도수치료, 체외충격파치료")
+        input_code = st.text_input("표준코드 (선택)", key="claim_input_code", placeholder="예: SC0001 (공란인 경우 명칭 매칭)")
+        claimed_amount = st.text_input("청구금액", value="150,000", placeholder="예: 150000, 150,000원")
+        quantity = st.text_input("수량/횟수", value="1", placeholder="예: 1, 1회")
+        user_category_hint = st.selectbox(
+            "급여/비급여 구분",
+            ["선택 안 함", "비급여", "3대비급여", "급여"],
+            index=0
+        )
+
+    with col2:
+        st.markdown("#### 2. 보상 상황 입력")
+        visit_type = st.selectbox("방문 형태", ["통원", "입원", "선택 안 함"], index=0)
+        accident_type = st.selectbox("사고 유형", ["질병", "상해", "교통사고", "선택 안 함"], index=0)
+        coverage_topic = st.text_input("보장종목", value="실손", placeholder="예: 실손, 3대비급여")
+        diagnosis_code = st.text_input("진단코드", value="", placeholder="예: M54.5")
+        diagnosis_name = st.text_input("진단명", value="", placeholder="예: 요통")
+        situation_note = st.text_area("상황 메모", value="", placeholder="예: 도수치료 1회차 통원 치료 시행함")
+
+    st.markdown("#### 3. 계산 기준 문서 및 모드 선택")
+
+    col3, col4 = st.columns(2)
+    with col3:
+        basis_mode = st.radio("근거 문서 선택 방식", ["자동 선택 (추천)", "수동 선택"], horizontal=True)
+        selected_docs = None
+        if basis_mode == "수동 선택":
+            selected_docs = st.multiselect(
+                "적용 대상 문서",
+                ["약관", "자사_SOL건강", "자사_SOL운전자", "실무가이드", "상담사례집", "심평원"],
+                default=["약관", "실무가이드"]
+            )
+
+    with col4:
+        planner_type = st.radio("플래너 유형", ["Fake Planner", "LLM Planner"], horizontal=True)
+        rag_enabled = False
+        if planner_type == "Fake Planner":
+            rag_enabled = st.checkbox("RAG 근거 검색 사용", value=False)
+
+    submitted = st.button("지급예상액 계산 실행", type="primary", use_container_width=True)
+
+    visit_type_map = {
+        "통원": "outpatient",
+        "입원": "hospitalization",
+        "선택 안 함": ""
+    }
+    accident_type_map = {
+        "질병": "disease",
+        "상해": "injury",
+        "교통사고": "accident",
+        "선택 안 함": ""
+    }
+
+    def run_calc(use_rag_active: bool):
+        try:
+            from decimal import Decimal
+            from src.claim_calculation.models import ClaimItemInput, ClaimCaseContext
+            from src.claim_calculation.pipeline import run_claim_calculation
+        except ImportError as exc:
+            st.session_state["claim_calc_error"] = f"모듈 임포트 실패: {exc}"
+            return
+
+        # Prepare items
+        items = [
+            ClaimItemInput(
+                line_id="item_1",
+                input_name=input_name.strip(),
+                input_code=input_code.strip(),
+                claimed_amount=claimed_amount.strip(),
+                quantity=quantity.strip(),
+                user_category_hint=user_category_hint if user_category_hint != "선택 안 함" else ""
+            )
+        ]
+
+        # Prepare context
+        context = ClaimCaseContext(
+            visit_type=visit_type_map[visit_type],
+            coverage_topic=coverage_topic.strip(),
+            diagnosis_code=diagnosis_code.strip(),
+            diagnosis_name=diagnosis_name.strip(),
+            accident_type=accident_type_map[accident_type],
+            situation_note=situation_note.strip()
+        )
+
+        active_rag_pipeline = None
+        if use_rag_active:
+            active_rag_pipeline = get_pipeline_or_show_error()
+            if active_rag_pipeline is None:
+                st.session_state["claim_calc_error"] = "RAG 파이프라인을 활성화할 수 없습니다."
+                return
+
+        try:
+            with st.spinner("보험금 계산 처리 중..."):
+                res = run_claim_calculation(
+                    rag_pipeline=active_rag_pipeline,
+                    items=items,
+                    context=context,
+                    basis_mode="manual" if basis_mode == "수동 선택" else "auto",
+                    selected_basis_docs=selected_docs if basis_mode == "수동 선택" else None,
+                    use_fake_planner=(planner_type == "Fake Planner"),
+                    model_id=split_model_selection(model)[1],
+                    provider=split_model_selection(model)[0],
+                )
+            st.session_state["claim_calc_result"] = res
+            st.session_state["claim_calc_error"] = None
+        except Exception as e:
+            st.session_state["claim_calc_result"] = None
+            st.session_state["claim_calc_error"] = str(e)
+
+    if submitted:
+        st.session_state["claim_calc_result"] = None
+        st.session_state["claim_calc_error"] = None
+        st.session_state["claim_calc_rag_failed"] = False
+
+        if not input_name.strip():
+            st.warning("청구 항목명을 입력해주세요.")
+            return
+
+        use_rag = (planner_type == "LLM Planner") or (planner_type == "Fake Planner" and rag_enabled)
+
+        if use_rag:
+            # Check pipeline status
+            pipeline_obj = get_pipeline_or_show_error()
+            if pipeline_obj is None:
+                st.session_state["claim_calc_rag_failed"] = True
+                return
+
+        run_calc(use_rag_active=use_rag)
+
+    # Fallback rendering if RAG load failed
+    if st.session_state.get("claim_calc_rag_failed"):
+        st.error("임베딩 모델 및 RAG 파이프라인 로드 실패로 인해 RAG 검색을 사용할 수 없습니다.")
+        if st.button("비급여 DB 단독 계산으로 계속", key="fallback_calc_btn", use_container_width=True):
+            st.session_state["claim_calc_rag_failed"] = False
+            run_calc(use_rag_active=False)
+            st.rerun()
+
+    # Render results
+    result = st.session_state.get("claim_calc_result")
+    error = st.session_state.get("claim_calc_error")
+
+    if error:
+        st.error(f"계산 수행 에러: {error}")
+
+    if result:
+        from decimal import Decimal
+        st.markdown("### 📊 계산 결과")
+
+        # 만약 다중 후보가 존재할 경우 선택 가이드 제공
+        if hasattr(result, "candidates") and result.candidates:
+            st.warning("⚠️ 입력하신 청구 항목명에 대해 매칭되는 표준코드가 2개 이상 존재하여 계산이 보류되었습니다. 아래에서 적절한 코드를 선택하시면 계산이 자동 재개됩니다:")
+            # 후보 리스트 버튼 렌더링
+            cols = st.columns(min(len(result.candidates), 3))
+            for idx, cand in enumerate(result.candidates):
+                col_idx = idx % len(cols)
+                btn_label = f"📌 {cand['code']}\n({cand['name']})"
+                if cols[col_idx].button(btn_label, key=f"cand_btn_{cand['code']}_{idx}", use_container_width=True):
+                    st.session_state["claim_input_code"] = cand["code"]
+                    st.session_state["claim_calc_result"] = None
+                    st.session_state["claim_calc_error"] = None
+                    st.rerun()
+            st.markdown("---")
+
+        # Grid/Metrics display
+        col_c, col_d, col_e = st.columns(3)
+        try:
+            c_val = int(Decimal(result.claimed_amount))
+            claimed_disp = f"{c_val:,}원"
+        except:
+            claimed_disp = f"{result.claimed_amount}원"
+
+        try:
+            d_val = int(Decimal(result.deductible))
+            deductible_disp = f"{d_val:,}원"
+        except:
+            deductible_disp = f"{result.deductible}원"
+
+        try:
+            p_val = int(Decimal(result.payable_amount))
+            payable_disp = f"{p_val:,}원"
+        except:
+            payable_disp = f"{result.payable_amount}원"
+
+        col_c.metric("총 청구금액", claimed_disp)
+        col_d.metric("공제금액", deductible_disp)
+        col_e.metric("지급예상액", payable_disp)
+
+        if result.requires_review:
+            st.warning("⚠️ 추가 심사 및 정밀 검토가 필요합니다.")
+            for reason in result.review_reasons:
+                st.write(f"- {reason}")
+        else:
+            st.success("✅ 지급예상액 계산이 통과되었습니다. (추가 심사 필요 없음)")
+
+        # Applied basis
+        if result.applied_basis:
+            st.markdown("#### 📄 적용 근거")
+            for idx, basis in enumerate(result.applied_basis):
+                with st.expander(f"{idx+1}. {basis['source']}"):
+                    st.write(basis["content"])
+
+        # Executed formula code
+        if result.executed_code:
+            st.markdown("#### ⚙️ 실행 산식")
+            st.code(result.executed_code, language="python")
+
+
 def main() -> None:
     st.set_page_config(page_title="보험 고시 문서 RAG 챗봇")
     inject_css()
@@ -1172,11 +1396,23 @@ def main() -> None:
         render_admin_page(_log)
         return
 
-    try:
-        pipeline = _get_pipeline(model, top_k, index_mode=index_mode)
-    except RuntimeError as exc:
-        st.error(str(exc))
-        pipeline = None
+    pipeline = None
+    pipeline_error = None
+
+    def get_pipeline_or_show_error() -> RagPipeline | None:
+        nonlocal pipeline, pipeline_error
+        if pipeline is not None:
+            return pipeline
+        if pipeline_error is not None:
+            st.error(pipeline_error)
+            return None
+        try:
+            pipeline = _get_pipeline(model, top_k, index_mode=index_mode)
+            return pipeline
+        except RuntimeError as exc:
+            pipeline_error = str(exc)
+            st.error(pipeline_error)
+            return None
 
     for message_index, message in enumerate(st.session_state.messages):
         with st.chat_message(message["role"]):
@@ -1188,6 +1424,10 @@ def main() -> None:
 
     search_mode = st.radio("검색 모드", SEARCH_MODES, horizontal=True, key="search_mode")
 
+    if search_mode == "보험금 계산":
+        render_claim_calculation_panel(model, get_pipeline_or_show_error, session_id)
+        return
+
     if search_mode == "약관 정형 검색":
         form, submitted = render_insurance_form_panel()
         if submitted:
@@ -1197,10 +1437,10 @@ def main() -> None:
             if form.mode == "coverage_judgment" and not form.coverage_topics:
                 st.warning("보장종목을 1개 이상 선택해주세요.")
                 return
-            if pipeline is None:
-                st.error("검색 파이프라인을 사용할 수 없습니다.")
+            active_pipeline = get_pipeline_or_show_error()
+            if active_pipeline is None:
                 return
-            _handle_insurance_form(form, pipeline, model, session_id, None)
+            _handle_insurance_form(form, active_pipeline, model, session_id, None)
         return
 
     if search_mode == "퀵 코드 검색":
@@ -1217,14 +1457,14 @@ def main() -> None:
             if not procedure_name.strip():
                 st.warning("시술/수술명을 입력해주세요.")
                 return
-            if pipeline is None:
-                st.error("검색 파이프라인을 사용할 수 없습니다.")
+            active_pipeline = get_pipeline_or_show_error()
+            if active_pipeline is None:
                 return
             _handle_quick_code(
                 procedure_name.strip(),
                 opt_summary,
                 opt_coverage,
-                pipeline,
+                active_pipeline,
                 model,
                 temperature,
                 session_id,
@@ -1233,63 +1473,65 @@ def main() -> None:
         return
 
     question = st.chat_input("질문을 입력하세요")
-    if question and pipeline is not None:
-        _log(
-            EVENT_QUESTION,
-            _build_question_log_details(
-                mode="general",
-                model=model,
-                top_k=top_k,
-                temperature=temperature,
-                selected_docs=[],
-                question=question,
-                index_mode=index_mode,
-            ),
-        )
-        st.session_state.messages.append({"role": "user", "content": question})
-        with st.chat_message("user"):
-            st.markdown(question)
+    if question:
+        active_pipeline = get_pipeline_or_show_error()
+        if active_pipeline is not None:
+            _log(
+                EVENT_QUESTION,
+                _build_question_log_details(
+                    mode="general",
+                    model=model,
+                    top_k=top_k,
+                    temperature=temperature,
+                    selected_docs=[],
+                    question=question,
+                    index_mode=index_mode,
+                ),
+            )
+            st.session_state.messages.append({"role": "user", "content": question})
+            with st.chat_message("user"):
+                st.markdown(question)
 
-        with st.chat_message("assistant"):
-            try:
-                answer, chunks, timing, debug = _stream_answer(
-                    pipeline,
-                    question,
-                    temperature,
-                    doc_filter=None,
-                )
-            except RuntimeError as exc:
-                st.error(str(exc))
-                return
-            st.session_state["last_debug"] = debug
-            cited_chunks = _filter_cited_chunks(answer, chunks)
-            render_sources(cited_chunks, key_prefix=f"current_{len(st.session_state.messages)}")
-            render_timing(timing)
+            with st.chat_message("assistant"):
+                try:
+                    answer, chunks, timing, debug = _stream_answer(
+                        active_pipeline,
+                        question,
+                        temperature,
+                        doc_filter=None,
+                    )
+                except RuntimeError as exc:
+                    st.error(str(exc))
+                    return
+                st.session_state["last_debug"] = debug
+                cited_chunks = _filter_cited_chunks(answer, chunks)
+                render_sources(cited_chunks, key_prefix=f"current_{len(st.session_state.messages)}")
+                render_timing(timing)
 
-        _log(
-            EVENT_ANSWER,
-            _build_answer_log_details(
-                mode="general",
-                model=model,
-                selected_docs=[],
-                answer=answer,
-                timing=timing,
-                chunks=cited_chunks,
-                question=question,
-                index_mode=index_mode,
-                **_llm_answer_log_extra(pipeline),
-            ),
-        )
-        st.session_state.messages.append(
-            {
-                "role": "assistant",
-                "content": answer,
-                "chunks": cited_chunks,
-                "timing": timing,
-                "model": model,
-            }
-        )
-        _auto_save(user_id)
+            _log(
+                EVENT_ANSWER,
+                _build_answer_log_details(
+                    mode="general",
+                    model=model,
+                    selected_docs=[],
+                    answer=answer,
+                    timing=timing,
+                    chunks=cited_chunks,
+                    question=question,
+                    index_mode=index_mode,
+                    **_llm_answer_log_extra(active_pipeline),
+                ),
+            )
+            st.session_state.messages.append(
+                {
+                    "role": "assistant",
+                    "content": answer,
+                    "chunks": cited_chunks,
+                    "timing": timing,
+                    "model": model,
+                }
+            )
+            _auto_save(user_id)
 
     # 관리자 진단 도구
     role = st.session_state.get("user_role", "")

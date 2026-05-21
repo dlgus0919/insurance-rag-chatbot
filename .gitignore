@@ -90,3 +90,12 @@ assets.zip
 .venv-vllm/
 handoff/
 sglang_storage/
+
+# Temporary backups and local run logs
+.claim_calculation_bak/
+*claim_calculation_bak*
+streamlit.log
+streamlit_*.log
+
+# Temporary backups from other team members
+*_dani.py
