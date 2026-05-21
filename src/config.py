@@ -214,6 +214,26 @@ def sglang_base_url_for_model(model: str) -> str:
     """Return the OpenAI-compatible endpoint for a SGLang served model."""
 
     return SGLANG_MODEL_ENDPOINTS.get(model, SGLANG_BASE_URL).rstrip("/")
+
+
+VLLM_BASE_URL: str = os.getenv("VLLM_BASE_URL", "http://127.0.0.1:30001/v1")
+VLLM_API_KEY: str = os.getenv("VLLM_API_KEY", "EMPTY")
+VLLM_DEFAULT_MODEL: str = os.getenv("VLLM_DEFAULT_MODEL", "gemma-4-26b-a4b-nvfp4")
+VLLM_CANDIDATE_MODELS: list[str] = [
+    model.strip()
+    for model in os.getenv("VLLM_CANDIDATE_MODELS", VLLM_DEFAULT_MODEL).split(",")
+    if model.strip()
+]
+VLLM_MODEL_ENDPOINTS: dict[str, str] = _parse_sglang_model_endpoints(os.getenv("VLLM_MODEL_ENDPOINTS", ""))
+VLLM_ENABLE_APP_SWITCH: bool = os.getenv("VLLM_ENABLE_APP_SWITCH", "true").lower() == "true"
+VLLM_SWITCH_SCRIPT: Path = Path(os.getenv("VLLM_SWITCH_SCRIPT", "/srv/ai-ops/bin/switch-vllm-model"))
+VLLM_SWITCH_TIMEOUT: int = int(os.getenv("VLLM_SWITCH_TIMEOUT", "1200"))
+
+
+def vllm_base_url_for_model(model: str) -> str:
+    """Return the OpenAI-compatible endpoint for a vLLM served model."""
+
+    return VLLM_MODEL_ENDPOINTS.get(model, VLLM_BASE_URL).rstrip("/")
 OLLAMA_CANDIDATE_MODELS: list[str] = [
     "exaone3.5:7.8b",
     "exaone3.5:7.8b-instruct",

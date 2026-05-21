@@ -21,8 +21,18 @@ OPENAI_MODEL_INFO: dict[str, dict] = {
 }
 PROVIDER_LABELS: dict[str, str] = {
     "sglang": "Local · SGLang",
+    "vllm": "Local · vLLM",
     "ollama": "Local · Ollama",
     "openai": "Cloud · OpenAI",
+}
+
+LOCAL_LARGE_MODEL_INFO: dict[str, dict[str, str]] = {
+    "gemma-4-26b-a4b-nvfp4": {
+        "family": "Gemma 4",
+        "size": "26B A4B NVFP4",
+        "status": "validated",
+        "use_case": "vLLM 로컬 답변",
+    },
 }
 
 SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
@@ -81,7 +91,7 @@ def _configured_sglang_models() -> list[str]:
 
 
 def _served_models_for_endpoint(base_url: str) -> list[str]:
-    """Return model IDs advertised by a SGLang/OpenAI-compatible endpoint."""
+    """Return model IDs advertised by an OpenAI-compatible endpoint."""
 
     try:
         response = requests.get(f"{base_url.rstrip('/')}/models", headers={"Authorization": "Bearer EMPTY"}, timeout=1.5)
@@ -104,6 +114,24 @@ def list_sglang_large_models() -> list[str]:
     """Return configured large SGLang models, including staged local assets."""
 
     return _configured_sglang_models()
+
+
+def list_vllm_large_models() -> list[str]:
+    """Return configured large vLLM models."""
+
+    return _ordered_unique([config.VLLM_DEFAULT_MODEL] + list(config.VLLM_CANDIDATE_MODELS) + list(config.VLLM_MODEL_ENDPOINTS.keys()))
+
+
+def _available_vllm_models() -> list[str]:
+    """Return vLLM models exposed in the UI."""
+
+    return list_vllm_large_models()
+
+
+def list_startup_large_models() -> list[tuple[str, str]]:
+    """Return provider/model pairs that can be loaded as the login-time large model."""
+
+    return [("sglang", model) for model in list_sglang_large_models()] + [("vllm", model) for model in list_vllm_large_models()]
 
 
 def _available_sglang_models() -> list[str]:
@@ -138,7 +166,7 @@ def parse_openai_candidate_models(raw: str | None, default: list[str] | None = N
 def normalize_model_id(model: str) -> str:
     """Remove known provider prefixes from a model ID."""
 
-    for prefix in ("openai:", "sglang:", "ollama:"):
+    for prefix in ("openai:", "sglang:", "vllm:", "ollama:"):
         if model.startswith(prefix):
             return model.removeprefix(prefix)
     return model
@@ -217,13 +245,20 @@ def format_model_label(model: str, provider: str) -> str:
             status = status_labels.get(info["status"], "검증대상")
             return f"Local · SGLang · {info['family']} · {info['size']} · {status}"
         return f"Local · SGLang · {normalized}"
+    if provider == "vllm":
+        info = LOCAL_LARGE_MODEL_INFO.get(normalized, SGLANG_MODEL_INFO.get(normalized))
+        if info:
+            status_labels = {"validated": "검증완료", "staged": "검증대상", "disabled": "비활성"}
+            status = status_labels.get(info["status"], "검증대상")
+            return f"Local · vLLM · {info['family']} · {info['size']} · {status}"
+        return f"Local · vLLM · {normalized}"
     return f"Local · Ollama · {normalized}"
 
 
 def list_available_models() -> dict[str, list[str]]:
     """Return model candidates grouped by provider."""
 
-    grouped: dict[str, list[str]] = {"sglang": _available_sglang_models(), "ollama": [], "openai": []}
+    grouped: dict[str, list[str]] = {"sglang": _available_sglang_models(), "vllm": _available_vllm_models(), "ollama": [], "openai": []}
     if is_ollama_allowed():
         try:
             installed = set(OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL).list_models())
@@ -250,6 +285,15 @@ def build_llm(model: str, provider: str | None = None) -> LLMClient:
         from src.llm.openai_compatible_client import OpenAICompatibleClient
 
         return OpenAICompatibleClient(selected_model)
+    if selected_provider == "vllm":
+        from src.llm.openai_compatible_client import OpenAICompatibleClient
+
+        return OpenAICompatibleClient(
+            selected_model,
+            base_url=config.vllm_base_url_for_model(selected_model),
+            api_key=config.VLLM_API_KEY,
+            provider="vllm",
+        )
     if selected_provider == "openai":
         if config.OFFLINE_MODE:
             raise RuntimeError("OFFLINE_MODE=true에서는 OpenAI Cloud 모델을 사용할 수 없습니다.")

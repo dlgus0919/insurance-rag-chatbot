@@ -82,7 +82,7 @@ def test_list_available_models_hides_cloud_in_offline_mode(monkeypatch) -> None:
     monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", False)
     monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
 
-    assert factory.list_available_models() == {"sglang": ["gpt-oss-20b"], "ollama": [], "openai": []}
+    assert factory.list_available_models() == {"sglang": ["gpt-oss-20b"], "vllm": ["gemma-4-26b-a4b-nvfp4"], "ollama": [], "openai": []}
 
 
 def test_build_llm_routes_to_ollama(monkeypatch) -> None:
@@ -111,6 +111,31 @@ def test_build_llm_routes_to_sglang(monkeypatch) -> None:
     assert isinstance(llm, FakeClient)
     assert llm.provider == "sglang"
     assert llm.model == "gpt-oss-20b"
+
+
+
+
+def test_build_llm_routes_to_vllm(monkeypatch) -> None:
+    class FakeClient:
+        provider = "vllm"
+
+        def __init__(self, model: str, **kwargs):
+            self.model = model
+            self.kwargs = kwargs
+            self.provider = kwargs.get("provider")
+
+    import src.llm.openai_compatible_client as module
+
+    monkeypatch.setattr(module, "OpenAICompatibleClient", FakeClient)
+    monkeypatch.setattr(factory.config, "VLLM_API_KEY", "EMPTY")
+    monkeypatch.setattr(factory.config, "vllm_base_url_for_model", lambda model: "http://127.0.0.1:30001/v1")
+
+    llm = factory.build_llm("gemma-4-26b-a4b-nvfp4", provider="vllm")
+
+    assert isinstance(llm, FakeClient)
+    assert llm.provider == "vllm"
+    assert llm.model == "gemma-4-26b-a4b-nvfp4"
+    assert llm.kwargs["base_url"] == "http://127.0.0.1:30001/v1"
 
 
 def test_build_llm_rejects_openai_without_key(monkeypatch) -> None:

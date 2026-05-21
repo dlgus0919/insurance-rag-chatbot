@@ -87,5 +87,6 @@ assets.zip
 .ai-ops/
 # DGX local LLM runtime/handoff artifacts
 .venv-sglang/
+.venv-vllm/
 handoff/
 sglang_storage/

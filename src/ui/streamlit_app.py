@@ -28,7 +28,7 @@ if str(ROOT) not in sys.path:
 from src import config
 from src.auth import users as user_store
 from src.auth.users import ROLE_ADMIN
-from src.llm.factory import build_llm, format_model_label, get_openai_model_info, is_openai_model, list_available_models, list_sglang_large_models, provider_prefixed_model, split_model_selection
+from src.llm.factory import build_llm, format_model_label, get_openai_model_info, is_openai_model, list_available_models, list_startup_large_models, provider_prefixed_model, split_model_selection
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.rag.insurance_form import (
     COVERAGE_TOPICS,
@@ -124,11 +124,11 @@ def _ensure_session_id() -> str:
 
 
 
-def _served_sglang_models() -> list[str]:
-    """Return models currently served by the single SGLang slot."""
+def _served_models(base_url: str) -> list[str]:
+    """Return model IDs served by an OpenAI-compatible local endpoint."""
 
     try:
-        response = requests.get(f"{config.SGLANG_BASE_URL.rstrip('/')}/models", timeout=2)
+        response = requests.get(f"{base_url.rstrip('/')}/models", timeout=2)
         response.raise_for_status()
         payload = response.json()
     except (requests.RequestException, ValueError):
@@ -136,52 +136,69 @@ def _served_sglang_models() -> list[str]:
     return [item.get("id") for item in payload.get("data", []) if item.get("id")]
 
 
-def _switch_sglang_model(model: str) -> None:
-    """Switch the single local SGLang slot to an allowed large model."""
+def _switch_large_model(provider: str, model: str) -> None:
+    """Switch the single large local model slot to the requested provider/model."""
 
-    allowed = set(list_sglang_large_models())
-    if model not in allowed:
-        raise RuntimeError(f"허용되지 않은 SGLang 모델입니다: {model}")
-    if not config.SGLANG_ENABLE_APP_SWITCH:
-        raise RuntimeError("앱 기반 SGLang 모델 전환이 비활성화되어 있습니다.")
-    if not config.SGLANG_SWITCH_SCRIPT.exists():
-        raise RuntimeError(f"SGLang 전환 스크립트가 없습니다: {config.SGLANG_SWITCH_SCRIPT}")
+    allowed = set(list_startup_large_models())
+    if (provider, model) not in allowed:
+        raise RuntimeError(f"허용되지 않은 대형 로컬 모델입니다: {provider}:{model}")
+    if provider == "sglang":
+        if not config.SGLANG_ENABLE_APP_SWITCH:
+            raise RuntimeError("앱 기반 SGLang 모델 전환이 비활성화되어 있습니다.")
+        script = config.SGLANG_SWITCH_SCRIPT
+        timeout = config.SGLANG_SWITCH_TIMEOUT
+        label = "SGLang"
+    elif provider == "vllm":
+        if not config.VLLM_ENABLE_APP_SWITCH:
+            raise RuntimeError("앱 기반 vLLM 모델 전환이 비활성화되어 있습니다.")
+        script = config.VLLM_SWITCH_SCRIPT
+        timeout = config.VLLM_SWITCH_TIMEOUT
+        label = "vLLM"
+    else:
+        raise RuntimeError(f"대형 로컬 모델 provider가 아닙니다: {provider}")
+    if not script.exists():
+        raise RuntimeError(f"{label} 전환 스크립트가 없습니다: {script}")
 
     try:
         completed = subprocess.run(
-            [str(config.SGLANG_SWITCH_SCRIPT), model],
+            [str(script), model],
             check=False,
             text=True,
             capture_output=True,
-            timeout=config.SGLANG_SWITCH_TIMEOUT,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(f"SGLang 모델 로딩 시간이 초과되었습니다: {model}") from exc
+        raise RuntimeError(f"{label} 모델 로딩 시간이 초과되었습니다: {model}") from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()[-1200:]
-        raise RuntimeError(f"SGLang 모델 전환 실패: {model}\n{detail}")
+        raise RuntimeError(f"{label} 모델 전환 실패: {model}\n{detail}")
 
 
 def _ensure_selected_large_model_ready() -> None:
-    """Load the login-selected large SGLang model before the chat UI is used."""
+    """Load the login-selected large local model before the chat UI is used."""
 
     if config.CLOUD_DEPLOY:
         return
-    models = list_sglang_large_models()
+    models = list_startup_large_models()
     if not models:
         return
-    selected = st.session_state.get("selected_large_model") or config.SGLANG_DEFAULT_MODEL
-    if selected not in models:
-        selected = config.SGLANG_DEFAULT_MODEL if config.SGLANG_DEFAULT_MODEL in models else models[0]
+    selected = st.session_state.get("selected_large_model")
+    if not selected:
+        selected = provider_prefixed_model("vllm", config.VLLM_DEFAULT_MODEL) if ("vllm", config.VLLM_DEFAULT_MODEL) in models else provider_prefixed_model(*models[0])
+    provider, model = split_model_selection(selected)
+    if (provider, model) not in models:
+        provider, model = models[0]
+        selected = provider_prefixed_model(provider, model)
         st.session_state.selected_large_model = selected
 
-    served = _served_sglang_models()
-    if selected in served:
+    base_url = config.vllm_base_url_for_model(model) if provider == "vllm" else config.sglang_base_url_for_model(model)
+    served = _served_models(base_url)
+    if model in served:
         st.session_state.loaded_large_model = selected
         return
 
-    with st.spinner(f"대형 로컬 모델을 로딩 중입니다: {format_model_label(selected, 'sglang')}"):
-        _switch_sglang_model(selected)
+    with st.spinner(f"대형 로컬 모델을 로딩 중입니다: {format_model_label(model, provider)}"):
+        _switch_large_model(provider, model)
     try:
         _get_available_models_grouped.clear()
     except AttributeError:
@@ -286,17 +303,17 @@ def _check_auth(session_id: str) -> bool:
         )
         st.markdown("---")
         st.subheader("🔐 로그인")
-        large_models = list_sglang_large_models()
+        large_models = [provider_prefixed_model(provider, model) for provider, model in list_startup_large_models()]
         selected_large_model = None
         if large_models:
-            default_large = st.session_state.get("selected_large_model") or config.SGLANG_DEFAULT_MODEL
+            default_large = st.session_state.get("selected_large_model") or provider_prefixed_model("vllm", config.VLLM_DEFAULT_MODEL)
             default_index = large_models.index(default_large) if default_large in large_models else 0
             selected_large_model = st.selectbox(
                 "대형 로컬 모델",
                 large_models,
                 index=default_index,
-                format_func=lambda model: format_model_label(model, "sglang"),
-                help="로그인 후 선택한 SGLang 모델 1개만 로딩합니다.",
+                format_func=lambda value: format_model_label(split_model_selection(value)[1], split_model_selection(value)[0]),
+                help="로그인 후 선택한 대형 로컬 모델 1개만 로딩합니다. Gemma4는 vLLM 경로를 사용합니다.",
             )
         username = st.text_input("사용자명", placeholder="사용자명")
         password = st.text_input("비밀번호", type="password", placeholder="비밀번호를 입력하세요")
@@ -568,16 +585,17 @@ def _select_model_widget() -> str:
 
     grouped = _get_available_models_grouped()
     provider_labels = {
+        "vllm": "vLLM",
         "sglang": "SGLang",
         "ollama": "Ollama",
         "openai": "OpenAI Cloud",
     }
-    providers = [provider for provider in ("sglang", "ollama", "openai") if grouped.get(provider)]
+    providers = [provider for provider in ("vllm", "sglang", "ollama", "openai") if grouped.get(provider)]
     if not providers:
         st.error("사용 가능한 LLM provider가 없습니다. SGLang/Ollama 실행 또는 OpenAI 설정을 확인하세요.")
         st.stop()
 
-    default_provider = "sglang" if "sglang" in providers else providers[0]
+    default_provider = "vllm" if "vllm" in providers else "sglang" if "sglang" in providers else providers[0]
     provider = st.selectbox(
         "LLM Provider",
         providers,
@@ -590,6 +608,7 @@ def _select_model_widget() -> str:
         st.stop()
 
     default_model = {
+        "vllm": config.VLLM_DEFAULT_MODEL,
         "sglang": config.SGLANG_DEFAULT_MODEL,
         "ollama": config.OLLAMA_MODEL,
         "openai": config.OPENAI_DEFAULT_MODEL,
@@ -1006,7 +1025,8 @@ def main() -> None:
         role_label = "관리자" if role == ROLE_ADMIN else "직원"
         st.markdown(f"**{display}** · _{role_label}_")
         if st.session_state.get("selected_large_model"):
-            st.caption(f"대형 모델: {format_model_label(st.session_state.selected_large_model, 'sglang')}")
+            provider, model = split_model_selection(st.session_state.selected_large_model)
+            st.caption(f"대형 모델: {format_model_label(model, provider)}")
         if st.button("로그아웃", use_container_width=True):
             _log(EVENT_LOGOUT)
             for key in (
