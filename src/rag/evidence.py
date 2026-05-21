@@ -162,11 +162,12 @@ def extract_code_evidence_facts(question: str, chunks: list[Chunk], max_facts: i
             code_matches = list(CODE_PATTERN.finditer(line.upper()))
             if not code_matches:
                 continue
+            window = _line_window(lines, index)
             if not _matches_query_terms(line, terms):
                 continue
             classification_match = CLASSIFICATION_PATTERN.search(line)
             classification_no = _clean_row_text(classification_match.group(0)) if classification_match else None
-            row_text = _clean_row_text(line)
+            row_text = _clean_row_text(window)
             for match in code_matches:
                 code = match.group(0).upper()
                 description = _description_for_code(line, match)

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.llm.prompt import append_retrieved_source_citations
+from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context
 from src.parser.chunker import Chunk
 from src.rag.pipeline import RagPipeline, _hit_to_chunk
 
@@ -155,7 +156,12 @@ def generate_insurance_form_answer(
     """검색 청크를 기반으로 약관 정형 검색 답변을 생성한다."""
 
     system, user = build_form_prompt(form, chunks)
+    evidence_question = build_form_query(form)
+    evidence_ctx = build_strict_evidence_context(evidence_question, chunks)
+    if evidence_ctx:
+        user = f"{evidence_ctx}\n\n{user}"
     answer = pipeline.llm.generate(user, system=system, temperature=temperature)
+    answer = append_evidence_validation_warning(answer, evidence_question, chunks)
     answer = append_retrieved_source_citations(answer, chunks)
     if form.mode == "coverage_judgment" and INSURANCE_DISCLAIMER not in answer:
         answer = f"{answer.rstrip()}\n\n{INSURANCE_DISCLAIMER}"

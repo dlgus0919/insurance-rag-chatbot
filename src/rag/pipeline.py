@@ -61,6 +61,16 @@ _DISABILITY_RATE_QUESTION_PATTERN = re.compile(
     re.UNICODE,
 )
 _OLD_SURGERY_TABLE_MARKERS = ("수술종류분류", "종류분류(종)", "수술분류표")
+_DOC_COMPARE_TERMS = ("문서별", "각각", "비교", "차이", "출처별", "기준별")
+_DOC_ALIASES: dict[str, tuple[str, ...]] = {
+    "심평원": ("심평원", "건강보험 고시", "급여 상대가치점수"),
+    "약관": ("실손의료보험 약관", "이지로운 실손", "질병급여", "질병비급여", "3대비급여"),
+    "자사_SOL건강": ("자사 SOL건강", "자사SOL건강", "SOL건강", "처음건강보험", "건강보험 약관"),
+    "자사_SOL운전자": ("자사 SOL운전자", "자사SOL운전자", "SOL운전자", "처음운전자보험", "운전자보험 약관"),
+    "표준약관": ("표준약관",),
+    "실무가이드": ("실무가이드", "실무종합가이드", "Claim 실무"),
+    "상담사례집": ("상담사례집", "소비자 상담", "상담 주요 사례"),
+}
 
 
 @dataclass
@@ -400,6 +410,60 @@ def _filter_hits_by_doc(hits: list[Hit], doc_filter: list[str] | None) -> list[H
     return [hit for hit in hits if hit.metadata.get("doc_short") in allowed]
 
 
+def _ordered_unique(values: list[str]) -> list[str]:
+    """순서를 보존하며 중복을 제거한다."""
+
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _infer_requested_doc_shorts(question: str, doc_filter: list[str] | None = None) -> list[str]:
+    """질문과 명시 필터에서 문서별 비교에 필요한 문서 축약명을 추론한다."""
+
+    if doc_filter:
+        return _ordered_unique(doc_filter)
+
+    compact_question = re.sub(r"\s+", "", question)
+    matched: list[str] = []
+    for source in config.PDF_SOURCES:
+        aliases = [source.doc_short, source.doc_name, source.product_name or ""]
+        aliases.extend(_DOC_ALIASES.get(source.doc_short, ()))
+        for alias in aliases:
+            compact_alias = re.sub(r"\s+", "", str(alias))
+            if compact_alias and compact_alias in compact_question:
+                matched.append(source.doc_short)
+                break
+    matched = _ordered_unique(matched)
+    if "약관" in matched and any(doc.startswith("자사_") or doc == "표준약관" for doc in matched):
+        explicit_policy_aliases = ("실손의료보험약관", "이지로운실손", "질병급여", "질병비급여", "3대비급여")
+        if not any(alias in compact_question for alias in explicit_policy_aliases):
+            matched = [doc for doc in matched if doc != "약관"]
+    return matched
+
+
+def _needs_doc_coverage(question: str, requested_docs: list[str]) -> bool:
+    """문서별 비교/복수 문서 질의라면 검색 결과에 문서 커버리지를 강제한다."""
+
+    if len(requested_docs) < 2:
+        return False
+    compact_question = re.sub(r"\s+", "", question)
+    return any(term in compact_question for term in _DOC_COMPARE_TERMS) or len(requested_docs) >= 2
+
+
+def _merge_hits_preserving_order(primary: list[Hit], extras: list[Hit], limit: int | None = None) -> list[Hit]:
+    """기존 순서를 보존하면서 추가 hit를 중복 없이 병합한다."""
+
+    merged: list[Hit] = []
+    seen: set[str] = set()
+    for hit in primary + extras:
+        if hit.id in seen:
+            continue
+        seen.add(hit.id)
+        merged.append(hit)
+        if limit is not None and len(merged) >= limit:
+            break
+    return merged
+
+
 class RagPipeline:
     """Dense 검색, BM25, RRF, Ollama 생성을 순서대로 실행한다."""
 
@@ -432,6 +496,56 @@ class RagPipeline:
             self.reranker = build_reranker(enabled=enabled)
         self._table_store = table_store if table_store is not None else TableStore()
 
+    def _best_doc_coverage_hits(
+        self,
+        retrieval_query: str,
+        query_embedding,
+        requested_docs: list[str],
+    ) -> list[Hit]:
+        """요청된 각 문서에서 최소 1개 후보를 확보한다."""
+
+        coverage_hits: list[Hit] = []
+        for doc_short in requested_docs:
+            dense = self.vector_store.query(query_embedding, 1, doc_filter=[doc_short])
+            bm25 = _filter_hits_by_doc(self.bm25.query(retrieval_query, 3), [doc_short])[:1]
+            best = rrf_fuse(dense, bm25, top_k=1, rrf_k=self.rrf_k)
+            coverage_hits.extend(best)
+        return coverage_hits
+
+    def _restore_doc_coverage(self, hits: list[Hit], coverage_hits: list[Hit], top_k: int) -> list[Hit]:
+        """최종 후보에서 누락된 요청 문서가 있으면 낮은 순위 후보를 교체한다."""
+
+        if not coverage_hits:
+            return hits[:top_k]
+
+        selected = _merge_hits_preserving_order(hits, [], limit=top_k)
+        present_docs = {hit.metadata.get("doc_short") for hit in selected}
+        replacements = [hit for hit in coverage_hits if hit.metadata.get("doc_short") not in present_docs]
+        if not replacements:
+            return selected
+
+        for replacement in replacements:
+            if replacement.id in {hit.id for hit in selected}:
+                continue
+            if len(selected) < top_k:
+                selected.append(replacement)
+            else:
+                selected[-1] = replacement
+            present_docs.add(replacement.metadata.get("doc_short"))
+        return _merge_hits_preserving_order(selected, [], limit=top_k)
+
+    def build_prompt(self, question: str, chunks: list[Chunk]) -> str:
+        """일반/스트리밍 경로가 공유하는 근거 보강 프롬프트를 만든다."""
+
+        prompt = build_user_prompt(question, chunks)
+        structured_ctx = _build_structured_context(question, chunks, table_store=self._table_store)
+        if structured_ctx:
+            prompt = f"{structured_ctx}\n\n{prompt}"
+        evidence_ctx = build_strict_evidence_context(question, chunks)
+        if evidence_ctx:
+            prompt = f"{evidence_ctx}\n\n{prompt}"
+        return prompt
+
     def retrieve_hits(
         self,
         question: str,
@@ -447,7 +561,10 @@ class RagPipeline:
         query_codes = _extract_query_codes(question)
         named_code_terms = _extract_named_code_terms(question)
         surgery_name = _extract_surgery_name_from_query(question)
+        requested_docs = _infer_requested_doc_shorts(question, doc_filter)
+        enforce_doc_coverage = _needs_doc_coverage(question, requested_docs)
         code_hits: list[Hit] = []
+        coverage_hits: list[Hit] = []
 
         if query_codes and hasattr(self.vector_store, "query_with_filter"):
             half_k = max(1, self.top_k_dense // 2)
@@ -478,6 +595,9 @@ class RagPipeline:
             rrf_top_k = max(rrf_top_k, final_top_k * 3)
         fused_hits = rrf_fuse(dense_hits, bm25_hits, top_k=rrf_top_k, rrf_k=self.rrf_k)
         debug_rrf = list(fused_hits)
+        if enforce_doc_coverage:
+            coverage_hits = self._best_doc_coverage_hits(retrieval_query, query_embedding, requested_docs)
+            fused_hits = _merge_hits_preserving_order(fused_hits, coverage_hits, limit=max(rrf_top_k, final_top_k))
         if code_hits:
             fused_by_id = {hit.id: hit for hit in fused_hits}
             ordered: list[Hit] = []
@@ -497,6 +617,8 @@ class RagPipeline:
             final_hits = self.reranker.rerank(question, fused_hits, top_k=final_top_k)
         else:
             final_hits = fused_hits[:final_top_k]
+        if enforce_doc_coverage:
+            final_hits = self._restore_doc_coverage(final_hits, coverage_hits, final_top_k)
         debug = (
             DebugInfo(
                 dense_hits=_hits_to_stage(debug_dense),
@@ -531,13 +653,7 @@ class RagPipeline:
         chunks = [_hit_to_chunk(hit) for hit in fused_hits]
 
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
-        prompt = build_user_prompt(question, chunks)
-        structured_ctx = _build_structured_context(question, chunks, table_store=self._table_store)
-        if structured_ctx:
-            prompt = f"{structured_ctx}\n\n{prompt}"
-        evidence_ctx = build_strict_evidence_context(question, chunks)
-        if evidence_ctx:
-            prompt = f"{evidence_ctx}\n\n{prompt}"
+        prompt = self.build_prompt(question, chunks)
 
         llm_started = time.perf_counter()
         answer_text = self.llm.generate(prompt, system=SYSTEM_PROMPT, temperature=temperature)

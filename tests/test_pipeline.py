@@ -13,7 +13,10 @@ from src.rag.pipeline import (
     _extract_query_codes,
     _extract_surgery_name_from_query,
     _hits_to_stage,
+    _infer_requested_doc_shorts,
     _is_low_value_wide_range,
+    _merge_hits_preserving_order,
+    _needs_doc_coverage,
     _prefer_exact_text_hits,
 )
 from src.parser.chunker import Chunk
@@ -389,6 +392,26 @@ def test_prefer_exact_text_hits() -> None:
     ordered = _prefer_exact_text_hits(hits, ["식도조루술"])
 
     assert [hit.id for hit in ordered] == ["exact", "generic"]
+
+
+def test_infer_requested_doc_shorts_from_question_aliases() -> None:
+    docs = _infer_requested_doc_shorts(
+        "로봇 수술 코드를 심평원 기준과 자사 SOL건강 약관 기준으로 문서별 비교해 주세요."
+    )
+
+    assert docs == ["심평원", "자사_SOL건강"]
+    assert _needs_doc_coverage("문서별 비교", docs) is True
+
+
+def test_merge_hits_preserving_order_deduplicates_and_limits() -> None:
+    first = Hit(id="a", score=1.0, document="A", metadata={"doc_short": "심평원"})
+    duplicate = Hit(id="a", score=0.5, document="A2", metadata={"doc_short": "심평원"})
+    second = Hit(id="b", score=0.4, document="B", metadata={"doc_short": "약관"})
+
+    merged = _merge_hits_preserving_order([first], [duplicate, second], limit=2)
+
+    assert [hit.id for hit in merged] == ["a", "b"]
+    assert merged[0].document == "A"
 
 
 def test_code_query_uses_filtered_dense_hits() -> None:

@@ -29,7 +29,7 @@ from src import config
 from src.auth import users as user_store
 from src.auth.users import ROLE_ADMIN
 from src.llm.factory import build_llm, format_model_label, get_openai_model_info, is_openai_model, list_available_models, list_startup_large_models, provider_prefixed_model, split_model_selection
-from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
+from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations
 from src.rag.insurance_form import (
     COVERAGE_TOPICS,
     INSURANCE_FORM_TOP_K,
@@ -722,10 +722,7 @@ def _stream_answer(
         chunks = [_hit_to_chunk(hit) for hit in hits]
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
 
-    prompt = build_user_prompt(question, chunks)
-    evidence_ctx = build_strict_evidence_context(question, chunks)
-    if evidence_ctx:
-        prompt = f"{evidence_ctx}\n\n{prompt}"
+    prompt = pipeline.build_prompt(question, chunks)
     llm_started = time.perf_counter()
     placeholder = st.empty()
     tokens: list[str] = []

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.parser.chunker import Chunk
+from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context
 from src.rag.pipeline import RagPipeline, _hit_to_chunk
 
 QUICK_CODE_TOP_K = 6
@@ -56,6 +57,9 @@ def build_quick_code_prompt(
         label = f"{meta.get('doc_short', '')} p.{meta.get('page_start', '?')}"
         blocks.append(f"[컨텍스트 {index}: {label}]\n{chunk.text}")
     context_block = "\n\n".join(blocks) if blocks else "제공된 컨텍스트 없음"
+    evidence_ctx = build_strict_evidence_context(f"{procedure_name} 코드", chunks)
+    if evidence_ctx:
+        context_block = f"{evidence_ctx}\n\n{context_block}"
 
     user_prompt = (
         f"{context_block}\n\n[시술명] {procedure_name}\n"
@@ -89,7 +93,8 @@ def generate_quick_code_answer(
     """검색 청크를 기반으로 퀵 코드 답변을 생성한다."""
 
     system, user = build_quick_code_prompt(procedure_name, chunks, include_summary, include_coverage)
-    return pipeline.llm.generate(user, system=system, temperature=temperature)
+    answer = pipeline.llm.generate(user, system=system, temperature=temperature)
+    return append_evidence_validation_warning(answer, f"{procedure_name} 코드", chunks)
 
 
 def run_quick_code(
