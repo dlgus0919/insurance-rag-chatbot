@@ -228,6 +228,7 @@ VLLM_MODEL_ENDPOINTS: dict[str, str] = _parse_sglang_model_endpoints(os.getenv("
 VLLM_ENABLE_APP_SWITCH: bool = os.getenv("VLLM_ENABLE_APP_SWITCH", "true").lower() == "true"
 VLLM_SWITCH_SCRIPT: Path = Path(os.getenv("VLLM_SWITCH_SCRIPT", "/srv/ai-ops/bin/switch-vllm-model"))
 VLLM_SWITCH_TIMEOUT: int = int(os.getenv("VLLM_SWITCH_TIMEOUT", "1200"))
+VLLM_STRICT_AVAILABLE_MODELS: bool = os.getenv("VLLM_STRICT_AVAILABLE_MODELS", "false").lower() == "true"
 
 
 def vllm_base_url_for_model(model: str) -> str:

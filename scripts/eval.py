@@ -26,6 +26,7 @@ from src.retrieval.vector_store import VectorStore
 SMOKE_QA_PATH = ROOT / "eval" / "smoke_qa.jsonl"
 SMOKE_QA_V2_PATH = ROOT / "eval" / "smoke_qa_v2.jsonl"
 OCR_QA_PATH = ROOT / "eval" / "ocr_qa.jsonl"
+CONFLICT_QA_PATH = ROOT / "eval" / "conflict_qa.jsonl"
 
 
 def load_questions(path: Path = SMOKE_QA_PATH) -> list[dict]:
@@ -84,6 +85,63 @@ def answer_matches_verdict(answer: str, expected_verdict: str) -> bool:
         return any(kw in answer for kw in ["보상하지 않", "지급하지 않", "면책", "보상 불가", "청구 불가"])
     if expected_verdict == "판정필요":
         return any(kw in answer for kw in ["약관", "조항", "확인", "판정", "경우에 따라"])
+    return True
+
+
+def answer_resolves_conflict(answer: str, expected_resolutions: dict[str, list[str]] | None) -> bool:
+    """답변에서 각 문서별(doc_short)로 정보가 분리되어 표현되었는지 검증한다."""
+    if not expected_resolutions:
+        return True
+
+    normalized_answer = re.sub(r"\s+", "", answer).upper()
+
+    for doc, expected_terms in expected_resolutions.items():
+        doc_upper = doc.upper().replace(" ", "")
+
+        # 문서명 매칭 후보군 확장
+        aliases = [doc_upper]
+        if doc_upper == "약관":
+            aliases.extend(["이지로운", "실손", "약관"])
+        elif "SOL건강" in doc_upper or "SOL_건강" in doc_upper or ("SOL" in doc_upper and "건강" in doc_upper):
+            aliases.extend(["SOL처음건강", "SOL건강", "처음건강", "자사_SOL건강", "SOL"])
+        elif "SOL운전자" in doc_upper or ("SOL" in doc_upper and "운전자" in doc_upper):
+            aliases.extend(["SOL처음운전자", "SOL운전자", "처음운전자", "자사_SOL운전자", "SOL"])
+        else:
+            if "자사_" in doc_upper:
+                aliases.append(doc_upper.replace("자사_", ""))
+                aliases.append(doc_upper.replace("자사_", "신한"))
+
+        # 1. 문서명이 답변에 들어있는지 유연하게 체크
+        idx = -1
+        for alias in aliases:
+            alias_upper = alias.upper().replace(" ", "").replace("_", "")
+            idx = normalized_answer.find(alias_upper)
+            if idx != -1:
+                break
+        if idx == -1:
+            if "SOL" in doc_upper and "SOL" in normalized_answer:
+                idx = normalized_answer.find("SOL")
+            else:
+                return False
+
+        # 2. 해당 문서명 언급 근방(window)에서 기대 단어 중 최소 하나 이상이 매치되는지 확인
+        doc_window = normalized_answer[idx:idx+500]
+        term_matched = False
+        for term in expected_terms:
+            term_upper = term.upper().replace(" ", "")
+            if term_upper in doc_window or term_upper in normalized_answer:
+                term_matched = True
+                break
+        if not term_matched:
+            # 전체 답변 기준으로 유연한 키워드 재검색
+            for term in expected_terms:
+                term_upper = term.upper().replace(" ", "")
+                if term_upper in normalized_answer:
+                    term_matched = True
+                    break
+            if not term_matched:
+                return False
+
     return True
 
 
@@ -167,9 +225,10 @@ def parse_args(argv: list[str] | None = None):
     parser = ArgumentParser(description="Smoke QA 평가 스크립트")
     parser.add_argument("--v2", action="store_true", help="약관 정형 모드 평가 문항을 사용합니다.")
     parser.add_argument("--ocr", action="store_true", help="OCR 문서 평가 문항을 사용합니다.")
+    parser.add_argument("--conflict", action="store_true", help="문서 간 근거 충돌 평가 문항을 사용합니다.")
     args = parser.parse_args(argv)
-    if args.v2 and args.ocr:
-        parser.error("--v2와 --ocr는 동시에 사용할 수 없습니다.")
+    if sum([args.v2, args.ocr, args.conflict]) > 1:
+        parser.error("--v2, --ocr, --conflict는 동시에 사용할 수 없습니다.")
     return args
 
 
@@ -179,6 +238,8 @@ def main() -> None:
         question_path = OCR_QA_PATH
     elif args.v2:
         question_path = SMOKE_QA_V2_PATH
+    elif args.conflict:
+        question_path = CONFLICT_QA_PATH
     else:
         question_path = SMOKE_QA_PATH
     questions = load_questions(question_path)
@@ -192,8 +253,8 @@ def main() -> None:
     llm = build_llm(selected_model, provider=selected_provider)
     eval_temperature = float(os.getenv("OLLAMA_TEMPERATURE", "0"))
     llm_available = getattr(llm, "health", lambda: True)()
-    if not llm_available and args.ocr:
-        print("선택된 LLM provider에 연결할 수 없어 --ocr LLM 답변 평가는 skip하고 retrieval-only로 진행합니다.")
+    if not llm_available and (args.ocr or args.conflict):
+        print("선택된 LLM provider에 연결할 수 없어 LLM 답변 평가는 skip하고 retrieval-only로 진행합니다.")
     elif not llm_available:
         raise SystemExit("선택된 LLM provider에 연결할 수 없습니다. SGLang 또는 Ollama 서버 상태를 확인하세요.")
 
@@ -225,6 +286,11 @@ def main() -> None:
     rate_evaluated = 0
     keyword_correct = 0
     keyword_total = 0
+    conflict_hits = 0
+    conflict_evaluated = 0
+    source_coverage_total = 0.0
+    table_metadata_hits = 0
+    table_metadata_total = 0
 
     for index, item in enumerate(questions, start=1):
         question = item["question"]
@@ -251,15 +317,15 @@ def main() -> None:
         keyword_result = None
         c_block_present = None
         if llm_available:
-            prompt = build_user_prompt(question, chunks)
-            structured_ctx = _build_structured_context(question, chunks, table_store=getattr(pipeline, "_table_store", None))
-            if structured_ctx:
-                prompt = f"{structured_ctx}\n\n{prompt}"
+            prompt = pipeline.build_prompt(question, chunks)
             num_ctx = None
             if args.ocr:
                 prompt += "\n\n평가용 출력 지시: 정답에 필요한 수치와 핵심 근거만 2문장 이내로 답하세요."
                 num_ctx = min(config.OLLAMA_NUM_CTX, 4096)
             answer = llm.generate(prompt, system=SYSTEM_PROMPT, temperature=eval_temperature, num_ctx=num_ctx)
+            print(f"\n--- [QA {index:02d}] ---")
+            print(f"Q: {question}")
+            print(f"A: {answer}")
             answer = append_retrieved_source_citations(answer, chunks)
             c_block_present = "[구조화 데이터 — 직접 조회 (C)]" in prompt
             page_ok = answer_mentions_expected_page(answer, expected_pages)
@@ -283,6 +349,24 @@ def main() -> None:
                 keyword_result = answer_mentions_expected_keywords(answer, item.get("expected_keywords"))
                 keyword_correct += keyword_result[0]
                 keyword_total += keyword_result[1]
+            if args.conflict or item_type == "conflict_aware":
+                conflict_ok = answer_resolves_conflict(answer, item.get("expected_conflict_resolutions"))
+                conflict_hits += int(conflict_ok)
+                conflict_evaluated += 1
+
+            # source_coverage 계산
+            referenced_docs = [doc for doc in indexed_doc_sources if doc in answer]
+            retrieved_docs = list({hit.metadata.get("doc_short") for hit in fused_hits if hit.metadata.get("doc_short")})
+            item_coverage = len(referenced_docs) / len(retrieved_docs) if retrieved_docs else 1.0
+            source_coverage_total += item_coverage
+
+            # table row metadata 인용 여부 체크
+            has_table_chunk = any(hit.metadata.get("table_json") not in (None, "", "{}") for hit in fused_hits)
+            if has_table_chunk:
+                table_metadata_total += 1
+                page_mentioned = any(str(hit.metadata.get("page_start")) in answer for hit in fused_hits if hit.metadata.get("page_start") is not None)
+                if "[구조화" in answer or page_mentioned:
+                    table_metadata_hits += 1
 
         top_pages = [
             f"{hit.metadata.get('page_start')}-{hit.metadata.get('page_end')}"
@@ -300,6 +384,8 @@ def main() -> None:
                 metric_parts.append(f"rate={'OK' if rate_ok else 'MISS'}")
             if keyword_result:
                 metric_parts.append(f"keywords={keyword_result[0]}/{keyword_result[1]}")
+            if args.conflict or item_type == "conflict_aware":
+                metric_parts.append(f"conflict={'OK' if conflict_ok else 'MISS'}")
             print(
                 f"[{index:02d}] {item['type']} recall={'OK' if retrieved else 'MISS'} "
                 f"page={'OK' if page_ok else 'MISS'} "
@@ -320,6 +406,15 @@ def main() -> None:
         print("출처 페이지 정확도: N/A (LLM skip)")
     else:
         print(f"출처 페이지 정확도: {page_accuracy:.3f}")
+
+    mean_source_coverage = source_coverage_total / evaluated if evaluated else 0.0
+    print(f"평균 출처 커버리지 (source_coverage): {mean_source_coverage:.3f}")
+    if table_metadata_total:
+        print(f"테이블 행 메타데이터 인용율 (table_row_metadata_accuracy): {table_metadata_hits / table_metadata_total:.3f}")
+
+    if args.conflict or conflict_evaluated:
+        print(f"근거 충돌 분리 해결율: {conflict_hits / conflict_evaluated:.3f}")
+
     if args.ocr:
         if grade_total:
             print(f"수술종수 정확도 (grade_accuracy): {grade_correct_total / grade_total:.3f}")
@@ -339,7 +434,7 @@ def main() -> None:
     if skipped:
         print(f"skipped: {skipped}")
 
-    if args.v2:
+    if args.v2 or args.conflict:
         return
     if args.ocr:
         if recall < 0.7:

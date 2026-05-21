@@ -103,3 +103,59 @@ def test_chunk_from_extracted_skips_noise_text_blocks(tmp_path: Path) -> None:
 
     assert len(chunks) == 1
     assert "보험금 지급 심사 기준" in chunks[0].text
+
+def test_chunk_from_extracted_propagates_hierarchy_context(tmp_path: Path) -> None:
+    extracted_dir = tmp_path / "약관"
+    (extracted_dir / "text").mkdir(parents=True)
+    (extracted_dir / "tables").mkdir()
+    (extracted_dir / "text" / "p000_b00.txt").write_text(
+        "제 1 관 총칙\n제 3 조(보상하지 않는 사항)\n[별표 1] 장해분류표\n보상하지 않는 사항 안내",
+        encoding="utf-8",
+    )
+    (extracted_dir / "tables" / "p000_t00_text.txt").write_text(
+        "항목 | 내용\nA | B",
+        encoding="utf-8",
+    )
+    (extracted_dir / "tables" / "p000_t00.json").write_text(
+        json.dumps({"headers": ["항목", "내용"], "rows": [{"항목": "A", "내용": "B"}]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (extracted_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "pages": [
+                    {
+                        "page_no": 0,
+                        "engine": "clova",
+                        "blocks": [
+                            {"type": "text", "file": "text/p000_b00.txt", "bbox": [0, 0, 10, 10], "confidence": 0.9},
+                            {
+                                "type": "table",
+                                "file": "tables/p000_t00_text.txt",
+                                "bbox": [0, 0, 10, 10],
+                                "confidence": 0.95,
+                            },
+                        ],
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    source = PdfSource(
+        path=Path("약관.pdf"),
+        doc_type="insurance_policy",
+        doc_name="약관",
+        doc_short="약관",
+        requires_ocr=True,
+    )
+
+    chunks = chunk_from_extracted("약관", extracted_dir, source)
+
+    assert len(chunks) == 2
+    assert chunks[0].metadata["volume"] == "제 1 관 총칙"
+    assert chunks[0].metadata["chapter"] == "제 3 조(보상하지 않는 사항)"
+    assert chunks[0].metadata["section"] == "[별표 1] 장해분류표"
+    assert chunks[1].metadata["chapter"] == "제 3 조(보상하지 않는 사항)"
+    assert chunks[1].metadata["section"] == "[별표 1] 장해분류표"

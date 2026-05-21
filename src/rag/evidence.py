@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from src.parser.chunker import Chunk
 
@@ -240,3 +241,81 @@ def append_evidence_validation_warning(answer: str, question: str, chunks: list[
     unique_warnings = list(dict.fromkeys(warnings))
     warning_block = "\n".join(f"- {warning}" for warning in unique_warnings)
     return f"{answer.rstrip()}\n\n[근거 검증 경고]\n{warning_block}"
+
+
+def detect_retrieval_conflicts(chunks: list[Chunk], query: str) -> dict[str, Any]:
+    """검색된 청크와 질문을 분석하여 문서 간 정보(수치/보상 여부) 충돌을 감지한다."""
+    doc_shorts = sorted(list({chunk.metadata.get("doc_short") for chunk in chunks if chunk.metadata.get("doc_short")}))
+    if len(doc_shorts) < 2:
+        return {
+            "conflict_detected": False,
+            "conflicting_docs": doc_shorts,
+            "message": ""
+        }
+
+    # 충돌 가능성이 있는 핵심 비급여/수술/보상 키워드
+    conflict_keywords = [
+        "도수", "체외충격파", "증식", "mri", "자기공명",
+        "다빈치", "로봇수술", "보상", "한도", "지급률", "면책", "횟수"
+    ]
+    query_clean = query.replace(" ", "").lower()
+    has_conflict_keyword = any(kw in query_clean for kw in conflict_keywords)
+
+    if not has_conflict_keyword:
+        return {
+            "conflict_detected": False,
+            "conflicting_docs": doc_shorts,
+            "message": ""
+        }
+
+    # 각 문서별로 텍스트 내 수치(금액, 횟수, 지급률) 패턴 추출하여 비교
+    doc_numerical_values: dict[str, set[str]] = {}
+    doc_disclaimer: dict[str, bool] = {} # 면책 여부
+
+    for chunk in chunks:
+        doc = chunk.metadata.get("doc_short")
+        if not doc:
+            continue
+        text = chunk.text
+        # 수치 추출 (예: 50회, 20만원, 100%, 30일 등)
+        nums = set(re.findall(r"\d+\s*(?:만원|원|회|일|%)", text))
+        doc_numerical_values.setdefault(doc, set()).update(nums)
+
+        # 면책/보상제외 키워드 탐색
+        has_disclaimer = any(kw in text for kw in ["보상하지 않", "지급하지 않", "보장하지 않", "면책", "보상 제외", "지급 제외"])
+        if has_disclaimer:
+            doc_disclaimer[doc] = True
+
+    conflict_detected = False
+
+    # 보상 여부의 차이가 존재하는지 검사
+    disclaimer_docs = [doc for doc, val in doc_disclaimer.items() if val]
+    non_disclaimer_docs = [doc for doc in doc_shorts if doc not in disclaimer_docs]
+
+    if disclaimer_docs and non_disclaimer_docs:
+        conflict_detected = True
+
+    # 혹은 단순히 수치 패턴 집합들이 서로 다를 때
+    for i in range(len(doc_shorts)):
+        for j in range(i + 1, len(doc_shorts)):
+            d1, d2 = doc_shorts[i], doc_shorts[j]
+            nums1 = doc_numerical_values.get(d1, set())
+            nums2 = doc_numerical_values.get(d2, set())
+            if nums1 and nums2 and nums1 != nums2:
+                conflict_detected = True
+                break
+
+    # 질문에 직접 '비교', '차이', '각각' 등의 단어가 들어있고 복수 문서가 참조되면 무조건 충돌 분석 대상으로 분류
+    compare_terms = ["비교", "차이", "각각", "어떻게 다른", "다른가"]
+    if any(term in query for term in compare_terms):
+        conflict_detected = True
+
+    message = ""
+    if conflict_detected:
+        message = f"문서 간 정보 충돌 감지: {', '.join(doc_shorts)} 간에 보상 조건이나 수치의 차이가 존재할 수 있습니다."
+
+    return {
+        "conflict_detected": conflict_detected,
+        "conflicting_docs": doc_shorts,
+        "message": message
+    }

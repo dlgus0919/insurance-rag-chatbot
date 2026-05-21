@@ -125,7 +125,21 @@ def list_vllm_large_models() -> list[str]:
 def _available_vllm_models() -> list[str]:
     """Return vLLM models exposed in the UI."""
 
-    return list_vllm_large_models()
+    candidates = list_vllm_large_models()
+    if not config.VLLM_STRICT_AVAILABLE_MODELS:
+        return candidates
+
+    served_by_endpoint: dict[str, list[str]] = {}
+    for model in candidates:
+        endpoint = config.vllm_base_url_for_model(model)
+        served_by_endpoint.setdefault(endpoint, _served_models_for_endpoint(endpoint))
+
+    available: list[str] = []
+    for model in candidates:
+        served = served_by_endpoint.get(config.vllm_base_url_for_model(model), [])
+        if model in served:
+            available.append(model)
+    return _ordered_unique(available)
 
 
 def list_startup_large_models() -> list[tuple[str, str]]:

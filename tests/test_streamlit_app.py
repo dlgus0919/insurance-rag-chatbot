@@ -209,11 +209,13 @@ def test_question_log_details_include_mode_and_selected_docs() -> None:
         temperature=0.2,
         selected_docs=["심평원"],
         question="AA157은?",
+        index_mode="v2_only",
     )
 
     assert details["mode"] == "general"
     assert details["selected_docs"] == ["심평원"]
     assert details["question"] == "AA157은?"
+    assert details["index_mode"] == "v2_only"
 
 
 def test_answer_log_details_include_sources_and_extra_options() -> None:

@@ -275,6 +275,39 @@ def _tab_system(_log) -> None:
         st.write("HuggingFace 다운로드 허용:", config.HF_MODEL_DOWNLOAD)
         st.write("클라우드 배포:", config.CLOUD_DEPLOY)
 
+    st.markdown("**OCR Pair Mapping (관리자 전용)**")
+    mapping_dir = config.ROOT_DIR / "data" / "mapping"
+    st.write("매핑 디렉토리:", str(mapping_dir), "·", "있음" if mapping_dir.exists() else "없음")
+    rows: list[dict] = []
+    for doc in ["실무가이드", "상담사례집"]:
+        path = mapping_dir / f"v1_v2_pairs_{doc}.jsonl"
+        total = high = low = linked = 0
+        if path.exists():
+            with path.open("r", encoding="utf-8") as file:
+                for line in file:
+                    if not line.strip():
+                        continue
+                    total += 1
+                    record = json.loads(line)
+                    if record.get("confidence") == "high":
+                        high += 1
+                    else:
+                        low += 1
+                    if record.get("v1_chunk_id"):
+                        linked += 1
+        rows.append(
+            {
+                "문서": doc,
+                "존재": path.exists(),
+                "전체 pair": total,
+                "고신뢰": high,
+                "저신뢰": low,
+                "v1 연결됨": linked,
+                "고신뢰 비율": f"{(high / total * 100):.1f}%" if total else "-",
+            }
+        )
+    st.dataframe(rows, use_container_width=True)
+
 
 def _tab_search_diagnostics(_log) -> None:
     """최근 질의의 RAG 단계별 검색 결과를 표시한다."""

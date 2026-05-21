@@ -6,14 +6,45 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.parser.chunker import Chunk, EXTENDED_META_DEFAULTS, _extract_codes, _split_text
+from src.parser.chunker import (
+    Chunk,
+    EXTENDED_META_DEFAULTS,
+    _extract_codes,
+    _header_level,
+    _split_text,
+    _update_context,
+)
 from src.parser.ocr_postprocess import is_noise_text_block, normalize_ocr_text
 
 if TYPE_CHECKING:
     from src.config import PdfSource
 
 
-def _base_meta(doc_source: "PdfSource", page_no: int, engine: str, content_type: str, block_info: dict, text: str) -> dict:
+def _normalize_line(line: str) -> str:
+    return " ".join(line.split()).strip()
+
+
+def _context_from_text(text: str, doc_type: str, context: dict) -> dict:
+    updated = dict(context)
+    for raw_line in text.splitlines():
+        line = _normalize_line(raw_line)
+        if not line:
+            continue
+        level = _header_level(line, doc_type)
+        if level is not None:
+            updated = _update_context(updated, level, line)
+    return updated
+
+
+def _base_meta(
+    doc_source: "PdfSource",
+    page_no: int,
+    engine: str,
+    content_type: str,
+    block_info: dict,
+    text: str,
+    context: dict,
+) -> dict:
     codes = _extract_codes(text)
     metadata = {
         **EXTENDED_META_DEFAULTS,
@@ -23,10 +54,10 @@ def _base_meta(doc_source: "PdfSource", page_no: int, engine: str, content_type:
         "pdf_filename": doc_source.path.name,
         "page_start": page_no + 1,
         "page_end": page_no + 1,
-        "volume": None,
-        "part": None,
-        "chapter": None,
-        "section": None,
+        "volume": context.get("volume"),
+        "part": context.get("part"),
+        "chapter": context.get("chapter"),
+        "section": context.get("section"),
         "codes": codes,
         "is_code_table": content_type == "table" or len(codes) >= 5,
         "char_count": len(text),
@@ -74,10 +105,12 @@ def chunk_from_extracted(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     chunks: list[Chunk] = []
     next_index = id_offset
+    document_context: dict[str, str | None] = {"volume": None, "part": None, "chapter": None, "section": None}
 
     for page_info in manifest.get("pages", []):
         page_no = int(page_info["page_no"])
         engine = str(page_info.get("engine", "ppstructure"))
+        page_context = dict(document_context)
 
         for block_info in page_info.get("blocks", []):
             block_type = str(block_info.get("type", "text"))
@@ -92,7 +125,7 @@ def chunk_from_extracted(
                 text = file_path.read_text(encoding="utf-8").strip()
                 if not text:
                     continue
-                metadata = _base_meta(doc_source, page_no, engine, "table", block_info, text)
+                metadata = _base_meta(doc_source, page_no, engine, "table", block_info, text, page_context)
                 json_path = _table_json_path(file_path)
                 metadata["table_json"] = json_path.read_text(encoding="utf-8") if json_path.exists() else "{}"
                 chunks.append(Chunk(id=f"{doc_short}_ch_{next_index:06d}", text=text, metadata=metadata))
@@ -105,7 +138,7 @@ def chunk_from_extracted(
                 caption = normalize_ocr_text(caption)
                 if not caption:
                     continue
-                metadata = _base_meta(doc_source, page_no, engine, "figure", block_info, caption)
+                metadata = _base_meta(doc_source, page_no, engine, "figure", block_info, caption, page_context)
                 metadata["image_path"] = str(file_path)
                 chunks.append(Chunk(id=f"{doc_short}_ch_{next_index:06d}", text=caption, metadata=metadata))
                 next_index += 1
@@ -114,9 +147,11 @@ def chunk_from_extracted(
             text = normalize_ocr_text(file_path.read_text(encoding="utf-8"))
             if not text or is_noise_text_block(text):
                 continue
+            page_context = _context_from_text(text, doc_source.doc_type, page_context)
             for piece in _split_text(text, target_chars=800, overlap_chars=100):
-                metadata = _base_meta(doc_source, page_no, engine, "text", block_info, piece)
+                metadata = _base_meta(doc_source, page_no, engine, "text", block_info, piece, page_context)
                 chunks.append(Chunk(id=f"{doc_short}_ch_{next_index:06d}", text=piece, metadata=metadata))
                 next_index += 1
+        document_context = page_context
 
     return chunks

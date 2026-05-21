@@ -39,7 +39,7 @@ def select_sources(cloud_only: bool = False, skip_ocr: bool = True):
     return sources
 
 
-def build_chunks(sources=None) -> None:
+def build_chunks(sources=None, extracted_root: Path | None = None, chunks_path: Path | None = None) -> None:
     """PDF_SOURCES를 순회하며 통합 chunks.jsonl을 생성한다."""
 
     started = time.perf_counter()
@@ -47,18 +47,13 @@ def build_chunks(sources=None) -> None:
     id_offset = 0
     doc_counts: Counter[str] = Counter()
     selected_sources = list(sources or config.PDF_SOURCES)
+    extracted_base = extracted_root or EXTRACTED_BASE
+    output_chunks_path = chunks_path or config.CHUNKS_PATH
 
     print("[M6] 멀티 문서 PDF 파싱 시작")
     for source in selected_sources:
-        if not source.path.exists():
-            if source.doc_short == "가이드북":
-                print(f"[M10] 보상가이드북 파일 없음, 건너뜀: {source.path.name}")
-            else:
-                print(f"[M6] 파일 없음, 건너뜀: {source.path.name}")
-            continue
-
         if source.requires_ocr:
-            extracted_dir = EXTRACTED_BASE / source.doc_short
+            extracted_dir = extracted_base / source.doc_short
             manifest_path = extracted_dir / "manifest.json"
             if not manifest_path.exists():
                 print(f"[M6] OCR 추출물 없음, 건너뜀: {source.doc_short}")
@@ -67,6 +62,12 @@ def build_chunks(sources=None) -> None:
             print(f"[M6] OCR 청크 생성: {source.doc_short}")
             chunks = chunk_from_extracted(source.doc_short, extracted_dir, source, id_offset=id_offset)
         else:
+            if not source.path.exists():
+                if source.doc_short == "가이드북":
+                    print(f"[M10] 보상가이드북 파일 없음, 건너뜀: {source.path.name}")
+                else:
+                    print(f"[M6] 파일 없음, 건너뜀: {source.path.name}")
+                continue
             print(f"[M6] PDF 파싱: {source.doc_short} ({source.path.name})")
             pages = parse_pdf(source.path)
             non_empty_pages = sum(1 for _, text in pages if text.strip())
@@ -84,7 +85,7 @@ def build_chunks(sources=None) -> None:
         doc_counts[source.doc_short] = len(chunks)
         print(f"[M6] {source.doc_short}: {len(chunks):,} 청크")
 
-    save_chunks(all_chunks, config.CHUNKS_PATH)
+    save_chunks(all_chunks, output_chunks_path)
 
     lengths = [chunk.metadata["char_count"] for chunk in all_chunks]
     code_chunks = sum(1 for chunk in all_chunks if chunk.metadata["codes"])
@@ -92,7 +93,7 @@ def build_chunks(sources=None) -> None:
     ratio = (code_chunks / len(all_chunks) * 100) if all_chunks else 0
     elapsed = time.perf_counter() - started
 
-    print(f"[M6] 청킹 완료: {config.CHUNKS_PATH}")
+    print(f"[M6] 청킹 완료: {output_chunks_path}")
     for doc_short, count in doc_counts.items():
         print(f"[M6] 문서별 청크 수: {doc_short}={count:,}")
     print(f"[M6] 전체 청크 수: {len(all_chunks):,}")
@@ -101,18 +102,22 @@ def build_chunks(sources=None) -> None:
     print(f"[M6] 소요 시간: {elapsed:.1f}초")
 
 
-def build_index() -> None:
+def build_index(chunks_path: Path | None = None, index_root: Path | None = None) -> None:
     """chunks.jsonl에서 ChromaDB와 BM25 인덱스를 생성한다."""
 
-    if not config.CHUNKS_PATH.exists():
+    input_chunks_path = chunks_path or config.CHUNKS_PATH
+    chroma_dir = config.CHROMA_DIR if index_root is None else index_root / "chroma"
+    bm25_path = config.BM25_PATH if index_root is None else index_root / "bm25.pkl"
+
+    if not input_chunks_path.exists():
         raise SystemExit(
-            f"청크 파일이 없습니다: {config.CHUNKS_PATH}\n"
+            f"청크 파일이 없습니다: {input_chunks_path}\n"
             "먼저 `python scripts/ingest.py --stage chunks`를 실행하세요."
         )
 
     started = time.perf_counter()
     print("[M2] 청크 로드 시작")
-    chunks = load_chunks(config.CHUNKS_PATH)
+    chunks = load_chunks(input_chunks_path)
     ids = [chunk.id for chunk in chunks]
     texts = [chunk.text for chunk in chunks]
     metadatas = [chunk.metadata for chunk in chunks]
@@ -122,8 +127,8 @@ def build_index() -> None:
     bm25_started = time.perf_counter()
     bm25 = BM25Index()
     bm25.build(ids, texts, metadatas)
-    bm25.save(config.BM25_PATH)
-    print(f"[M2] BM25 저장 완료: {config.BM25_PATH} ({time.perf_counter() - bm25_started:.1f}초)")
+    bm25.save(bm25_path)
+    print(f"[M2] BM25 저장 완료: {bm25_path} ({time.perf_counter() - bm25_started:.1f}초)")
 
     print(f"[M2] 임베딩 모델 로드: {config.EMBEDDING_MODEL}")
     embedder = Embedder(config.EMBEDDING_MODEL)
@@ -135,9 +140,9 @@ def build_index() -> None:
     print(f"[M2] 문서 임베딩 완료: {embeddings.shape} ({embed_elapsed:.1f}초)")
 
     print("[M2] ChromaDB 저장 시작")
-    vector_store = VectorStore(config.CHROMA_DIR, reset=True)
+    vector_store = VectorStore(chroma_dir, reset=True)
     vector_store.upsert(ids, embeddings, metadatas, texts)
-    print(f"[M2] ChromaDB 저장 완료: {config.CHROMA_DIR}")
+    print(f"[M2] ChromaDB 저장 완료: {chroma_dir}")
 
     print("[M2] 샘플 질의 retrieve: 재진 진찰료")
     query_embedding = embedder.embed_query("재진 진찰료")
@@ -157,13 +162,34 @@ def main() -> None:
     parser.add_argument("--stage", choices=["chunks", "index", "all"], default="all")
     parser.add_argument("--cloud-only", action="store_true", help="cloud_safe=True인 PDF만 인덱싱한다.")
     parser.add_argument("--include-ocr", action="store_true", help="requires_ocr=True PDF도 인제스트 대상에 포함한다.")
+    parser.add_argument(
+        "--extracted-root",
+        type=Path,
+        default=EXTRACTED_BASE,
+        help="OCR 추출물 루트 경로 (기본: data/extracted).",
+    )
+    parser.add_argument(
+        "--chunks-path",
+        type=Path,
+        default=config.CHUNKS_PATH,
+        help="생성/사용할 chunks.jsonl 경로.",
+    )
+    parser.add_argument(
+        "--index-root",
+        type=Path,
+        default=config.CHROMA_DIR.parent,
+        help="인덱스 출력 루트 경로 (하위에 chroma/, bm25.pkl 생성).",
+    )
     args = parser.parse_args()
+    extracted_root = args.extracted_root if args.extracted_root.is_absolute() else ROOT / args.extracted_root
+    chunks_path = args.chunks_path if args.chunks_path.is_absolute() else ROOT / args.chunks_path
+    index_root = args.index_root if args.index_root.is_absolute() else ROOT / args.index_root
     sources = select_sources(args.cloud_only, skip_ocr=not args.include_ocr)
 
     if args.stage in {"chunks", "all"}:
-        build_chunks(sources)
+        build_chunks(sources, extracted_root=extracted_root, chunks_path=chunks_path)
     if args.stage in {"index", "all"}:
-        build_index()
+        build_index(chunks_path=chunks_path, index_root=index_root)
 
 
 if __name__ == "__main__":

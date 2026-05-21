@@ -98,6 +98,16 @@ class DummyLLM:
         return "재진 진찰료 답변입니다. [출처: 제1절 진찰료, p.88]"
 
 
+
+
+class DummyPairStore:
+    def __init__(self, pairs: dict[str, dict]):
+        self.pairs = pairs
+
+    def get(self, canonical_chunk_id: str):
+        return self.pairs.get(canonical_chunk_id)
+
+
 class DummyReranker:
     enabled = True
 
@@ -130,6 +140,35 @@ def test_pipeline_builds_prompt_and_returns_sources() -> None:
     assert result.answer.startswith("재진 진찰료")
     assert result.chunks[0].id == "code"
     assert result.timing["total_ms"] >= 0
+
+
+def test_pipeline_injects_paired_ocr_context_when_mapping_exists() -> None:
+    llm = DummyLLM()
+    pair_store = DummyPairStore(
+        {
+            "code": {
+                "v1_chunk_id": "v1_code_001",
+                "use_v1": True,
+                "score": 0.98,
+            }
+        }
+    )
+    v1_lookup = {"v1_code_001": {"text": "원본 OCR 대응 텍스트"}}
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        DummyVectorStore(),
+        DummyBM25(),
+        llm,
+        top_k_final=8,
+        reranker_enabled=False,
+        pair_mapping_store=pair_store,
+        v1_chunk_lookup=v1_lookup,
+    )
+
+    pipeline.answer("AA157은 무엇인가요?")
+
+    assert "[OCR 교차검증 컨텍스트 - 원본 OCR 참조]" in llm.prompt
+    assert "원본 OCR 대응 텍스트" in llm.prompt
 
 
 def test_extract_query_codes_preserves_order_and_deduplicates() -> None:

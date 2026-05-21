@@ -42,6 +42,8 @@ from src.rag.pipeline import DebugInfo, RagPipeline, _hit_to_chunk
 from src.rag.quick_code import QUICK_CODE_TOP_K, generate_quick_code_answer, retrieve_quick_code_chunks
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
+from src.retrieval.index_mode import resolve_index_paths
+from src.retrieval.pair_mapping import PairMappingStore, load_chunk_lookup
 from src.retrieval.reranker import build_reranker
 from src.retrieval.vector_store import VectorStore
 from src.ui.admin_page import render_admin_page
@@ -65,6 +67,11 @@ INSURANCE_SUB_MODES = {
     "보상가능 여부 판정": "coverage_judgment",
     "약관 조문 검색": "clause_lookup",
     "키워드/시술명 검색": "keyword_search",
+}
+OCR_INDEX_MODES = {
+    "기본 운영 인덱스": "default",
+    "보정본 OCR만": "v2_only",
+    "원본+보정본 OCR 통합": "v1_v2_combined",
 }
 
 
@@ -496,6 +503,7 @@ def _build_question_log_details(
     temperature: float,
     selected_docs: list[str],
     question: str,
+    index_mode: str = "default",
     extra: dict | None = None,
 ) -> dict:
     """질문 이벤트 로그 상세 정보를 만든다."""
@@ -507,6 +515,7 @@ def _build_question_log_details(
         "temperature": temperature,
         "selected_docs": selected_docs,
         "question": question,
+        "index_mode": index_mode,
     }
     if extra:
         details.update(extra)
@@ -523,6 +532,7 @@ def _build_answer_log_details(
     question: str | None = None,
     provider: str = "ollama",
     token_usage: dict | None = None,
+    index_mode: str = "default",
     extra: dict | None = None,
 ) -> dict:
     """답변 이벤트 로그 상세 정보를 만든다."""
@@ -536,6 +546,7 @@ def _build_answer_log_details(
         "timing": _timing_log_payload(timing),
         "chunk_count": len(chunks),
         "sources": _source_log_payload(chunks),
+        "index_mode": index_mode,
     }
     if question is not None:
         details["question_preview"] = question[:120]
@@ -627,17 +638,31 @@ def _select_model_widget() -> str:
 
 
 @st.cache_resource
-def _load_heavy_components():
-    """임베더·벡터스토어·BM25·Reranker를 한 번만 로드한다."""
+def _load_heavy_components(index_mode: str):
+    """임베더·벡터스토어·BM25·Reranker와 OCR pair mapping을 로드한다."""
 
-    if not config.BM25_PATH.exists():
-        raise RuntimeError("BM25 인덱스가 없습니다. `python scripts/ingest.py --stage index`를 먼저 실행하세요.")
+    bm25_path, chroma_dir = resolve_index_paths(index_mode)
+    if not bm25_path.exists():
+        raise RuntimeError(
+            f"BM25 인덱스가 없습니다: {bm25_path}\n"
+            "필요 시 해당 OCR 인덱스 모드를 먼저 생성하세요."
+        )
 
     embedder = Embedder(config.EMBEDDING_MODEL, allow_remote_download=config.HF_MODEL_DOWNLOAD)
-    vector_store = VectorStore(config.CHROMA_DIR)
-    bm25 = BM25Index.load(config.BM25_PATH)
+    vector_store = VectorStore(chroma_dir)
+    bm25 = BM25Index.load(bm25_path)
     reranker = build_reranker(enabled=config.RERANKER_ENABLED)
-    return embedder, vector_store, bm25, reranker
+
+    pair_store = PairMappingStore(config.ROOT_DIR / "data" / "mapping")
+    for doc in ("실무가이드", "상담사례집"):
+        pair_store.load_doc(doc)
+
+    v1_lookup = {}
+    v1_chunks_path = config.ROOT_DIR / "data" / "processed" / "chunks_v1_rechunked_target16.jsonl"
+    if v1_chunks_path.exists():
+        v1_lookup = load_chunk_lookup(v1_chunks_path, docs=["실무가이드", "상담사례집"])
+
+    return embedder, vector_store, bm25, reranker, pair_store, v1_lookup
 
 
 @st.cache_resource
@@ -648,10 +673,10 @@ def _load_llm(model: str):
     return build_llm(model_id, provider=provider)
 
 
-def _get_pipeline(model: str, top_k: int) -> RagPipeline:
+def _get_pipeline(model: str, top_k: int, index_mode: str = "default") -> RagPipeline:
     """캐시된 컴포넌트로 RagPipeline 객체를 조합한다."""
 
-    embedder, vector_store, bm25, reranker = _load_heavy_components()
+    embedder, vector_store, bm25, reranker, pair_store, v1_lookup = _load_heavy_components(index_mode)
     llm = _load_llm(model)
     return RagPipeline(
         embedder=embedder,
@@ -663,6 +688,8 @@ def _get_pipeline(model: str, top_k: int) -> RagPipeline:
         top_k_final=top_k,
         rrf_k=config.RRF_K,
         reranker=reranker,
+        pair_mapping_store=pair_store,
+        v1_chunk_lookup=v1_lookup,
     )
 
 
@@ -1013,6 +1040,7 @@ def main() -> None:
 
     render_logo(width=360)
     st.markdown('<h1 class="app-header">보험 문서 RAG 챗봇</h1>', unsafe_allow_html=True)
+    index_mode = "default"
 
     with st.sidebar:
         if config.CLOUD_DEPLOY:
@@ -1038,12 +1066,27 @@ def main() -> None:
                 "loaded_large_model",
             ):
                 st.session_state.pop(key, None)
+        # vLLM strict 모드 토글 추가
+        strict_mode = st.toggle(
+            "vLLM Strict 모드",
+            value=config.VLLM_STRICT_AVAILABLE_MODELS,
+            help="활성화하면 vLLM API 엔드포인트에서 실제로 서비스 중인 모델만 노출합니다.",
+        )
+        if strict_mode != config.VLLM_STRICT_AVAILABLE_MODELS:
+            config.VLLM_STRICT_AVAILABLE_MODELS = strict_mode
+            try:
+                _get_available_models_grouped.clear()
+            except AttributeError:
+                pass
             st.rerun()
+
         page = st.radio("페이지", ["챗봇", "관리자"], horizontal=True, key="page") if role == ROLE_ADMIN else "챗봇"
         st.divider()
 
         if page == "챗봇":
             model = _select_model_widget()
+            index_label = st.selectbox("OCR 인덱스 모드", list(OCR_INDEX_MODES.keys()), index=0)
+            index_mode = OCR_INDEX_MODES[index_label]
             top_k = st.slider("Top-K", min_value=4, max_value=12, value=8)
             temperature = st.slider("온도", min_value=0.0, max_value=0.7, value=0.2, step=0.1)
 
@@ -1130,7 +1173,7 @@ def main() -> None:
         return
 
     try:
-        pipeline = _get_pipeline(model, top_k)
+        pipeline = _get_pipeline(model, top_k, index_mode=index_mode)
     except RuntimeError as exc:
         st.error(str(exc))
         pipeline = None
@@ -1200,6 +1243,7 @@ def main() -> None:
                 temperature=temperature,
                 selected_docs=[],
                 question=question,
+                index_mode=index_mode,
             ),
         )
         st.session_state.messages.append({"role": "user", "content": question})
@@ -1232,6 +1276,7 @@ def main() -> None:
                 timing=timing,
                 chunks=cited_chunks,
                 question=question,
+                index_mode=index_mode,
                 **_llm_answer_log_extra(pipeline),
             ),
         )
@@ -1245,6 +1290,70 @@ def main() -> None:
             }
         )
         _auto_save(user_id)
+
+    # 관리자 진단 도구
+    role = st.session_state.get("user_role", "")
+    if role == ROLE_ADMIN and st.session_state.get("last_debug") is not None:
+        debug_info = st.session_state["last_debug"]
+        st.divider()
+        with st.expander("🛠️ RAG 관리자 진단 도구", expanded=True):
+            st.subheader("RAG 단계별 중간 검색 결과")
+
+            # metrics 연산
+            last_answer = ""
+            if st.session_state.messages and st.session_state.messages[-1]["role"] == "assistant":
+                last_answer = st.session_state.messages[-1]["content"]
+
+            final_hits = debug_info.final_hits if debug_info.final_hits else []
+            fused_docs = list({hit.doc_short for hit in final_hits if hit.doc_short})
+            referenced_docs = [doc for doc in fused_docs if doc in last_answer]
+            coverage = len(referenced_docs) / len(fused_docs) if fused_docs else 1.0
+
+            has_table = False
+            last_chunks = st.session_state.messages[-1].get("chunks", []) if st.session_state.messages else []
+            for chunk in last_chunks:
+                raw_table = chunk.metadata.get("table_json")
+                if raw_table not in (None, "", "{}"):
+                    has_table = True
+                    break
+
+            table_cited = False
+            if has_table:
+                page_mentioned = any(str(chunk.metadata.get("page_start")) in last_answer for chunk in last_chunks if chunk.metadata.get("page_start") is not None)
+                if "[구조화" in last_answer or page_mentioned:
+                    table_cited = True
+
+            col1, col2 = st.columns(2)
+            col1.metric("출처 커버리지 (Source Coverage)", f"{coverage * 100:.1f}%")
+            if has_table:
+                col2.metric("테이블 메타데이터 인용 여부", "인용됨" if table_cited else "미인용 (경고)")
+            else:
+                col2.metric("테이블 메타데이터 인용 여부", "N/A (표 없음)")
+
+            # 단계별 Hit 표시 (Tabs 사용)
+            tab_dense, tab_bm25, tab_rrf, tab_final = st.tabs([
+                "1. Dense Retrieval",
+                "2. BM25 Retrieval",
+                "3. RRF Fusion",
+                "4. Final Reranked"
+            ])
+
+            def render_debug_hits(hits):
+                if not hits:
+                    st.caption("결과가 없습니다.")
+                    return
+                for idx, hit in enumerate(hits, start=1):
+                    st.markdown(f"**{idx}. [{hit.doc_short}]** (Score: {hit.score}) | 페이지: {hit.page_start or 'N/A'}")
+                    st.caption(hit.text_preview)
+
+            with tab_dense:
+                render_debug_hits(debug_info.dense_hits)
+            with tab_bm25:
+                render_debug_hits(debug_info.bm25_hits)
+            with tab_rrf:
+                render_debug_hits(debug_info.rrf_hits)
+            with tab_final:
+                render_debug_hits(debug_info.final_hits)
 
 
 if __name__ == "__main__":

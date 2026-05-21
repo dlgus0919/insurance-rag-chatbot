@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.parser.chunker import Chunk
-from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context
+from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context, detect_retrieval_conflicts
 from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
@@ -480,6 +480,8 @@ class RagPipeline:
         reranker=None,
         reranker_enabled: bool | None = None,
         table_store: TableStore | None = None,
+        pair_mapping_store=None,
+        v1_chunk_lookup: dict[str, dict] | None = None,
     ):
         self.embedder = embedder
         self.vector_store = vector_store
@@ -495,6 +497,41 @@ class RagPipeline:
             enabled = config.RERANKER_ENABLED if reranker_enabled is None else reranker_enabled
             self.reranker = build_reranker(enabled=enabled)
         self._table_store = table_store if table_store is not None else TableStore()
+        self._pair_mapping_store = pair_mapping_store
+        self._v1_chunk_lookup = v1_chunk_lookup or {}
+
+    def _build_paired_ocr_context(self, chunks: list[Chunk], max_pairs: int = 3) -> str | None:
+        """v2 canonical 청크에 대응하는 v1 원문을 보조 컨텍스트로 구성한다."""
+
+        if self._pair_mapping_store is None or not self._v1_chunk_lookup:
+            return None
+
+        lines: list[str] = []
+        count = 0
+        for chunk in chunks:
+            pair = self._pair_mapping_store.get(chunk.id)
+            if not pair or not pair.get("use_v1"):
+                continue
+            v1_chunk_id = pair.get("v1_chunk_id")
+            if not v1_chunk_id:
+                continue
+            v1_row = self._v1_chunk_lookup.get(v1_chunk_id)
+            if not v1_row:
+                continue
+            v1_text = str(v1_row.get("text", "")).strip()
+            if not v1_text:
+                continue
+            preview = v1_text[:500] + ("..." if len(v1_text) > 500 else "")
+            lines.append(
+                f"[원본OCR 대응 {count+1}] v2={chunk.id} | v1={v1_chunk_id} | score={pair.get('score')}\n{preview}"
+            )
+            count += 1
+            if count >= max_pairs:
+                break
+
+        if not lines:
+            return None
+        return "[OCR 교차검증 컨텍스트 - 원본 OCR 참조]\n" + "\n\n".join(lines)
 
     def _best_doc_coverage_hits(
         self,
@@ -538,12 +575,27 @@ class RagPipeline:
         """일반/스트리밍 경로가 공유하는 근거 보강 프롬프트를 만든다."""
 
         prompt = build_user_prompt(question, chunks)
+        paired_ocr_ctx = self._build_paired_ocr_context(chunks)
+        if paired_ocr_ctx:
+            prompt = f"{paired_ocr_ctx}\n\n{prompt}"
         structured_ctx = _build_structured_context(question, chunks, table_store=self._table_store)
         if structured_ctx:
             prompt = f"{structured_ctx}\n\n{prompt}"
         evidence_ctx = build_strict_evidence_context(question, chunks)
         if evidence_ctx:
             prompt = f"{evidence_ctx}\n\n{prompt}"
+
+        # Conflict Detection 적용
+        conflict_info = detect_retrieval_conflicts(chunks, question)
+        if conflict_info["conflict_detected"]:
+            conflict_guideline = (
+                "[⚠️ 문서 간 정보 충돌 감지 및 분리 지침]\n"
+                f"현재 참조 문서들({', '.join(conflict_info['conflicting_docs'])}) 간에 보상 한도, 횟수, 수치 또는 보상 여부에 차이가 존재합니다.\n"
+                "각 문서의 기준을 하나로 뭉뚱그려(평균내어) 설명하지 말고, 반드시 아래와 같이 문서별로 명확히 분리하여 설명하십시오.\n"
+                "예시: '[약관] 기준: ... | [자사_SOL건강] 기준: ...'\n"
+            )
+            prompt = f"{conflict_guideline}\n{prompt}"
+
         return prompt
 
     def retrieve_hits(
