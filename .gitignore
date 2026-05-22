@@ -96,6 +96,8 @@ sglang_storage/
 *claim_calculation_bak*
 streamlit.log
 streamlit_*.log
+._*
+**/._*
 
 # Temporary backups from other team members
 *_dani.py

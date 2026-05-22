@@ -11,6 +11,7 @@ DGX Spark의 메인 프로젝트 디렉터리에서 로컬/망분리 조건의 S
 - OCR v2 manual 및 v1/v2 combined index 존재 확인
 - SGLang, vLLM, Ollama provider 준비 상태 확인
 - GPU 메모리 경합 방지를 위한 `CUDA_VISIBLE_DEVICES=""` 적용
+- 대형 LLM switch wrapper에서는 GPU를 다시 노출하는 설정 적용
 - Streamlit 실행 및 로그 파일 생성
 
 ## 추가 파일
@@ -33,13 +34,16 @@ DGX Spark의 메인 프로젝트 디렉터리에서 로컬/망분리 조건의 S
    - `EMBEDDING_MODEL=/srv/ai-ops/models/embedding/bge-m3`
    - `RERANKER_MODEL=/srv/ai-ops/models/reranker/bge-reranker-v2-m3`
    - `SGLANG_DEFAULT_MODEL=gpt-oss-20b`
+   - `SGLANG_CUDA_VISIBLE_DEVICES=0`
    - `VLLM_DEFAULT_MODEL=gemma-4-26b-a4b-nvfp4`
+   - `VLLM_CUDA_VISIBLE_DEVICES=0`
    - `ALLOW_OLLAMA=true`
    - `OLLAMA_MODEL=exaone3.5:7.8b`
 6. `FORCE_GPU=1`이 아닌 경우 `CUDA_VISIBLE_DEVICES=""`를 적용해 Streamlit/RAG 임베딩이 GPU를 점유하지 않게 한다.
-7. 기본 인덱스, OCR v2 manual 인덱스, v1/v2 combined 인덱스, 비급여 표준코드 DB, 모델 전환 wrapper 존재를 확인한다.
-8. SGLang/vLLM/Ollama endpoint 상태를 표시한다.
-9. 지정 포트로 Streamlit을 실행하고 `logs/offline_streamlit_test_YYYYMMDD_HHMMSS.log`에 로그를 저장한다.
+7. SGLang/vLLM switch wrapper는 모델 서버를 띄우기 직전에 `CUDA_VISIBLE_DEVICES=0`을 다시 적용해 대형 LLM만 GPU를 사용하게 한다.
+8. 기본 인덱스, OCR v2 manual 인덱스, v1/v2 combined 인덱스, 비급여 표준코드 DB, 모델 전환 wrapper 존재를 확인한다.
+9. SGLang/vLLM/Ollama endpoint 상태를 표시한다.
+10. 지정 포트로 Streamlit을 실행하고 `logs/offline_streamlit_test_YYYYMMDD_HHMMSS.log`에 로그를 저장한다.
 
 ## 실행 명령
 
@@ -131,7 +135,8 @@ bash scripts/run_offline_streamlit_test.sh --no-verify-load
 
 ## 주의사항
 
-- 이 스크립트는 Streamlit/RAG 임베딩을 CPU 모드로 실행한다. 대형 LLM provider는 선택한 모델에 따라 SGLang 또는 vLLM wrapper가 별도 tmux session에서 GPU/unified memory를 사용한다.
+- 기본 운영값은 Streamlit 앱과 RAG query embedding/reranker를 CPU 모드로 실행하고, SGLang/vLLM 대형 LLM provider만 별도 tmux session에서 GPU/unified memory를 사용한다.
+- 대량 인덱스 생성/임베딩 생성은 이 런처가 아니라 별도 터미널에서 필요 시 `unset CUDA_VISIBLE_DEVICES` 또는 `CUDA_VISIBLE_DEVICES=0` 상태로 실행한다.
 - `--replace`는 기존 보험 RAG Streamlit 프로세스를 종료할 수 있으므로, 다른 팀원이 같은 공용 앱을 보고 있는 경우 사용 전에 확인한다.
 - OCR v2 manual 인덱스 생성 중에는 기본 모드가 missing index로 중단될 수 있다. 이 경우 생성 완료 후 다시 실행하거나 `--allow-missing-ocr-indexes`로 기본 인덱스만 테스트한다.
 - 모델 파일, 인덱스, 로그, `/srv/ai-ops` runtime 산출물은 Git 커밋 대상이 아니다.
