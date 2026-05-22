@@ -30,6 +30,7 @@ from src.auth import users as user_store
 from src.auth.users import ROLE_ADMIN
 from src.llm.factory import build_llm, format_model_label, get_openai_model_info, is_openai_model, list_available_models, list_startup_large_models, provider_prefixed_model, split_model_selection
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations
+from src.rag.evidence import append_evidence_validation_warning
 from src.rag.insurance_form import (
     COVERAGE_TOPICS,
     INSURANCE_FORM_TOP_K,
@@ -131,11 +132,14 @@ def _ensure_session_id() -> str:
 
 
 
-def _served_models(base_url: str) -> list[str]:
+def _served_models(base_url: str, api_key: str | None = None) -> list[str]:
     """Return model IDs served by an OpenAI-compatible local endpoint."""
 
     try:
-        response = requests.get(f"{base_url.rstrip('/')}/models", timeout=2)
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        response = requests.get(f"{base_url.rstrip('/')}/models", headers=headers, timeout=2)
         response.raise_for_status()
         payload = response.json()
     except (requests.RequestException, ValueError):
@@ -199,7 +203,8 @@ def _ensure_selected_large_model_ready() -> None:
         st.session_state.selected_large_model = selected
 
     base_url = config.vllm_base_url_for_model(model) if provider == "vllm" else config.sglang_base_url_for_model(model)
-    served = _served_models(base_url)
+    api_key = config.VLLM_API_KEY if provider == "vllm" else config.SGLANG_API_KEY
+    served = _served_models(base_url, api_key=api_key)
     if model in served:
         st.session_state.loaded_large_model = selected
         return

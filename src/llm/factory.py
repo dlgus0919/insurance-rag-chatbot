@@ -90,11 +90,14 @@ def _configured_sglang_models() -> list[str]:
     return [model for model in candidates if not is_sglang_model_disabled(model)]
 
 
-def _served_models_for_endpoint(base_url: str) -> list[str]:
+def _served_models_for_endpoint(base_url: str, api_key: str | None = None) -> list[str]:
     """Return model IDs advertised by an OpenAI-compatible endpoint."""
 
     try:
-        response = requests.get(f"{base_url.rstrip('/')}/models", headers={"Authorization": "Bearer EMPTY"}, timeout=1.5)
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        response = requests.get(f"{base_url.rstrip('/')}/models", headers=headers, timeout=1.5)
         response.raise_for_status()
     except requests.RequestException:
         return []
@@ -132,7 +135,7 @@ def _available_vllm_models() -> list[str]:
     served_by_endpoint: dict[str, list[str]] = {}
     for model in candidates:
         endpoint = config.vllm_base_url_for_model(model)
-        served_by_endpoint.setdefault(endpoint, _served_models_for_endpoint(endpoint))
+        served_by_endpoint.setdefault(endpoint, _served_models_for_endpoint(endpoint, api_key=config.VLLM_API_KEY))
 
     available: list[str] = []
     for model in candidates:
@@ -158,7 +161,7 @@ def _available_sglang_models() -> list[str]:
     served_by_endpoint: dict[str, list[str]] = {}
     for model in candidates:
         endpoint = config.sglang_base_url_for_model(model)
-        served_by_endpoint.setdefault(endpoint, _served_models_for_endpoint(endpoint))
+        served_by_endpoint.setdefault(endpoint, _served_models_for_endpoint(endpoint, api_key=config.SGLANG_API_KEY))
 
     available: list[str] = []
     for model in candidates:

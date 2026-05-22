@@ -1,8 +1,11 @@
 import csv
 import io
 import json
+from contextlib import nullcontext
 
 from src.parser.chunker import Chunk
+from src.retrieval import Hit
+import src.ui.streamlit_app as streamlit_app
 from src.rag.insurance_form import InsuranceFormInput
 from src.ui.streamlit_app import (
     _build_answer_log_details,
@@ -17,6 +20,7 @@ from src.ui.streamlit_app import (
     _insurance_form_log_input,
     _sanitize_answer_markdown,
     _source_title,
+    _stream_answer,
     _turn_count,
 )
 
@@ -95,6 +99,48 @@ def test_sanitize_answer_markdown_adds_spaces_around_tilde() -> None:
     assert _sanitize_answer_markdown("~~취소선~~") == "~~취소선~~"
     assert _sanitize_answer_markdown("1 ~ 10") == "1 ~ 10"
     assert _sanitize_answer_markdown("정상 텍스트") == "정상 텍스트"
+
+
+def test_stream_answer_applies_evidence_validation_without_name_error(monkeypatch) -> None:
+    class FakePlaceholder:
+        def __init__(self) -> None:
+            self.markdowns: list[str] = []
+
+        def markdown(self, value: str) -> None:
+            self.markdowns.append(value)
+
+    class FakeLLM:
+        def generate_stream(self, prompt: str, system: str, temperature: float):
+            yield "근거 기반 답변"
+
+    class FakePipeline:
+        llm = FakeLLM()
+
+        def retrieve_hits(self, question: str, doc_filter=None, return_debug: bool = False):
+            hits = [
+                Hit(
+                    id="심평원_ch_000001",
+                    score=1.0,
+                    document="로봇 수술 코드는 QZ961입니다.",
+                    metadata={"doc_short": "심평원", "page_start": 1, "page_end": 1},
+                )
+            ]
+            return hits, None
+
+        def build_prompt(self, question: str, chunks: list[Chunk]) -> str:
+            return "prompt"
+
+    placeholder = FakePlaceholder()
+    monkeypatch.setattr(streamlit_app.st, "spinner", lambda _message: nullcontext())
+    monkeypatch.setattr(streamlit_app.st, "empty", lambda: placeholder)
+
+    answer, chunks, timing, debug = _stream_answer(FakePipeline(), "로봇 수술 코드는?", 0.0)
+
+    assert "근거 기반 답변" in answer
+    assert chunks[0].metadata["doc_short"] == "심평원"
+    assert timing["retrieve_ms"] >= 0
+    assert debug is None
+    assert placeholder.markdowns[-1] == answer
 
 
 def test_export_helpers_include_messages_timing_and_sources() -> None:

@@ -200,7 +200,7 @@ def test_strict_sglang_models_only_exposes_served_models(monkeypatch) -> None:
         {"gpt-oss-20b": "http://127.0.0.1:30000/v1", "gemma-4-26b-a4b-nvfp4": "http://127.0.0.1:30001/v1"},
     )
     monkeypatch.setattr(factory.config, "sglang_base_url_for_model", lambda model: factory.config.SGLANG_MODEL_ENDPOINTS.get(model, "http://127.0.0.1:30000/v1"))
-    monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint: ["gpt-oss-20b"] if endpoint.endswith("30000/v1") else [])
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint, api_key=None: ["gpt-oss-20b"] if endpoint.endswith("30000/v1") else [])
     monkeypatch.setenv("ALLOW_OLLAMA", "false")
     monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
 
