@@ -1,10 +1,10 @@
 # Streamlit Large Model Test Guide
 
-Date: 2026-05-20
+Date: 2026-05-22
 
 ## Scope
 
-This guide is for testing the Streamlit app from the administrator `ai-hang` workspace on DGX Spark.
+This guide is for testing large local LLMs through the Streamlit app on DGX Spark.
 
 Primary project path:
 
@@ -12,87 +12,82 @@ Primary project path:
 /srv/shared/projects/insurance-rag-chatbot
 ```
 
-The app now uses a single SGLang serving slot for large local models. The large model is selected on the login screen, then Streamlit asks the DGX wrapper to load that model into SGLang.
-
-## Current Model Policy
-
-Large model slot, SGLang:
-
-- `gpt-oss-20b`: current validated default.
-- `gemma-4-26b-a4b-nvfp4`: staged validation candidate.
-
-Small/local fallback, Ollama:
-
-- `exaone3.5:7.8b`
-
-Important current Gemma4 note:
-
-- Gemma4 assets are present and SGLang can load the model after a local SGLang runtime patch.
-- However, first generation smoke currently returns repeated `<pad>` tokens, so Gemma4 should be treated as a runtime validation candidate, not as the production default.
-- Use `gpt-oss-20b` for normal functional testing.
-
-## 1. SSH Into The Admin Workspace
-
-From the Mac:
-
-```bash
-ssh -t ai-hang@100.88.5.57 "cd /srv/shared/projects/insurance-rag-chatbot; bash -l"
-```
-
-Check that the repo is the admin/main project directory:
-
-```bash
-pwd
-git status --short
-git rev-parse --short HEAD
-```
-
-Expected current commit at the time of this guide:
+Before using this guide, read and follow:
 
 ```text
-9d974eb
+docs/103_STREAMLIT_RUNTIME_PREP_GUIDE.md
 ```
 
-## 2. Verify SGLang Status
+That document is the source of truth for pull-after setup, non-Git runtime files, OCR indexes, local model assets, and Streamlit launch commands.
 
-Check the active SGLang model:
+## Current Provider Policy
 
-```bash
-/srv/ai-ops/bin/check-sglang-local
-```
+The current app separates provider and model selection.
 
-Expected for normal testing:
+Recommended runtime policy:
 
 ```text
-/v1/models includes gpt-oss-20b
+Streamlit app: CPU
+RAG query embedding: CPU by default
+Reranker: CPU by default
+SGLang/vLLM large LLM: GPU 0
+Batch index/embedding generation: GPU 0
 ```
 
-If needed, switch back to the validated default:
+Large local providers:
+
+- `vLLM / gemma-4-26b-a4b-nvfp4`
+- `SGLang / gpt-oss-20b`
+
+Small/local fallback:
+
+- `Ollama / exaone3.5:7.8b`
+
+Cloud/OpenAI providers should be hidden while `OFFLINE_MODE=true`.
+
+## Current Model Notes
+
+### Gemma4 via vLLM
+
+`gemma-4-26b-a4b-nvfp4` is now the main Gemma4 test target and is served through vLLM.
+
+Important fixes already applied:
+
+- vLLM readiness checks use `Authorization: Bearer EMPTY`.
+- vLLM is launched with `--api-key EMPTY`.
+- OpenAI-compatible streaming now handles non-Harmony streams, so Gemma4 `delta.content` tokens are displayed immediately.
+
+### GPT-OSS via SGLang
+
+`gpt-oss-20b` remains available through SGLang.
+
+It uses GPT-OSS/Harmony-style final-channel parsing, so the OpenAI-compatible client keeps Harmony marker handling for this model family.
+
+## Start Streamlit
+
+From DGX:
 
 ```bash
-/srv/ai-ops/bin/switch-sglang-model gpt-oss-20b
+cd /srv/shared/projects/insurance-rag-chatbot
+bash scripts/prepare_streamlit_runtime.sh --run-streamlit --replace
 ```
 
-Model switching can take several minutes because the previous SGLang session is stopped and the selected model is loaded from local disk.
-
-## 3. Start Streamlit From The Admin Repo
-
-In the DGX admin shell:
+From the Mac in one command:
 
 ```bash
-/srv/ai-ops/bin/run-insurance-rag
+ssh -t ai-hang@100.88.5.57 "cd /srv/shared/projects/insurance-rag-chatbot && bash scripts/prepare_streamlit_runtime.sh --run-streamlit --replace"
 ```
 
-This wrapper loads:
+Use a different port for a personal workspace:
 
-1. `/srv/ai-ops/secrets/insurance-rag-chatbot/env.sh`
-2. `/srv/ai-ops/secrets/insurance-rag-chatbot/offline.env`
+```bash
+cd /srv/shared/workspaces/<user>/insurance-rag-chatbot
+bash scripts/prepare_streamlit_runtime.sh --run-streamlit --replace --port 8502
+```
 
-The second file makes the runtime offline-first by default.
+## Open The App From The Mac
 
-## 4. Open The App From The Mac
-
-In a separate Mac terminal:
+For the shared `8501` port:
 
 ```bash
 ssh -L 8501:localhost:8501 ai-hang@100.88.5.57
@@ -104,147 +99,129 @@ Open:
 http://localhost:8501
 ```
 
-If port `8501` is already used by another workspace process, identify it on DGX:
+For a personal `8502` port:
 
 ```bash
-pgrep -af "streamlit run src/ui/streamlit_app.py"
+ssh -L 8502:localhost:8502 <user>@100.88.5.57
 ```
 
-Use the admin/main repo process for final validation.
+Open:
 
-## 5. Login-time Large Model Selection
+```text
+http://localhost:8502
+```
 
-On the login screen:
+## Runtime Checks
 
-1. Select `gpt-oss-20b` for normal testing.
-2. Enter the app credentials.
-3. Click login.
-
-After login, the app verifies whether the selected SGLang model is active. If not, it calls:
+Streamlit:
 
 ```bash
-/srv/ai-ops/bin/switch-sglang-model <selected-model>
+ss -tlnp | grep ':8501'
 ```
 
-Only allowlisted model names are accepted by the wrapper.
+vLLM Gemma4:
 
-## 6. Sidebar Model Selection After Login
+```bash
+curl -s -H "Authorization: Bearer EMPTY" \
+  http://127.0.0.1:30001/v1/models
+```
 
-After login:
+SGLang GPT-OSS:
 
-- The large SGLang model is already determined by the login screen.
-- The sidebar can still be used to select available provider/model combinations.
-- Ollama `exaone3.5:7.8b` remains available for small local fallback testing.
+```bash
+curl -s -H "Authorization: Bearer EMPTY" \
+  http://127.0.0.1:30000/v1/models
+```
 
-Expected normal options:
+GPU usage:
 
-- `SGLang / gpt-oss-20b` when `gpt-oss-20b` is active.
-- `Ollama / exaone3.5:7.8b` if Ollama is running.
-- OpenAI is hidden while `OFFLINE_MODE=true`.
+```bash
+nvidia-smi
+```
 
-## 7. Recommended Smoke Tests
-
-Run these with `gpt-oss-20b` first.
+## Recommended Smoke Tests
 
 ### General Question
 
 ```text
-실손보험에서 통원 치료비 청구 시 일반적으로 확인해야 할 항목을 설명해줘.
+로봇 수술의 코드를 알려주세요.
 ```
 
-Check:
+Expected:
 
-- Korean answer is readable.
-- Answer cites retrieved sources.
-- No cloud/OpenAI warning appears.
+- Answer body is generated.
+- Retrieved source citations are shown below the answer.
+- Exported chat has text after `[A1] [vllm:gemma-4-26b-a4b-nvfp4]`.
 
-### Quick Code / Procedure Search
+### Quick Code Search
 
-Use `퀵 코드 검색` and ask a short procedure/code-oriented query.
+Use `퀵 코드 검색` and ask a short procedure/code query.
 
-Check:
+Expected:
 
-- Results return quickly enough for interactive use.
-- Source chunks are visible.
+- Procedure/code-oriented result appears.
+- Sources are visible.
 
 ### Structured Policy Search
 
 Use `약관 정형 검색`.
 
-Check:
+Expected:
 
 - Required fields work.
 - Answer format remains consistent.
 - Sources are attached.
 
+### Claim Payout Calculation
+
+Use `보험금 계산`.
+
+Expected:
+
+- Standard code DB lookup works.
+- Ambiguous code matches are held for user selection.
+- The result is labeled as `지급예상액`, not guaranteed payout.
+
 ### Ollama Fallback
 
-Switch provider/model to Ollama if available:
+Select:
 
 ```text
 Ollama / exaone3.5:7.8b
 ```
 
-Ask a short question and verify local fallback still responds.
+Expected:
 
-## 8. Gemma4 Validation Test
+- The app can still answer without vLLM/SGLang.
 
-Gemma4 can be selected from the login screen for controlled testing.
+## Stop Runtime
 
-Expected current behavior:
-
-- Model load may take several minutes.
-- SGLang may report the model under `/v1/models`.
-- Generated output may repeat `<pad>` tokens.
-
-If Gemma4 returns `<pad>` output, record it as a model/runtime validation failure rather than an app failure.
-
-Manual Gemma4 switch command:
+Stop Streamlit only:
 
 ```bash
-/srv/ai-ops/bin/switch-sglang-model gemma-4-26b-a4b-nvfp4
+pkill -f '[s]treamlit run src/ui/streamlit_app.py' || true
+pkill -f '[r]un_offline_streamlit_test.sh' || true
 ```
 
-Return to default after the test:
+Stop Gemma4/vLLM:
 
 ```bash
-/srv/ai-ops/bin/switch-sglang-model gpt-oss-20b
+tmux kill-session -t vllm-gemma4 2>/dev/null || true
 ```
 
-## 9. Logs To Check
-
-Streamlit logs:
+Stop SGLang:
 
 ```bash
-ls -lt logs/streamlit_*.log | head
+tmux kill-session -t sglang-local 2>/dev/null || true
 ```
 
-SGLang logs:
-
-```bash
-tail -200 /srv/ai-ops/logs/sglang/sglang-local.log
-```
-
-Runtime checks:
-
-```bash
-/srv/ai-ops/bin/check-insurance-rag
-/srv/ai-ops/bin/check-sglang-local
-```
-
-## 10. Pass Criteria
-
-For `gpt-oss-20b`:
+## Pass Criteria
 
 - Login succeeds.
 - Streamlit reaches the chat UI.
-- `SGLang / gpt-oss-20b` can answer at least one general Korean question.
-- Source display works.
-- Ollama fallback remains selectable and responds.
+- Provider/model dropdown exposes the expected local providers.
+- Gemma4/vLLM answers a Korean question with a non-empty body.
+- GPT-OSS/SGLang remains usable if the SGLang server is active.
+- Ollama fallback remains selectable when Ollama is running.
 - No external OpenAI model is exposed in offline mode.
-
-For Gemma4:
-
-- Login selection and model switch path can be exercised.
-- If output is `<pad>` repetition, mark Gemma4 as not ready for production answers.
-- Do not use Gemma4 as the default until generation quality is fixed.
+- General/quick-code/structured-policy/claim-calculation modes are usable.
