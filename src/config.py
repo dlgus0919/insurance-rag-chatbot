@@ -157,6 +157,9 @@ STANDARD_CODES_DB_PATH: Path = RELATIONAL_INDEX_DIR / "standard_codes.sqlite"
 
 OFFLINE_MODE: bool = os.getenv("OFFLINE_MODE", "false").lower() == "true"
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+EMBEDDING_DEVICE: str | None = os.getenv("EMBEDDING_DEVICE")
+if EMBEDDING_DEVICE == "":
+    EMBEDDING_DEVICE = None
 HF_MODEL_DOWNLOAD: bool = os.getenv("HF_MODEL_DOWNLOAD", "false").lower() == "true"
 RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
@@ -267,3 +270,11 @@ TOP_K_FINAL: int = int(os.getenv("TOP_K_FINAL", "8"))
 RRF_K: int = int(os.getenv("RRF_K", "60"))
 CHUNK_TARGET_CHARS: int = int(os.getenv("CHUNK_TARGET_CHARS", "800"))
 CHUNK_OVERLAP_CHARS: int = int(os.getenv("CHUNK_OVERLAP_CHARS", "100"))
+
+# GraphDB Configuration
+GRAPH_ENABLED: bool = os.getenv("GRAPH_ENABLED", "false").lower() == "true"
+GRAPH_INDEX_PATH: Path = Path(os.getenv("GRAPH_INDEX_PATH", str(ROOT_DIR / "data" / "index" / "graph" / "insurance_graph.sqlite")))
+GRAPH_REQUIRE_EVIDENCE: bool = os.getenv("GRAPH_REQUIRE_EVIDENCE", "true").lower() == "true"
+GRAPH_ALLOW_CANDIDATE_POLICY: bool = os.getenv("GRAPH_ALLOW_CANDIDATE_POLICY", "true").lower() == "true"
+GRAPH_CONTEXT_TOP_K: int = int(os.getenv("GRAPH_CONTEXT_TOP_K", "20"))
+GRAPH_CONTEXT_MAX_CHARS: int = int(os.getenv("GRAPH_CONTEXT_MAX_CHARS", "5000"))

@@ -253,3 +253,73 @@ class VectorStore:
             )
 
         return sorted(scored_hits, key=lambda hit: hit.score, reverse=True)[:top_k]
+
+    def get_by_ids(self, ids: list[str]) -> list[Hit]:
+        """주어진 chunk ID 목록으로 문서를 조회하여 Hit 목록으로 반환한다."""
+        if not ids:
+            return []
+
+        def _get_fallback_ids(chunk_id: str) -> list[str]:
+            fallbacks = []
+            if chunk_id.startswith("v1_"):
+                suffix = chunk_id[3:]
+                fallbacks.append(f"v2_{suffix}")
+                fallbacks.append(suffix)
+            elif chunk_id.startswith("v2_"):
+                suffix = chunk_id[3:]
+                fallbacks.append(f"v1_{suffix}")
+                fallbacks.append(suffix)
+            else:
+                fallbacks.append(f"v1_{chunk_id}")
+                fallbacks.append(f"v2_{chunk_id}")
+            return fallbacks
+
+        all_candidates = []
+        id_to_fallbacks = {}
+        for chunk_id in ids:
+            fallbacks = _get_fallback_ids(chunk_id)
+            id_to_fallbacks[chunk_id] = fallbacks
+            all_candidates.append(chunk_id)
+            all_candidates.extend(fallbacks)
+
+        seen = set()
+        unique_candidates = []
+        for cid in all_candidates:
+            if cid not in seen:
+                seen.add(cid)
+                unique_candidates.append(cid)
+
+        result = self.collection.get(ids=unique_candidates, include=["documents", "metadatas"])
+        r_ids = result.get("ids", [])
+        r_documents = result.get("documents", [])
+        r_metadatas = result.get("metadatas", [])
+
+        db_map = {}
+        for index, hit_id in enumerate(r_ids):
+            db_map[hit_id] = {
+                "document": r_documents[index] if index < len(r_documents) else "",
+                "metadata": _decode_metadata(r_metadatas[index] if index < len(r_metadatas) else {})
+            }
+
+        hits: list[Hit] = []
+        for chunk_id in ids:
+            target_id = None
+            if chunk_id in db_map:
+                target_id = chunk_id
+            else:
+                for fb in id_to_fallbacks.get(chunk_id, []):
+                    if fb in db_map:
+                        target_id = fb
+                        break
+
+            if target_id is not None:
+                data = db_map[target_id]
+                hits.append(
+                    Hit(
+                        id=chunk_id,
+                        score=1.0,
+                        document=data["document"],
+                        metadata=data["metadata"],
+                    )
+                )
+        return hits

@@ -32,4 +32,3 @@ def test_table_quality_keeps_structured_surgery_table() -> None:
     )
     assert should_downcast is False
     assert reason is None
-

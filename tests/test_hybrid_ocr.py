@@ -62,4 +62,3 @@ def test_hybrid_fallback(monkeypatch) -> None:
     blocks = hybrid_ocr.hybrid_ocr_page(prep)
 
     assert blocks == sentinel
-

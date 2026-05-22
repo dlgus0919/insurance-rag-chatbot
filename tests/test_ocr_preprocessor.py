@@ -59,4 +59,3 @@ def test_preprocess_shrink(monkeypatch) -> None:
     outer_y = 10 + FIGURE_SHRINK_PX - 1
     assert prep.masked_image.getpixel((inner_x, inner_y)) == (255, 255, 255)
     assert prep.masked_image.getpixel((outer_x, outer_y)) == (0, 0, 0)
-

@@ -242,3 +242,96 @@ def test_fake_planner_amount_formatting_variations():
         assert plan.decision == "calculable"
         assert plan.variables["claimed_amount"] == "150000"
         assert "Decimal('150000')" in plan.formula_intent
+
+
+def test_pipeline_confirmed_without_evidence_excluded():
+    """confirmed fact에 evidence가 없으면 retrieved_evidences에서 배제되는지 검증한다."""
+    items = [ClaimItemInput(line_id="item_1", input_name="테스트수술", claimed_amount="100000")]
+    context = ClaimCaseContext()
+
+    mock_match = {"std_cd": "SC0001", "std_cd_nm": "테스트수술", "pay_opn_cd_nm": "보상"}
+
+    # Mock GraphRetrievalResult
+    from src.graph.retriever import GraphRetrievalResult, GraphFact
+
+    mock_fact_no_ev = GraphFact(
+        subject="테스트수술",
+        relation="HAS_GRADE",
+        object="신1-5종 4종",
+        status="confirmed",
+        confidence=1.0,
+        evidence=[] # No evidence
+    )
+
+    mock_fact_with_ev = GraphFact(
+        subject="테스트수술",
+        relation="POLICY_COVERS_PROCEDURE",
+        object="기관지 식도루 폐쇄술",
+        status="confirmed",
+        confidence=1.0,
+        evidence=[MagicMock(evidence_id="ev_001", chunk_id="chunk_001", doc_short="약관")]
+    )
+
+    mock_graph_result = MagicMock(spec=GraphRetrievalResult)
+    mock_graph_result.facts = [mock_fact_no_ev, mock_fact_with_ev]
+
+    mock_rag = MagicMock()
+    mock_rag.graph_enabled = True
+    mock_rag.graph_retriever = MagicMock()
+    mock_rag.graph_retriever.retrieve.return_value = mock_graph_result
+
+    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
+        result = run_claim_calculation(
+            rag_pipeline=mock_rag,
+            items=items,
+            context=context,
+            use_fake_planner=True
+        )
+
+        # applied_basis에 evidence가 없는 'HAS_GRADE' confirmed fact의 정보가 들어갔는지 검사
+        # source 명칭 등을 통해 확인 가능
+        graph_bases = [b for b in result.applied_basis if "GraphDB" in b["source"]]
+        # HAS_GRADE(evidence 없음)는 배제되어야 하므로, GraphDB 관련 근거 중 "HAS_GRADE"가 없어야 함
+        assert not any("HAS_GRADE" in b["content"] for b in graph_bases)
+        # POLICY_COVERS_PROCEDURE(evidence 있음)는 포함되어야 함
+        assert any("POLICY_COVERS_PROCEDURE" in b["content"] for b in graph_bases)
+
+
+def test_pipeline_candidate_pays_by_ratio_without_confirmed_forces_review():
+    """candidate PAYS_BY_RATIO 정보만 있고 confirmed 정보가 없으면 review_required=True가 강제되는지 검증한다."""
+    items = [ClaimItemInput(line_id="item_1", input_name="테스트수술", claimed_amount="100000")]
+    context = ClaimCaseContext()
+
+    mock_match = {"std_cd": "SC0001", "std_cd_nm": "테스트수술", "pay_opn_cd_nm": "보상"}
+
+    # Mock GraphRetrievalResult with candidate PAYS_BY_RATIO only
+    from src.graph.retriever import GraphRetrievalResult, GraphFact
+
+    mock_fact_candidate = GraphFact(
+        subject="테스트수술",
+        relation="PAYS_BY_RATIO",
+        object="30%",
+        status="candidate",
+        confidence=0.5,
+        evidence=[]
+    )
+
+    mock_graph_result = MagicMock(spec=GraphRetrievalResult)
+    mock_graph_result.facts = [mock_fact_candidate]
+
+    mock_rag = MagicMock()
+    mock_rag.graph_enabled = True
+    mock_rag.graph_retriever = MagicMock()
+    mock_rag.graph_retriever.retrieve.return_value = mock_graph_result
+
+    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
+        result = run_claim_calculation(
+            rag_pipeline=mock_rag,
+            items=items,
+            context=context,
+            use_fake_planner=True
+        )
+
+        assert result.requires_review
+        assert any("candidate PAYS_BY_RATIO" in reason for reason in result.review_reasons)
+        assert result.notes == "추가 심사 검토가 필요합니다."

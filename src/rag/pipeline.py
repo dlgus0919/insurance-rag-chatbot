@@ -15,6 +15,13 @@ from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
 from src.retrieval.reranker import build_reranker
+try:
+    from src.graph.retriever import GraphRetriever
+    from src.graph.context import build_graph_context
+    _GRAPH_IMPORT_OK = True
+except ImportError:
+    _GRAPH_IMPORT_OK = False
+
 
 
 _CODE_PATTERN = re.compile(r"(?<![A-Z0-9.])(?:[A-Z]\d{2}(?:\.\d{1,2})?|[A-Z]{1,3}\d{2,5})(?![A-Z0-9.])")
@@ -93,6 +100,7 @@ class DebugInfo:
     bm25_hits: list[StageHit]
     rrf_hits: list[StageHit]
     final_hits: list[StageHit]
+    graph_result: Any = None
 
 
 @dataclass
@@ -499,6 +507,16 @@ class RagPipeline:
         self._table_store = table_store if table_store is not None else TableStore()
         self._pair_mapping_store = pair_mapping_store
         self._v1_chunk_lookup = v1_chunk_lookup or {}
+        self.graph_enabled = config.GRAPH_ENABLED and _GRAPH_IMPORT_OK
+        if self.graph_enabled:
+            try:
+                self.graph_retriever = GraphRetriever(config.GRAPH_INDEX_PATH)
+            except Exception:
+                self.graph_retriever = None
+                self.graph_enabled = False
+        else:
+            self.graph_retriever = None
+
 
     def _build_paired_ocr_context(self, chunks: list[Chunk], max_pairs: int = 3) -> str | None:
         """v2 canonical 청크에 대응하는 v1 원문을 보조 컨텍스트로 구성한다."""
@@ -571,7 +589,7 @@ class RagPipeline:
             present_docs.add(replacement.metadata.get("doc_short"))
         return _merge_hits_preserving_order(selected, [], limit=top_k)
 
-    def build_prompt(self, question: str, chunks: list[Chunk]) -> str:
+    def build_prompt(self, question: str, chunks: list[Chunk], graph_context: str | None = None) -> str:
         """일반/스트리밍 경로가 공유하는 근거 보강 프롬프트를 만든다."""
 
         prompt = build_user_prompt(question, chunks)
@@ -584,6 +602,9 @@ class RagPipeline:
         evidence_ctx = build_strict_evidence_context(question, chunks)
         if evidence_ctx:
             prompt = f"{evidence_ctx}\n\n{prompt}"
+
+        if graph_context:
+            prompt = f"{graph_context}\n\n{prompt}"
 
         # Conflict Detection 적용
         conflict_info = detect_retrieval_conflicts(chunks, question)
@@ -604,6 +625,7 @@ class RagPipeline:
         top_k: int | None = None,
         doc_filter: list[str] | None = None,
         return_debug: bool = False,
+        graph_hits: list[Hit] | None = None,
     ) -> tuple[list[Hit], DebugInfo | None]:
         """질문에 대한 최종 검색 후보를 반환한다."""
 
@@ -665,10 +687,16 @@ class RagPipeline:
         if surgery_name:
             fused_hits = _boost_surgery_name_table_rows(fused_hits, surgery_name)
 
+        if graph_hits:
+            fused_hits = _merge_hits_preserving_order(fused_hits, graph_hits)
+
         if self.reranker is not None:
             final_hits = self.reranker.rerank(question, fused_hits, top_k=final_top_k)
         else:
             final_hits = fused_hits[:final_top_k]
+
+        if graph_hits:
+            final_hits = _merge_hits_preserving_order(final_hits, graph_hits, limit=final_top_k)
         if enforce_doc_coverage:
             final_hits = self._restore_doc_coverage(final_hits, coverage_hits, final_top_k)
         debug = (
@@ -696,16 +724,42 @@ class RagPipeline:
         total_started = time.perf_counter()
         retrieve_started = time.perf_counter()
 
+        graph_result = None
+        graph_context = ""
+        graph_hits = []
+        if self.graph_enabled and self.graph_retriever:
+            try:
+                graph_result = self.graph_retriever.retrieve(question)
+                graph_context = build_graph_context(graph_result)
+                if graph_result.source_chunk_ids:
+                    graph_hits = self.vector_store.get_by_ids(graph_result.source_chunk_ids)
+                    retrieved_ids = {hit.id for hit in graph_hits}
+                    missing_ids = [cid for cid in graph_result.source_chunk_ids if cid not in retrieved_ids]
+                    if missing_ids:
+                        import logging
+                        logging.warning(f"Graph source chunks {missing_ids} not found in Chroma vector store. Ignored.")
+            except Exception as e:
+                import logging
+                logging.warning(f"Graph retrieval failed, falling back to standard RAG: {e}")
+                graph_result = None
+                graph_context = ""
+                graph_hits = []
+
+
         fused_hits, debug = self.retrieve_hits(
             question,
             top_k=top_k,
             doc_filter=doc_filter,
             return_debug=return_debug,
+            graph_hits=graph_hits,
         )
+        if debug is not None and graph_result is not None:
+            debug.graph_result = graph_result
+
         chunks = [_hit_to_chunk(hit) for hit in fused_hits]
 
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
-        prompt = self.build_prompt(question, chunks)
+        prompt = self.build_prompt(question, chunks, graph_context=graph_context)
 
         llm_started = time.perf_counter()
         answer_text = self.llm.generate(prompt, system=SYSTEM_PROMPT, temperature=temperature)

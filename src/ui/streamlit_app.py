@@ -698,6 +698,89 @@ def _get_pipeline(model: str, top_k: int, index_mode: str = "default") -> RagPip
     )
 
 
+def render_graph_evidences(graph_result) -> None:
+    """구조화 그래프 사실을 일반 사용자용 친숙한 텍스트 형태로 렌더링한다."""
+    if not graph_result:
+        return
+
+    facts = []
+    if isinstance(graph_result, dict):
+        facts = graph_result.get("facts", [])
+    else:
+        facts = getattr(graph_result, "facts", [])
+
+    if not facts:
+        return
+
+    class FactWrapper:
+        def __init__(self, data):
+            self.data = data
+
+        @property
+        def subject(self) -> str:
+            return self.data.get("subject", "") if isinstance(self.data, dict) else getattr(self.data, "subject", "")
+
+        @property
+        def relation(self) -> str:
+            return self.data.get("relation", "") if isinstance(self.data, dict) else getattr(self.data, "relation", "")
+
+        @property
+        def object(self) -> str | None:
+            return self.data.get("object") if isinstance(self.data, dict) else getattr(self.data, "object", None)
+
+        @property
+        def status(self) -> str:
+            return self.data.get("status", "missing") if isinstance(self.data, dict) else getattr(self.data, "status", "missing")
+
+        @property
+        def evidence(self) -> list:
+            raw_ev = self.data.get("evidence") if isinstance(self.data, dict) else getattr(self.data, "evidence", [])
+            wrapped_ev = []
+            for ev in (raw_ev or []):
+                if isinstance(ev, dict):
+                    class EvWrapper:
+                        def __init__(self, e):
+                            self.doc_short = e.get("doc_short", "")
+                            self.page_start = e.get("page_start")
+                    wrapped_ev.append(EvWrapper(ev))
+                else:
+                    wrapped_ev.append(ev)
+            return wrapped_ev
+
+        @property
+        def properties(self) -> dict:
+            return self.data.get("properties", {}) if isinstance(self.data, dict) else getattr(self.data, "properties", {})
+
+    wrapped_facts = [FactWrapper(f) for f in facts]
+    confirmed_facts = [f for f in wrapped_facts if f.status == "confirmed"]
+    candidate_facts = [f for f in wrapped_facts if f.status == "candidate"]
+
+    if not confirmed_facts and not candidate_facts:
+        return
+
+    st.markdown("**📌 구조화 근거**")
+    for fact in confirmed_facts:
+        evidence_str = ""
+        if fact.evidence:
+            ev = fact.evidence[0]
+            page_info = f" p.{ev.page_start}" if ev.page_start is not None else ""
+            evidence_str = f" ({ev.doc_short}{page_info})"
+        st.markdown(f"- {fact.subject}은(는) {fact.object}입니다.{evidence_str}")
+
+    for fact in candidate_facts:
+        evidence_str = ""
+        if fact.evidence:
+            ev = fact.evidence[0]
+            page_info = f" p.{ev.page_start}" if ev.page_start is not None else ""
+            evidence_str = f" ({ev.doc_short}{page_info})"
+        keyword = fact.properties.get("matched_keyword", "")
+        keyword_str = f" (매칭어: `{keyword}`)" if keyword else ""
+        st.markdown(
+            f"- **[검토 후보]** {fact.subject} 조항은 동일 대분류/키워드{keyword_str} 기반의 후보 조항입니다.{evidence_str}"
+        )
+    st.divider()
+
+
 def render_sources(chunks, timing: dict | None = None, key_prefix: str = "sources") -> None:
     """답변 출처 청크를 expander 안에 표시한다."""
 
@@ -748,13 +831,32 @@ def _stream_answer(
     """검색 후 LLM 스트리밍 답변을 렌더링하고 결과를 반환한다."""
 
     total_started = time.perf_counter()
+    graph_result = None
+    graph_context = ""
+    graph_hits = []
+    if getattr(pipeline, "graph_enabled", False) and pipeline.graph_retriever:
+        try:
+            graph_result = pipeline.graph_retriever.retrieve(question)
+            graph_context = build_graph_context(graph_result)
+            if graph_result.source_chunk_ids:
+                graph_hits = pipeline.vector_store.get_by_ids(graph_result.source_chunk_ids)
+        except Exception:
+            pass
+
     with st.spinner("관련 문서 검색 중..."):
         retrieve_started = time.perf_counter()
-        hits, debug = pipeline.retrieve_hits(question, doc_filter=doc_filter, return_debug=True)
+        hits, debug = pipeline.retrieve_hits(
+            question,
+            doc_filter=doc_filter,
+            return_debug=True,
+            graph_hits=graph_hits,
+        )
+        if debug is not None and graph_result is not None:
+            debug.graph_result = graph_result
         chunks = [_hit_to_chunk(hit) for hit in hits]
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
 
-    prompt = pipeline.build_prompt(question, chunks)
+    prompt = pipeline.build_prompt(question, chunks, graph_context=graph_context)
     llm_started = time.perf_counter()
     placeholder = st.empty()
     tokens: list[str] = []
@@ -1244,6 +1346,37 @@ def render_claim_calculation_panel(model: str, get_pipeline_or_show_error, sessi
             st.code(result.executed_code, language="python")
 
 
+def get_graph_manifest_info() -> dict:
+    """GraphDB manifest 및 통계를 조회한다."""
+    from src.graph.store import GraphStore
+    import os
+    db_path = config.GRAPH_INDEX_PATH
+    if not db_path or not os.path.exists(db_path):
+        return {"enabled": False, "db_path": str(db_path), "exists": False}
+
+    try:
+        store = GraphStore(db_path, readonly=True)
+        manifest = {}
+        for key in ["build_date", "source_mode", "node_count", "edge_count", "evidence_count", "alias_count"]:
+            val = store.get_manifest(key)
+            if val is not None:
+                manifest[key] = val
+        store.conn.close()
+        return {
+            "enabled": config.GRAPH_ENABLED,
+            "db_path": str(db_path),
+            "exists": True,
+            "manifest": manifest
+        }
+    except Exception as exc:
+        return {
+            "enabled": config.GRAPH_ENABLED,
+            "db_path": str(db_path),
+            "exists": True,
+            "error": str(exc)
+        }
+
+
 def main() -> None:
     st.set_page_config(page_title="보험 고시 문서 RAG 챗봇")
     inject_css()
@@ -1433,6 +1566,8 @@ def main() -> None:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
             if message["role"] == "assistant":
+                if message.get("graph_result"):
+                    render_graph_evidences(message["graph_result"])
                 if message.get("chunks"):
                     render_sources(message["chunks"], key_prefix=f"history_{message_index}")
                 render_timing(message.get("timing"))
@@ -1519,6 +1654,8 @@ def main() -> None:
                     st.error(str(exc))
                     return
                 st.session_state["last_debug"] = debug
+                if debug and getattr(debug, "graph_result", None) is not None:
+                    render_graph_evidences(debug.graph_result)
                 cited_chunks = _filter_cited_chunks(answer, chunks)
                 render_sources(cited_chunks, key_prefix=f"current_{len(st.session_state.messages)}")
                 render_timing(timing)
@@ -1544,6 +1681,7 @@ def main() -> None:
                     "chunks": cited_chunks,
                     "timing": timing,
                     "model": model,
+                    "graph_result": debug.graph_result if debug and getattr(debug, "graph_result", None) is not None else None,
                 }
             )
             _auto_save(user_id)
@@ -1611,6 +1749,92 @@ def main() -> None:
                 render_debug_hits(debug_info.rrf_hits)
             with tab_final:
                 render_debug_hits(debug_info.final_hits)
+
+            st.markdown("---")
+            st.subheader("🕸️ GraphDB 진단")
+
+            graph_info = get_graph_manifest_info()
+            if not graph_info.get("exists"):
+                st.warning(f"GraphDB 파일이 존재하지 않습니다: {graph_info.get('db_path')}")
+            else:
+                col_g1, col_g2, col_g3 = st.columns(3)
+                col_g1.markdown(f"**활성화 여부**: {'활성 (True)' if graph_info.get('enabled') else '비활성 (False)'}")
+                col_g2.markdown(f"**DB 경로**: `{graph_info.get('db_path')}`")
+                if "manifest" in graph_info:
+                    m = graph_info["manifest"]
+                    col_g3.markdown(f"**빌드 일시**: {m.get('build_date', 'N/A')}")
+
+                    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                    col_m1.metric("노드 수 (Nodes)", m.get("node_count", "N/A"))
+                    col_m2.metric("엣지 수 (Edges)", m.get("edge_count", "N/A"))
+                    col_m3.metric("근거 수 (Evidence)", m.get("evidence_count", "N/A"))
+                    col_m4.metric("동의어 수 (Aliases)", m.get("alias_count", "N/A"))
+                elif "error" in graph_info:
+                    st.error(f"GraphDB 정보 로드 실패: {graph_info['error']}")
+
+            graph_res = getattr(debug_info, "graph_result", None)
+            if graph_res is not None:
+                st.markdown("#### 🔍 Graph Query Plan & Entity Extraction")
+                col_pl1, col_pl2 = st.columns(2)
+                with col_pl1:
+                    st.markdown("**매칭된 인텐트 (Intents)**")
+                    if graph_res.plan.intents:
+                        st.write(graph_res.plan.intents)
+                    else:
+                        st.caption("매칭된 인텐트가 없습니다.")
+                with col_pl2:
+                    st.markdown("**추출된 개체명 (Entities)**")
+                    entities = {}
+                    for field_name in ["procedure_name", "grade_system", "grade_value", "category", "policy_product", "appendix", "hira_code"]:
+                        val = getattr(graph_res.plan, field_name, None)
+                        if val:
+                            entities[field_name] = val
+                    if entities:
+                        st.json(entities)
+                    else:
+                        st.caption("추출된 개체명이 없습니다.")
+
+                st.markdown("#### 📊 조회된 사실 및 신뢰 등급 (Facts Status)")
+                if graph_res.facts:
+                    confirmed = [f for f in graph_res.facts if f.status == "confirmed"]
+                    candidate = [f for f in graph_res.facts if f.status == "candidate"]
+                    missing = [f for f in graph_res.facts if f.status == "missing"]
+
+                    tab_conf, tab_cand, tab_miss = st.tabs([
+                        f"Confirmed ({len(confirmed)})",
+                        f"Candidate ({len(candidate)})",
+                        f"Missing ({len(missing)})"
+                    ])
+
+                    def render_facts_list(facts_list):
+                        if not facts_list:
+                            st.caption("해당 사실이 없습니다.")
+                            return
+                        for f in facts_list:
+                            ev_details = []
+                            for ev in f.evidence:
+                                page_str = f"p.{ev.page_start}" if ev.page_start is not None else ""
+                                ev_details.append(f"{ev.doc_short} {page_str} (Chunk: `{ev.chunk_id}`)")
+                            ev_str = ", ".join(ev_details) if ev_details else "N/A"
+                            st.markdown(f"- **{f.subject}** --(`{f.relation}`, conf: {f.confidence})--> **{f.object}**")
+                            st.caption(f"근거: {ev_str}")
+                            if f.properties:
+                                st.caption(f"속성: {f.properties}")
+
+                    with tab_conf:
+                        render_facts_list(confirmed)
+                    with tab_cand:
+                        render_facts_list(candidate)
+                    with tab_miss:
+                        render_facts_list(missing)
+                else:
+                    st.caption("조회된 그래프 사실이 없습니다.")
+
+                st.markdown("#### 📂 연동된 소스 청크 ID 목록 (Source Chunk IDs)")
+                if graph_res.source_chunk_ids:
+                    st.write(graph_res.source_chunk_ids)
+                else:
+                    st.caption("연동된 청크 ID가 없습니다.")
 
 
 if __name__ == "__main__":

@@ -112,6 +112,10 @@ export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export EMBEDDING_MODEL="${EMBEDDING_MODEL:-$AI_OPS_ROOT/models/embedding/bge-m3}"
 export RERANKER_MODEL="${RERANKER_MODEL:-$AI_OPS_ROOT/models/reranker/bge-reranker-v2-m3}"
+export GRAPH_ENABLED="${GRAPH_ENABLED:-true}"
+export GRAPH_INDEX_PATH="${GRAPH_INDEX_PATH:-$PROJECT_DIR/data/index/graph/insurance_graph.sqlite}"
+export GRAPH_CONTEXT_TOP_K="${GRAPH_CONTEXT_TOP_K:-20}"
+export GRAPH_CONTEXT_MAX_CHARS="${GRAPH_CONTEXT_MAX_CHARS:-5000}"
 export SGLANG_BASE_URL="${SGLANG_BASE_URL:-http://127.0.0.1:30000/v1}"
 export SGLANG_API_KEY="${SGLANG_API_KEY:-EMPTY}"
 export SGLANG_DEFAULT_MODEL="${SGLANG_DEFAULT_MODEL:-gpt-oss-20b}"
@@ -164,6 +168,9 @@ require_file "data/index/bm25.pkl" "default BM25"
 require_file "data/index/chroma/chroma.sqlite3" "default Chroma"
 require_file "data/processed/chunks.jsonl" "default chunks"
 require_file "data/index/relational/standard_codes.sqlite" "standard code DB"
+if [[ "$GRAPH_ENABLED" == "true" ]]; then
+  require_file "$GRAPH_INDEX_PATH" "GraphDB SQLite index"
+fi
 
 if [[ "$ALLOW_MISSING_OCR_INDEXES" == "1" ]]; then
   echo "  WARN    OCR v2/combined index checks are relaxed by --allow-missing-ocr-indexes"
@@ -209,9 +216,26 @@ fi
 
 if command -v ss >/dev/null 2>&1 && ss -tln "( sport = :$PORT )" | grep -q ":$PORT"; then
   if [[ "$REPLACE" == "1" ]]; then
-    echo "[4/5] Replacing existing Streamlit process"
-    pkill -f "streamlit run src/ui/streamlit_app.py" || true
+    echo "[4/5] Replacing existing process on port $PORT"
+    mapfile -t port_pids < <(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
+    if [[ "${#port_pids[@]}" -eq 0 ]]; then
+      echo "ERROR: port $PORT is in use, but no listener PID could be resolved." >&2
+      echo "Check with: lsof -i :$PORT" >&2
+      exit 1
+    fi
+    for pid in "${port_pids[@]}"; do
+      echo "  stopping PID $pid on port $PORT"
+      kill "$pid" 2>/dev/null || {
+        echo "ERROR: failed to stop PID $pid. If it belongs to another user, run: sudo kill -9 $pid" >&2
+        exit 1
+      }
+    done
     sleep 2
+    if command -v ss >/dev/null 2>&1 && ss -tln "( sport = :$PORT )" | grep -q ":$PORT"; then
+      echo "ERROR: port $PORT is still in use after replace attempt." >&2
+      echo "Check with: lsof -i :$PORT" >&2
+      exit 1
+    fi
   else
     echo "ERROR: port $PORT is already in use. Rerun with --replace or choose --port <other>." >&2
     exit 1

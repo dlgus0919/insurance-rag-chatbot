@@ -155,6 +155,10 @@ export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
 export EMBEDDING_MODEL="${EMBEDDING_MODEL:-$AI_OPS_ROOT/models/embedding/bge-m3}"
 export RERANKER_MODEL="${RERANKER_MODEL:-$AI_OPS_ROOT/models/reranker/bge-reranker-v2-m3}"
 export RERANKER_ENABLED="${RERANKER_ENABLED:-false}"
+export GRAPH_ENABLED="${GRAPH_ENABLED:-true}"
+export GRAPH_INDEX_PATH="${GRAPH_INDEX_PATH:-$PROJECT_DIR/data/index/graph/insurance_graph.sqlite}"
+export GRAPH_CONTEXT_TOP_K="${GRAPH_CONTEXT_TOP_K:-20}"
+export GRAPH_CONTEXT_MAX_CHARS="${GRAPH_CONTEXT_MAX_CHARS:-5000}"
 
 if [[ "$CPU_INDEX" == "1" ]]; then
   export CUDA_VISIBLE_DEVICES=""
@@ -182,6 +186,10 @@ if [[ -f "$OFFLINE_ENV_FILE" ]]; then
   else
     export CUDA_VISIBLE_DEVICES="${INDEX_CUDA_VISIBLE_DEVICES:-0}"
   fi
+  export GRAPH_ENABLED="${GRAPH_ENABLED:-true}"
+  export GRAPH_INDEX_PATH="${GRAPH_INDEX_PATH:-$PROJECT_DIR/data/index/graph/insurance_graph.sqlite}"
+  export GRAPH_CONTEXT_TOP_K="${GRAPH_CONTEXT_TOP_K:-20}"
+  export GRAPH_CONTEXT_MAX_CHARS="${GRAPH_CONTEXT_MAX_CHARS:-5000}"
 fi
 
 if [[ "$SKIP_V2_HANDOFF_IMPORT" != "1" && ! -f data/extracted_v2_manual/실무가이드/manifest.json ]]; then
@@ -319,6 +327,10 @@ required=(
   "data/mapping/v1_v2_pairs_실무가이드.jsonl"
   "data/mapping/v1_v2_pairs_상담사례집.jsonl"
 )
+
+if [[ "$GRAPH_ENABLED" == "true" ]]; then
+  required+=("$GRAPH_INDEX_PATH")
+fi
 
 for path in "${required[@]}"; do
   require_path "$path" "$path"

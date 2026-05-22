@@ -85,4 +85,3 @@ def test_update_summary_replaces_clova_section(tmp_path: Path) -> None:
     assert clova["table_blocks"] == 1
     assert clova["grade"]["PASS"] == 2
     assert "clova_rerun_at" in updated
-

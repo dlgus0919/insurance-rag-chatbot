@@ -32,8 +32,8 @@ class LLMPlanner:
         prompt = self._build_prompt(items, context, retrieved_evidences)
 
         try:
-            # LLM 호출
-            response_text = client.complete(prompt)
+            # Project LLM clients expose the shared generate() interface.
+            response_text = client.generate(prompt, temperature=0.0)
             plan_data = self._parse_and_validate_json(response_text)
             return self._map_to_plan(plan_data)
         except Exception as e:
@@ -76,18 +76,20 @@ class LLMPlanner:
 - 청구 항목 목록:
 {items_str}
 
-[근거 문서]
-{evidence_str}
+	[근거 문서]
+	{evidence_str}
 
-[작성 규칙]
-1. 반드시 아래 스키마에 맞는 JSON 데이터 하나만을 출력하세요. 마크다운 코드 블록(예: ```json 등)이나 기타 부연 설명 텍스트를 절대 포함하지 말고, 순수 JSON 텍스트 하나만 출력하세요.
-2. 'formula_intent' 필드에는 보안 Python AST 샌드박스에서 Decimal 연산으로 바로 실행될 수 있는 유효한 Python 코드 조각을 작성해야 합니다.
+	[작성 규칙]
+	1. 반드시 아래 스키마에 맞는 JSON 데이터 하나만을 출력하세요. 마크다운 코드 블록(예: ```json 등)이나 기타 부연 설명 텍스트를 절대 포함하지 말고, 순수 JSON 텍스트 하나만 출력하세요.
+	2. 'formula_intent' 필드에는 보안 Python AST 샌드박스에서 Decimal 연산으로 바로 실행될 수 있는 유효한 Python 코드 조각을 작성해야 합니다.
    - 반드시 'claimed_amount', 'deductible', 'payable_amount' 변수가 최종적으로 할당되도록 하세요.
    - 내장 함수는 max, min, abs만 사용할 수 있고, 수치는 Decimal('값')으로 감싸야 합니다. (예: Decimal('150000') * Decimal('0.2'))
-   - 예시:
-     claimed_amount = Decimal('150000')
-     deductible = max(Decimal('30000'), claimed_amount * Decimal('0.2'))
-     payable_amount = claimed_amount - deductible
+	   - 예시:
+	     claimed_amount = Decimal('150000')
+	     deductible = max(Decimal('30000'), claimed_amount * Decimal('0.2'))
+	     payable_amount = claimed_amount - deductible
+	3. 근거 출처가 "GraphDB (검토 후보)"이거나 내용에 "[CANDIDATE]"가 포함된 정보는 확정 근거가 아닙니다. 이 정보만으로 보상 여부, 지급비율, 공제식, 계산식을 확정하지 말고 decision을 "needs_more_info"로 두거나 uncertainties에 사용자/심사자 확인 필요 사유를 적으세요.
+	4. 근거 내용에 "[MISSING]" 또는 "확인불가"가 포함된 항목은 임의로 수가코드, 지급비율, 약관 조항을 만들어 보완하지 마세요.
 
 JSON Schema:
 {{

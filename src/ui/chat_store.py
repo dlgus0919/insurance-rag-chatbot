@@ -43,6 +43,129 @@ def _dict_to_chunk(data: dict) -> Chunk:
     return Chunk(id=data["id"], text=data["text"], metadata=data.get("metadata", {}))
 
 
+def _graph_result_to_dict(res: any) -> dict | None:
+    if res is None:
+        return None
+    if isinstance(res, dict):
+        return res
+
+    try:
+        confirmed_count = sum(1 for f in res.facts if f.status == "confirmed")
+        candidate_count = sum(1 for f in res.facts if f.status == "candidate")
+        missing_count = sum(1 for f in res.facts if f.status == "missing")
+
+        summary_facts = []
+        for f in res.facts[:10]:
+            summary_facts.append({
+                "subject": f.subject,
+                "relation": f.relation,
+                "object": f.object,
+                "status": f.status
+            })
+
+        return {
+            "is_summary": True,
+            "intents": res.plan.intents if hasattr(res, "plan") and res.plan else [],
+            "confirmed_count": confirmed_count,
+            "candidate_count": candidate_count,
+            "missing_count": missing_count,
+            "facts": summary_facts,
+            "warnings": res.warnings if hasattr(res, "warnings") else [],
+        }
+    except Exception:
+        return {
+            "is_summary": True,
+            "intents": [],
+            "confirmed_count": 0,
+            "candidate_count": 0,
+            "missing_count": 0,
+            "facts": [],
+            "warnings": ["Graph result serialization failed."]
+        }
+
+
+def _dict_to_graph_result(data: dict | None) -> any:
+    if data is None:
+        return None
+
+    try:
+        from src.graph.query_planner import GraphQueryPlan
+        from src.graph.retriever import GraphRetrievalResult, GraphFact, GraphEvidence
+    except ImportError:
+        return data
+
+    try:
+        if data.get("is_summary"):
+            plan = GraphQueryPlan(intents=data.get("intents", []))
+            facts = []
+            for f in data.get("facts", []):
+                facts.append(GraphFact(
+                    subject=f.get("subject", ""),
+                    relation=f.get("relation", ""),
+                    object=f.get("object"),
+                    confidence=1.0,
+                    status=f.get("status", "missing"),
+                    evidence=[]
+                ))
+            return GraphRetrievalResult(
+                plan=plan,
+                facts=facts,
+                source_chunk_ids=[],
+                warnings=data.get("warnings", []),
+                debug={}
+            )
+        else:
+            plan_data = data.get("plan", {})
+            plan = GraphQueryPlan(
+                intents=plan_data.get("intents", []),
+                procedure_name=plan_data.get("procedure_name"),
+                grade_system=plan_data.get("grade_system"),
+                grade_value=plan_data.get("grade_value"),
+                category=plan_data.get("category"),
+                policy_product=plan_data.get("policy_product"),
+                appendix=plan_data.get("appendix"),
+                hira_code=plan_data.get("hira_code"),
+                requested_peer_count=plan_data.get("requested_peer_count", 3),
+            )
+
+            facts = []
+            for f in data.get("facts", []):
+                evidences = []
+                for ev in f.get("evidence", []):
+                    evidences.append(GraphEvidence(
+                        evidence_id=ev.get("evidence_id"),
+                        chunk_id=ev.get("chunk_id"),
+                        doc_short=ev.get("doc_short", ""),
+                        doc_name=ev.get("doc_name"),
+                        pdf_filename=ev.get("pdf_filename"),
+                        page_start=ev.get("page_start"),
+                        page_end=ev.get("page_end"),
+                        source_version=ev.get("source_version"),
+                        row_text=ev.get("row_text"),
+                        confidence=ev.get("confidence", 1.0),
+                    ))
+                facts.append(GraphFact(
+                    subject=f.get("subject"),
+                    relation=f.get("relation"),
+                    object=f.get("object"),
+                    confidence=f.get("confidence", 1.0),
+                    status=f.get("status", "missing"),
+                    evidence=evidences,
+                    properties=f.get("properties", {}),
+                ))
+
+            return GraphRetrievalResult(
+                plan=plan,
+                facts=facts,
+                source_chunk_ids=data.get("source_chunk_ids", []),
+                warnings=data.get("warnings", []),
+                debug=data.get("debug", {}),
+            )
+    except Exception:
+        return data
+
+
+
 def _serialize_messages(messages: list[dict]) -> list[dict]:
     """st.session_state 형식을 JSON 저장 형식으로 변환한다."""
 
@@ -55,6 +178,8 @@ def _serialize_messages(messages: list[dict]) -> list[dict]:
                     entry[key] = message[key]
             if "chunks" in message:
                 entry["chunks"] = [_chunk_to_dict(chunk) for chunk in message["chunks"]]
+            if "graph_result" in message:
+                entry["graph_result"] = _graph_result_to_dict(message["graph_result"])
         serialized.append(entry)
     return serialized
 
@@ -71,6 +196,8 @@ def _deserialize_messages(messages: list[dict]) -> list[dict]:
                     entry[key] = message[key]
             if "chunks" in message:
                 entry["chunks"] = [_dict_to_chunk(chunk) for chunk in message["chunks"]]
+            if "graph_result" in message:
+                entry["graph_result"] = _dict_to_graph_result(message["graph_result"])
         deserialized.append(entry)
     return deserialized
 

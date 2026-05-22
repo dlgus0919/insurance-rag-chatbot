@@ -99,6 +99,35 @@ def run_claim_calculation(
 
     # 3. RAG 근거 문서 조회
     retrieved_evidences = []
+    graph_result = None
+    if rag_pipeline is not None and getattr(rag_pipeline, "graph_enabled", False) and rag_pipeline.graph_retriever:
+        try:
+            query_parts = []
+            if context.situation_note:
+                query_parts.append(context.situation_note)
+            for item in items:
+                query_parts.append(item.input_name)
+            question = " ".join(query_parts)
+            graph_result = rag_pipeline.graph_retriever.retrieve(question)
+            for fact in graph_result.facts:
+                if fact.status == "confirmed":
+                    # confirmed evidence가 없는 사실은 retrieved_evidences에서 배제
+                    if not fact.evidence:
+                        continue
+                    retrieved_evidences.append({
+                        "source": "GraphDB (확정)",
+                        "content": f"[CONFIRMED] {fact.subject} --({fact.relation})--> {fact.object or 'N/A'}",
+                        "page": "N/A"
+                    })
+                elif fact.status == "candidate":
+                    retrieved_evidences.append({
+                        "source": "GraphDB (검토 후보)",
+                        "content": f"[CANDIDATE] {fact.subject} --({fact.relation})--> {fact.object or 'N/A'} (이유: {fact.properties.get('matched_keyword', '')} 매칭)",
+                        "page": "N/A"
+                    })
+        except Exception as e:
+            logger.error(f"GraphDB 근거 조회 중 에러 발생: {e}")
+
     if rag_pipeline is not None and basis.doc_filter:
         rag_docs = [d for d in basis.doc_filter if d != "비급여 표준모델"]
         if rag_docs:
@@ -193,6 +222,26 @@ def run_claim_calculation(
     # UI 및 결과 출력용으로 Decimal 값을 정수형 문자열 등으로 가공
     payable_str = f"{payable_val:,.0f}".replace(",", "")
     deductible_str = f"{deductible_val:,.0f}".replace(",", "")
+
+    # Graph candidate rule 검토 플래그 강제 적용
+    if graph_result:
+        # candidate PAYS_BY_RATIO 만 있고 confirmed 정보가 없는 경우 검토 강제
+        has_candidate_ratio = any(f.status == "candidate" and f.relation == "PAYS_BY_RATIO" for f in graph_result.facts)
+        has_confirmed = any(f.status == "confirmed" for f in graph_result.facts)
+        if has_candidate_ratio and not has_confirmed:
+            review_required = True
+            reason = "신뢰할 수 있는 확정 구조화 사실(confirmed)이 없으며, 후보 지급 비율(candidate PAYS_BY_RATIO)만 존재합니다. 지급예상액을 확정할 수 없습니다."
+            if reason not in review_reasons:
+                review_reasons.append(reason)
+
+        has_graph_candidate = any(f.status == "candidate" for f in graph_result.facts)
+        if has_graph_candidate:
+            review_required = True
+            for f in graph_result.facts:
+                if f.status == "candidate":
+                    reason = f"약관 규정({f.subject})과의 관계({f.relation})가 확정되지 않은 검토 후보 상태입니다. (매칭 정보: {f.object})"
+                    if reason not in review_reasons:
+                        review_reasons.append(reason)
 
     # 각 단계별 검토 플래그 병합
     if disambiguation_required:

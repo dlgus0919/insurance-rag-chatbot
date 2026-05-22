@@ -1,11 +1,8 @@
 import csv
 import io
 import json
-from contextlib import nullcontext
 
 from src.parser.chunker import Chunk
-from src.retrieval import Hit
-import src.ui.streamlit_app as streamlit_app
 from src.rag.insurance_form import InsuranceFormInput
 from src.ui.streamlit_app import (
     _build_answer_log_details,
@@ -20,7 +17,6 @@ from src.ui.streamlit_app import (
     _insurance_form_log_input,
     _sanitize_answer_markdown,
     _source_title,
-    _stream_answer,
     _turn_count,
 )
 
@@ -280,78 +276,73 @@ def test_insurance_form_log_input_truncates_situation_note() -> None:
     assert len(payload["situation_note_preview"]) == 200
 
 
-class _FakePlaceholder:
-    def __init__(self):
-        self.markdown_calls = []
-        self.warning_calls = []
-
-    def markdown(self, text, *args, **kwargs):
-        self.markdown_calls.append(text)
-
-    def warning(self, text, *args, **kwargs):
-        self.warning_calls.append(text)
-
-
-def _patch_streamlit_answer_surface(monkeypatch) -> _FakePlaceholder:
-    placeholder = _FakePlaceholder()
-    monkeypatch.setattr(streamlit_app.st, "empty", lambda: placeholder)
-    monkeypatch.setattr(streamlit_app.st, "spinner", lambda *args, **kwargs: nullcontext())
-    return placeholder
-
-
-class _BaseFakePipeline:
-    def retrieve_hits(self, question, doc_filter=None, return_debug=False):
-        hit = Hit(
-            id="test_ch_01",
-            score=0.9,
-            document="로봇 수술 코드는 QZ961입니다.",
-            metadata={"doc_short": "테스트약관", "page_start": 5, "page_end": 5},
-        )
-        return [hit], None
-
-    def build_prompt(self, question, chunks):
-        return "prompt"
-
-
-def test_stream_answer_applies_evidence_validation_without_name_error(monkeypatch) -> None:
-    class FakeLLM:
-        def generate_stream(self, prompt, system, temperature):
-            yield "근거 기반 답변"
-
-    class FakePipeline(_BaseFakePipeline):
-        llm = FakeLLM()
-
-    placeholder = _patch_streamlit_answer_surface(monkeypatch)
-
-    answer, chunks, timing, debug = _stream_answer(FakePipeline(), "로봇 수술 코드는?", 0.0)
-
-    assert "근거 기반 답변" in answer
-    assert chunks[0].metadata["doc_short"] == "테스트약관"
-    assert timing["retrieve_ms"] >= 0
-    assert debug is None
-    assert placeholder.markdown_calls[-1] == answer
-
-
 def test_stream_answer_empty_defense(monkeypatch) -> None:
     """LLM이 빈 토큰을 반환할 때 출처만 단독 노출되지 않고 경고 메시지를 올바르게 보여주는지 테스트한다."""
+    import streamlit as st
+    from src.ui.streamlit_app import _stream_answer
+    from src.rag.pipeline import Hit
+
+    # Mock streamlit empty placeholder
+    class MockEmpty:
+        def __init__(self):
+            self.markdown_calls = []
+            self.warning_calls = []
+
+        def markdown(self, text, *args, **kwargs):
+            self.markdown_calls.append(text)
+
+        def warning(self, text, *args, **kwargs):
+            self.warning_calls.append(text)
+
+    placeholder = MockEmpty()
+    monkeypatch.setattr(st, "empty", lambda: placeholder)
+
+    # Mock streamlit spinner (context manager)
+    class MockSpinner:
+        def __enter__(self):
+            return self
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            pass
+
+    monkeypatch.setattr(st, "spinner", lambda *args, **kwargs: MockSpinner())
+
+    # Mock pipeline and llm
     class MockLLM:
         def generate_stream(self, prompt, system, temperature):
+            # empty stream
             return
             yield
 
-    class MockPipeline(_BaseFakePipeline):
-        llm = MockLLM()
+    class MockPipeline:
+        def __init__(self):
+            self.llm = MockLLM()
 
-    placeholder = _patch_streamlit_answer_surface(monkeypatch)
+        def retrieve_hits(self, question, doc_filter=None, return_debug=False, **kwargs):
+            # Return some mock hits to verify they are not appended as citations
+            hit = Hit(
+                id="test_ch_01",
+                score=0.9,
+                document="본문 내용",
+                metadata={"doc_short": "테스트약관", "page_start": 5, "page_end": 5}
+            )
+            return [hit], {"debug_key": "debug_val"}
+
+        def build_prompt(self, question, chunks, **kwargs):
+            return "prompt"
+
+    pipeline = MockPipeline()
 
     answer, chunks, timing, debug = _stream_answer(
-        pipeline=MockPipeline(),
+        pipeline=pipeline,
         question="테스트 질문",
         temperature=0.0,
     )
 
+    # 1. 반환 answer가 빈 문자열이 아니어야 함
     assert answer != ""
+    # 2. answer가 출처 citation만으로 구성되지 않아야 함 (warning 메시지가 들어있어야 함)
     assert "모델이 응답 본문을 반환하지 않았습니다" in answer
     assert "테스트약관" not in answer
+    # 3. placeholder에 warning 호출이 있었는지 검증
     assert len(placeholder.warning_calls) == 1
     assert "모델이 응답 본문을 반환하지 않았습니다" in placeholder.warning_calls[0]

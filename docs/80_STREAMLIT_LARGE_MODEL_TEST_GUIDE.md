@@ -1,10 +1,10 @@
-# Streamlit Large Model Test Guide
+# Streamlit GraphRAG / Large Model Test Guide
 
 Date: 2026-05-22
 
 ## Scope
 
-This guide is for testing large local LLMs through the Streamlit app on DGX Spark.
+This guide is for testing the Streamlit app from the administrator `ai-hang` workspace on DGX Spark.
 
 Primary project path:
 
@@ -12,82 +12,136 @@ Primary project path:
 /srv/shared/projects/insurance-rag-chatbot
 ```
 
-Before using this guide, read and follow:
+The app uses local offline assets, a Streamlit frontend, GraphDB-assisted RAG, and local large model backends. For normal team testing, start Streamlit from the project runtime preparation script so the OCR indexes, GraphDB file, embedding paths, and CPU/GPU policy are validated before the server opens.
 
-```text
-docs/103_STREAMLIT_RUNTIME_PREP_GUIDE.md
+## Current Model Policy
+
+Large model slot, SGLang:
+
+- `gpt-oss-20b`: current validated default.
+- `gemma-4-26b-a4b-nvfp4`: staged validation candidate.
+
+Small/local fallback, Ollama:
+
+- `exaone3.5:7.8b`
+
+Important current Gemma4 note:
+
+- Gemma4 assets are present and SGLang can load the model after a local SGLang runtime patch.
+- However, first generation smoke currently returns repeated `<pad>` tokens, so Gemma4 should be treated as a runtime validation candidate, not as the production default.
+- Use `gpt-oss-20b` for normal functional testing.
+
+## 1. SSH Into The Admin Workspace
+
+From the Mac:
+
+```bash
+ssh -t ai-hang@100.88.5.57 "cd /srv/shared/projects/insurance-rag-chatbot; bash -l"
 ```
 
-That document is the source of truth for pull-after setup, non-Git runtime files, OCR indexes, local model assets, and Streamlit launch commands.
+Check that the repo is the admin/main project directory:
 
-## Current Provider Policy
-
-The current app separates provider and model selection.
-
-Recommended runtime policy:
-
-```text
-Streamlit app: CPU
-RAG query embedding: CPU by default
-Reranker: CPU by default
-SGLang/vLLM large LLM: GPU 0
-Batch index/embedding generation: GPU 0
+```bash
+pwd
+git status --short
+git rev-parse --short HEAD
 ```
 
-Large local providers:
+Expected current commit at the time of this guide:
 
-- `vLLM / gemma-4-26b-a4b-nvfp4`
-- `SGLang / gpt-oss-20b`
+```text
+9d974eb
+```
 
-Small/local fallback:
+## 2. Verify SGLang Status
 
-- `Ollama / exaone3.5:7.8b`
+Check the active SGLang model:
 
-Cloud/OpenAI providers should be hidden while `OFFLINE_MODE=true`.
+```bash
+/srv/ai-ops/bin/check-sglang-local
+```
 
-## Current Model Notes
+Expected for normal testing:
 
-### Gemma4 via vLLM
+```text
+/v1/models includes gpt-oss-20b
+```
 
-`gemma-4-26b-a4b-nvfp4` is now the main Gemma4 test target and is served through vLLM.
+If needed, switch back to the validated default:
 
-Important fixes already applied:
+```bash
+/srv/ai-ops/bin/switch-sglang-model gpt-oss-20b
+```
 
-- vLLM readiness checks use `Authorization: Bearer EMPTY`.
-- vLLM is launched with `--api-key EMPTY`.
-- OpenAI-compatible streaming now handles non-Harmony streams, so Gemma4 `delta.content` tokens are displayed immediately.
+Model switching can take several minutes because the previous SGLang session is stopped and the selected model is loaded from local disk.
 
-### GPT-OSS via SGLang
+## 3. Verify Runtime Assets
 
-`gpt-oss-20b` remains available through SGLang.
+In the DGX admin shell:
 
-It uses GPT-OSS/Harmony-style final-channel parsing, so the OpenAI-compatible client keeps Harmony marker handling for this model family.
+```bash
+cd /srv/shared/projects/insurance-rag-chatbot
+bash scripts/prepare_streamlit_runtime.sh --skip-offline-assets --skip-v2-handoff-import
+```
 
-## Start Streamlit
+The check should confirm at least:
 
-From DGX:
+- default BM25/Chroma index
+- v2 manual BM25/Chroma index
+- v1/v2 combined chunks and index
+- pair mapping files
+- relational standard code DB
+- GraphDB SQLite index at `data/index/graph/insurance_graph.sqlite`
+
+If GraphDB is missing, rebuild it after required OCR/index files are ready:
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/build_graph_index.py --rebuild
+PYTHONPATH=. .venv/bin/python scripts/check_graph_index.py
+```
+
+`check_graph_index.py` must end with `Detailed Integrity Check: PASS`.
+
+## 4. Start Streamlit From The Admin Repo
+
+Preferred command:
 
 ```bash
 cd /srv/shared/projects/insurance-rag-chatbot
 bash scripts/prepare_streamlit_runtime.sh --run-streamlit --replace
 ```
 
-From the Mac in one command:
+For quick restart when assets are already prepared:
 
 ```bash
-ssh -t ai-hang@100.88.5.57 "cd /srv/shared/projects/insurance-rag-chatbot && bash scripts/prepare_streamlit_runtime.sh --run-streamlit --replace"
+cd /srv/shared/projects/insurance-rag-chatbot
+bash scripts/run_offline_streamlit_test.sh --skip-asset-prep --port 8501 --replace
 ```
 
-Use a different port for a personal workspace:
+Expected runtime policy:
+
+- `GRAPH_ENABLED=true`
+- `GRAPH_INDEX_PATH=/srv/shared/projects/insurance-rag-chatbot/data/index/graph/insurance_graph.sqlite`
+- Streamlit/RAG query embedding: CPU 기본
+- SGLang/vLLM large model backend: GPU
+- offline HuggingFace mode enabled
+
+Check the current Streamlit process:
 
 ```bash
-cd /srv/shared/workspaces/<user>/insurance-rag-chatbot
-bash scripts/prepare_streamlit_runtime.sh --run-streamlit --replace --port 8502
+pgrep -af "streamlit run src/ui/streamlit_app.py"
 ```
 
-## Open The App From The Mac
+Check GraphDB-related environment variables for the active process:
 
-For the shared `8501` port:
+```bash
+pid=$(pgrep -f "streamlit run src/ui/streamlit_app.py" | head -n 1)
+tr '\0' '\n' < /proc/$pid/environ | grep -E '^(GRAPH_ENABLED|GRAPH_INDEX_PATH|GRAPH_CONTEXT_MAX_CHARS|OFFLINE_MODE|CUDA_VISIBLE_DEVICES)='
+```
+
+## 5. Open The App From The Mac
+
+In a separate Mac terminal:
 
 ```bash
 ssh -L 8501:localhost:8501 ai-hang@100.88.5.57
@@ -99,129 +153,207 @@ Open:
 http://localhost:8501
 ```
 
-For a personal `8502` port:
+If port `8501` is already used by another workspace process, identify it on DGX:
 
 ```bash
-ssh -L 8502:localhost:8502 <user>@100.88.5.57
+pgrep -af "streamlit run src/ui/streamlit_app.py"
 ```
 
-Open:
+Use the admin/main repo process for final validation.
+
+## 6. Login-time Large Model Selection
+
+On the login screen:
+
+1. Select `gpt-oss-20b` for normal testing.
+2. Enter the app credentials.
+3. Click login.
+
+After login, the app verifies whether the selected SGLang model is active. If not, it calls:
+
+```bash
+/srv/ai-ops/bin/switch-sglang-model <selected-model>
+```
+
+Only allowlisted model names are accepted by the wrapper.
+
+## 7. Sidebar Model Selection After Login
+
+After login:
+
+- The large SGLang model is already determined by the login screen.
+- The sidebar can still be used to select available provider/model combinations.
+- Ollama `exaone3.5:7.8b` remains available for small local fallback testing.
+
+Expected normal options:
+
+- `SGLang / gpt-oss-20b` when `gpt-oss-20b` is active.
+- `Ollama / exaone3.5:7.8b` if Ollama is running.
+- OpenAI is hidden while `OFFLINE_MODE=true`.
+
+## 8. Recommended Smoke Tests
+
+Run these with `gpt-oss-20b` first.
+
+### GraphRAG Complex Question
 
 ```text
-http://localhost:8502
+기관지 식도루 폐쇄술의 신1-5종 수술 종수는 몇 종이고, 이와 같은 종수에 해당하는 다른 수술을 3가지 더 알려줘. 그 중 SOL 처음건강보험 [별표7]에서 동일한 대분류 항목에 들어가는 수술이 있다면 표시해줘.
 ```
 
-## Runtime Checks
+Check:
 
-Streamlit:
+- The answer uses structured GraphDB facts, not only vector chunks.
+- It identifies the surgery grade and gives same-grade peer surgeries.
+- Candidate SOL appendix mappings are labeled as candidate/review-needed when not confirmed.
+- Admin users can see GraphDB query plan/facts in the diagnostic panel.
 
-```bash
-ss -tlnp | grep ':8501'
-```
-
-vLLM Gemma4:
-
-```bash
-curl -s -H "Authorization: Bearer EMPTY" \
-  http://127.0.0.1:30001/v1/models
-```
-
-SGLang GPT-OSS:
-
-```bash
-curl -s -H "Authorization: Bearer EMPTY" \
-  http://127.0.0.1:30000/v1/models
-```
-
-GPU usage:
-
-```bash
-nvidia-smi
-```
-
-## Recommended Smoke Tests
-
-### General Question
+### GraphRAG Category / Payment Ratio Question
 
 ```text
-로봇 수술의 코드를 알려주세요.
+신1-5종 수술분류표에서 5종(가장 중한 등급)에 해당하는 수술을 소화기계 카테고리에서 모두 나열해줘. 각각의 수가코드와 SOL 건강보험에서 지급되는 보험금 비율도 같이 알려줘.
 ```
 
-Expected:
+Check:
 
-- Answer body is generated.
-- Retrieved source citations are shown below the answer.
-- Exported chat has text after `[A1] [vllm:gemma-4-26b-a4b-nvfp4]`.
+- Digestive grade-5 procedures are listed.
+- Missing medical fee code links are explicitly marked as missing rather than invented.
+- SOL payment ratio facts are not over-stated when they are candidate graph edges.
 
-### Quick Code Search
+### Conflict-Aware Source Split
 
-Use `퀵 코드 검색` and ask a short procedure/code query.
+```text
+로봇 수술의 수가코드와 분류 지침을 문서별로 비교해서 알려주세요.
+```
 
-Expected:
+Check:
 
-- Procedure/code-oriented result appears.
-- Sources are visible.
-
-### Structured Policy Search
-
-Use `약관 정형 검색`.
-
-Expected:
-
-- Required fields work.
-- Answer format remains consistent.
-- Sources are attached.
+- If retrieved documents disagree or expose different code/value rows, the answer separates document-specific cases.
+- The answer does not merge conflicting source values into one final code.
 
 ### Claim Payout Calculation
 
 Use `보험금 계산`.
 
-Expected:
+Recommended first smoke:
 
-- Standard code DB lookup works.
-- Ambiguous code matches are held for user selection.
-- The result is labeled as `지급예상액`, not guaranteed payout.
+- 청구 항목명: `도수치료`
+- 청구금액: `150,000`
+- 수량/횟수: `1`
+- 방문 형태: `통원`
+- 플래너 유형: first `Fake Planner`, then `LLM Planner` when a local large model is ready
+
+Check:
+
+- Fake Planner returns 지급예상액 `105000`, 공제금액 `45000`.
+- LLM Planner returns valid JSON-backed calculation code and does not treat GraphDB candidate facts as confirmed payout rules.
+- Candidate-only graph facts set review-required behavior.
+
+### General Question
+
+```text
+실손보험에서 통원 치료비 청구 시 일반적으로 확인해야 할 항목을 설명해줘.
+```
+
+Check:
+
+- Korean answer is readable.
+- Answer cites retrieved sources.
+- No cloud/OpenAI warning appears.
+
+### Quick Code / Procedure Search
+
+Use `퀵 코드 검색` and ask a short procedure/code-oriented query.
+
+Check:
+
+- Results return quickly enough for interactive use.
+- Source chunks are visible.
+
+### Structured Policy Search
+
+Use `약관 정형 검색`.
+
+Check:
+
+- Required fields work.
+- Answer format remains consistent.
+- Sources are attached.
 
 ### Ollama Fallback
 
-Select:
+Switch provider/model to Ollama if available:
 
 ```text
 Ollama / exaone3.5:7.8b
 ```
 
-Expected:
+Ask a short question and verify local fallback still responds.
 
-- The app can still answer without vLLM/SGLang.
+## 9. Gemma4 / vLLM Validation Test
 
-## Stop Runtime
+Gemma4 is served by vLLM in the current local runtime path.
 
-Stop Streamlit only:
+Expected current behavior:
 
-```bash
-pkill -f '[s]treamlit run src/ui/streamlit_app.py' || true
-pkill -f '[r]un_offline_streamlit_test.sh' || true
-```
+- Model load may take several minutes.
+- vLLM should require the configured API key and return `/v1/models` only with the Authorization header.
+- Use Gemma4 for controlled quality testing after `gpt-oss-20b` smoke passes.
 
-Stop Gemma4/vLLM:
+If Gemma4 model startup fails, record it as a vLLM/model runtime issue rather than a GraphRAG app issue, unless Streamlit itself crashes.
 
-```bash
-tmux kill-session -t vllm-gemma4 2>/dev/null || true
-```
-
-Stop SGLang:
+Manual vLLM switch command:
 
 ```bash
-tmux kill-session -t sglang-local 2>/dev/null || true
+/srv/ai-ops/bin/switch-vllm-model gemma-4-26b-a4b-nvfp4
 ```
 
-## Pass Criteria
+Return to SGLang default for normal testing if needed:
+
+```bash
+/srv/ai-ops/bin/switch-sglang-model gpt-oss-20b
+```
+
+## 10. Logs To Check
+
+Streamlit logs:
+
+```bash
+ls -lt logs/streamlit_*.log | head
+```
+
+SGLang logs:
+
+```bash
+tail -200 /srv/ai-ops/logs/sglang/sglang-local.log
+```
+
+Runtime checks:
+
+```bash
+/srv/ai-ops/bin/check-insurance-rag
+/srv/ai-ops/bin/check-sglang-local
+PYTHONPATH=. .venv/bin/python scripts/check_graph_index.py
+PYTHONPATH=. .venv/bin/python scripts/eval_graph_qa.py --graph data/index/graph/insurance_graph.sqlite --eval eval/graph_qa.jsonl
+```
+
+## 11. Pass Criteria
+
+For `gpt-oss-20b`:
 
 - Login succeeds.
 - Streamlit reaches the chat UI.
-- Provider/model dropdown exposes the expected local providers.
-- Gemma4/vLLM answers a Korean question with a non-empty body.
-- GPT-OSS/SGLang remains usable if the SGLang server is active.
-- Ollama fallback remains selectable when Ollama is running.
+- `SGLang / gpt-oss-20b` can answer at least one general Korean question.
+- Source display works.
+- GraphRAG complex question uses GraphDB facts and source chunks together.
+- Missing/candidate graph facts are not hallucinated as confirmed facts.
+- Conflict-aware questions split document-specific values instead of unifying them.
+- 보험금 계산 mode remains usable and runs at least Fake Planner smoke successfully.
+- Ollama fallback remains selectable and responds.
 - No external OpenAI model is exposed in offline mode.
-- General/quick-code/structured-policy/claim-calculation modes are usable.
+
+For Gemma4:
+
+- vLLM model switch path can be exercised.
+- Korean answer generation succeeds after cold start.
+- Do not treat cold-start/model-serving failure as a GraphDB failure unless the app itself fails.

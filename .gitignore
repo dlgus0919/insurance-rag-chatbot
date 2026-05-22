@@ -96,8 +96,26 @@ sglang_storage/
 *claim_calculation_bak*
 streamlit.log
 streamlit_*.log
-._*
-**/._*
 
 # Temporary backups from other team members
 *_dani.py
+
+# macOS AppleDouble files
+**/._*
+._*
+
+# Forbidden repository level tools/docs
+AGENTS.md
+WORKFLOW.md
+
+# Forbidden script utilities
+scripts/generate_v2_manual_batch_plan.py
+scripts/prepare_v2_manual_batch.py
+scripts/render_v2_manual_batch_pages.py
+scripts/validate_v2_manual_batch.py
+
+# Temporary manual batch documents
+docs/67A_*
+docs/67B_*
+docs/._67A_*
+docs/._67B_*

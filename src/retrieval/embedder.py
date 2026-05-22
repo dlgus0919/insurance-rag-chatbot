@@ -20,18 +20,33 @@ class Embedder:
         except ImportError as exc:  # pragma: no cover - 환경 의존
             raise RuntimeError("sentence-transformers가 설치되어 있지 않습니다.") from exc
 
+        from src import config
+
         self.model_name = model_name
         self.allow_remote_download = allow_remote_download
         local_files_only = not allow_remote_download
+        device = getattr(config, "EMBEDDING_DEVICE", None)
 
         try:
-            self.model = SentenceTransformer(model_name, local_files_only=local_files_only)
+            self.model = SentenceTransformer(model_name, local_files_only=local_files_only, device=device)
         except TypeError:
             try:
-                self.model = SentenceTransformer(model_name)
+                self.model = SentenceTransformer(model_name, device=device)
             except Exception as fallback_exc:
+                if device != "cpu" and ("device" in str(fallback_exc).lower() or "out of memory" in str(fallback_exc).lower() or "cuda" in str(fallback_exc).lower()):
+                    try:
+                        self.model = SentenceTransformer(model_name, device="cpu")
+                        return
+                    except Exception:
+                        pass
                 raise self._load_error(model_name, allow_remote_download) from fallback_exc
         except Exception as exc:
+            if device != "cpu" and ("device" in str(exc).lower() or "out of memory" in str(exc).lower() or "cuda" in str(exc).lower()):
+                try:
+                    self.model = SentenceTransformer(model_name, local_files_only=local_files_only, device="cpu")
+                    return
+                except Exception:
+                    pass
             raise self._load_error(model_name, allow_remote_download) from exc
 
     @staticmethod
