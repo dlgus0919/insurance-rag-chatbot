@@ -101,48 +101,6 @@ def test_sanitize_answer_markdown_adds_spaces_around_tilde() -> None:
     assert _sanitize_answer_markdown("정상 텍스트") == "정상 텍스트"
 
 
-def test_stream_answer_applies_evidence_validation_without_name_error(monkeypatch) -> None:
-    class FakePlaceholder:
-        def __init__(self) -> None:
-            self.markdowns: list[str] = []
-
-        def markdown(self, value: str) -> None:
-            self.markdowns.append(value)
-
-    class FakeLLM:
-        def generate_stream(self, prompt: str, system: str, temperature: float):
-            yield "근거 기반 답변"
-
-    class FakePipeline:
-        llm = FakeLLM()
-
-        def retrieve_hits(self, question: str, doc_filter=None, return_debug: bool = False):
-            hits = [
-                Hit(
-                    id="심평원_ch_000001",
-                    score=1.0,
-                    document="로봇 수술 코드는 QZ961입니다.",
-                    metadata={"doc_short": "심평원", "page_start": 1, "page_end": 1},
-                )
-            ]
-            return hits, None
-
-        def build_prompt(self, question: str, chunks: list[Chunk]) -> str:
-            return "prompt"
-
-    placeholder = FakePlaceholder()
-    monkeypatch.setattr(streamlit_app.st, "spinner", lambda _message: nullcontext())
-    monkeypatch.setattr(streamlit_app.st, "empty", lambda: placeholder)
-
-    answer, chunks, timing, debug = _stream_answer(FakePipeline(), "로봇 수술 코드는?", 0.0)
-
-    assert "근거 기반 답변" in answer
-    assert chunks[0].metadata["doc_short"] == "심평원"
-    assert timing["retrieve_ms"] >= 0
-    assert debug is None
-    assert placeholder.markdowns[-1] == answer
-
-
 def test_export_helpers_include_messages_timing_and_sources() -> None:
     chunk = Chunk(
         id="약관_ch_000001",
@@ -320,3 +278,80 @@ def test_insurance_form_log_input_truncates_situation_note() -> None:
     assert payload["primary"] == "N39.3"
     assert payload["coverage_topics"] == ["질병급여"]
     assert len(payload["situation_note_preview"]) == 200
+
+
+class _FakePlaceholder:
+    def __init__(self):
+        self.markdown_calls = []
+        self.warning_calls = []
+
+    def markdown(self, text, *args, **kwargs):
+        self.markdown_calls.append(text)
+
+    def warning(self, text, *args, **kwargs):
+        self.warning_calls.append(text)
+
+
+def _patch_streamlit_answer_surface(monkeypatch) -> _FakePlaceholder:
+    placeholder = _FakePlaceholder()
+    monkeypatch.setattr(streamlit_app.st, "empty", lambda: placeholder)
+    monkeypatch.setattr(streamlit_app.st, "spinner", lambda *args, **kwargs: nullcontext())
+    return placeholder
+
+
+class _BaseFakePipeline:
+    def retrieve_hits(self, question, doc_filter=None, return_debug=False):
+        hit = Hit(
+            id="test_ch_01",
+            score=0.9,
+            document="로봇 수술 코드는 QZ961입니다.",
+            metadata={"doc_short": "테스트약관", "page_start": 5, "page_end": 5},
+        )
+        return [hit], None
+
+    def build_prompt(self, question, chunks):
+        return "prompt"
+
+
+def test_stream_answer_applies_evidence_validation_without_name_error(monkeypatch) -> None:
+    class FakeLLM:
+        def generate_stream(self, prompt, system, temperature):
+            yield "근거 기반 답변"
+
+    class FakePipeline(_BaseFakePipeline):
+        llm = FakeLLM()
+
+    placeholder = _patch_streamlit_answer_surface(monkeypatch)
+
+    answer, chunks, timing, debug = _stream_answer(FakePipeline(), "로봇 수술 코드는?", 0.0)
+
+    assert "근거 기반 답변" in answer
+    assert chunks[0].metadata["doc_short"] == "테스트약관"
+    assert timing["retrieve_ms"] >= 0
+    assert debug is None
+    assert placeholder.markdown_calls[-1] == answer
+
+
+def test_stream_answer_empty_defense(monkeypatch) -> None:
+    """LLM이 빈 토큰을 반환할 때 출처만 단독 노출되지 않고 경고 메시지를 올바르게 보여주는지 테스트한다."""
+    class MockLLM:
+        def generate_stream(self, prompt, system, temperature):
+            return
+            yield
+
+    class MockPipeline(_BaseFakePipeline):
+        llm = MockLLM()
+
+    placeholder = _patch_streamlit_answer_surface(monkeypatch)
+
+    answer, chunks, timing, debug = _stream_answer(
+        pipeline=MockPipeline(),
+        question="테스트 질문",
+        temperature=0.0,
+    )
+
+    assert answer != ""
+    assert "모델이 응답 본문을 반환하지 않았습니다" in answer
+    assert "테스트약관" not in answer
+    assert len(placeholder.warning_calls) == 1
+    assert "모델이 응답 본문을 반환하지 않았습니다" in placeholder.warning_calls[0]

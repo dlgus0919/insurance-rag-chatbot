@@ -763,12 +763,22 @@ def _stream_answer(
         placeholder.markdown("".join(tokens) + "▌")
 
     raw_answer = "".join(tokens).strip()
+    llm_ms = (time.perf_counter() - llm_started) * 1000
+    total_ms = (time.perf_counter() - total_started) * 1000
+    timing = {"retrieve_ms": retrieve_ms, "llm_ms": llm_ms, "total_ms": total_ms}
+
+    if not raw_answer:
+        answer = (
+            "모델이 응답 본문을 반환하지 않았습니다. "
+            "선택한 provider의 스트리밍 응답 형식 또는 모델 상태를 확인해 주세요."
+        )
+        placeholder.warning(answer)
+        return answer, chunks, timing, debug
+
     answer = append_retrieved_source_citations(_sanitize_answer_markdown(raw_answer), chunks)
     answer = append_evidence_validation_warning(answer, question, chunks)
     placeholder.markdown(answer)
-    llm_ms = (time.perf_counter() - llm_started) * 1000
-    total_ms = (time.perf_counter() - total_started) * 1000
-    return answer, chunks, {"retrieve_ms": retrieve_ms, "llm_ms": llm_ms, "total_ms": total_ms}, debug
+    return answer, chunks, timing, debug
 
 
 def _handle_quick_code(
