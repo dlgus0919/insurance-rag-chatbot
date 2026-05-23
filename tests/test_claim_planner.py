@@ -60,3 +60,4 @@ def test_llm_planner_uses_generate_interface(monkeypatch) -> None:
     assert "[CANDIDATE]" in dummy.prompt
     assert "확정 근거가 아닙니다" in dummy.prompt
     assert "임의로 수가코드, 지급비율, 약관 조항을 만들어 보완하지 마세요" in dummy.prompt
+    assert "입력 청구액(`claimed_amount`)에 대응시켜 계산하세요" in dummy.prompt

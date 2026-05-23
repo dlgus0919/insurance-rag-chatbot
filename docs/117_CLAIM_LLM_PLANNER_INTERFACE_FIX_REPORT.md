@@ -47,6 +47,30 @@ Evaluation Summary: 5/5 cases passed.
 330 passed, 3 warnings in 2.84s
 ```
 
+추가로 실제 로컬 SGLang `gpt-oss-20b`를 사용해 `LLMPlanner`가 계산 계획 JSON을 생성하고, 샌드박스가 Python 계산 코드를 실행하는 경로를 확인했다.
+
+검증 조건:
+
+- 청구 항목: 도수치료
+- 청구액: 150,000원
+- 약관 근거: 비급여 도수치료 통원 치료는 1회당 3만원과 보장대상 의료비의 30% 중 큰 금액을 공제
+- Planner: `LLMPlanner(model_id="gpt-oss-20b", provider="sglang")`
+
+결과:
+
+```text
+requires_review False
+claimed 150000
+payable 105000
+deductible 45000
+code claimed_amount = Decimal('150000')
+deductible = max(Decimal('30000'), claimed_amount * Decimal('0.3'))
+payable_amount = claimed_amount - deductible
+reasons []
+```
+
+즉, LLM이 약관 근거를 계산식으로 변환하고, AST 샌드박스가 정량 금액을 산출하는 기본 경로가 동작함을 확인했다.
+
 ## 4. 남은 작업
 
 - 실제 Streamlit에서 `LLM Planner`를 선택해 로컬 vLLM/SGLang 모델이 계산 계획 JSON을 안정적으로 반환하는지 수동 QA가 필요하다.

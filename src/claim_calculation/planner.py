@@ -82,8 +82,10 @@ class LLMPlanner:
 	[작성 규칙]
 	1. 반드시 아래 스키마에 맞는 JSON 데이터 하나만을 출력하세요. 마크다운 코드 블록(예: ```json 등)이나 기타 부연 설명 텍스트를 절대 포함하지 말고, 순수 JSON 텍스트 하나만 출력하세요.
 	2. 'formula_intent' 필드에는 보안 Python AST 샌드박스에서 Decimal 연산으로 바로 실행될 수 있는 유효한 Python 코드 조각을 작성해야 합니다.
-   - 반드시 'claimed_amount', 'deductible', 'payable_amount' 변수가 최종적으로 할당되도록 하세요.
-   - 내장 함수는 max, min, abs만 사용할 수 있고, 수치는 Decimal('값')으로 감싸야 합니다. (예: Decimal('150000') * Decimal('0.2'))
+	   - 반드시 'claimed_amount', 'deductible', 'payable_amount' 변수가 최종적으로 할당되도록 하세요.
+	   - 내장 함수는 max, min, abs만 사용할 수 있고, 수치는 Decimal('값')으로 감싸야 합니다. (예: Decimal('150000') * Decimal('0.2'))
+	   - 사용자가 입력한 청구액은 이 MVP 계산에서 해당 항목의 보장대상/청구 의료비로 사용합니다. 약관에 "보장대상 의료비", "청구금액", "비급여 의료비" 같은 표현이 나오면 별도 금액이 명시되지 않는 한 입력 청구액(`claimed_amount`)에 대응시켜 계산하세요.
+	   - 수량/횟수가 1보다 크면 항목별 청구액과 수량을 곱한 총액을 `claimed_amount`로 사용하세요.
 	   - 예시:
 	     claimed_amount = Decimal('150000')
 	     deductible = max(Decimal('30000'), claimed_amount * Decimal('0.2'))
