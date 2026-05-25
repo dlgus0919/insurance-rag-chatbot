@@ -1,6 +1,8 @@
 # Streamlit GraphRAG / Large Model Test Guide
 
-Date: 2026-05-22
+Date: 2026-05-26
+
+> 최신 팀원용 pull/run 절차는 `docs/121_TEAM_PULL_AND_STREAMLIT_RUN_GUIDE_DGX_SPARK.md`를 우선한다. 이 문서는 공용 관리자 repo에서 Streamlit과 대형 모델을 확인하는 운영용 요약 가이드다.
 
 ## Scope
 
@@ -16,20 +18,23 @@ The app uses local offline assets, a Streamlit frontend, GraphDB-assisted RAG, a
 
 ## Current Model Policy
 
-Large model slot, SGLang:
+Validated large model slots:
 
-- `gpt-oss-20b`: current validated default.
-- `gemma-4-26b-a4b-nvfp4`: staged validation candidate.
+- vLLM `nemotron-3-nano-30b-a3b-nvfp4`: current 신규 테스트 기본값.
+- SGLang `qwen3-30b-a3b-instruct-2507-fp8`: current 신규 비교 테스트 모델.
+- SGLang `gpt-oss-20b`: 기존 비교 기준 모델.
+- vLLM `gemma-4-26b-a4b-nvfp4`: 기존 비교 기준 모델.
 
 Small/local fallback, Ollama:
 
 - `exaone3.5:7.8b`
 
-Important current Gemma4 note:
+Important current model notes:
 
-- Gemma4 assets are present and SGLang can load the model after a local SGLang runtime patch.
-- However, first generation smoke currently returns repeated `<pad>` tokens, so Gemma4 should be treated as a runtime validation candidate, not as the production default.
-- Use `gpt-oss-20b` for normal functional testing.
+- Nemotron must be served via vLLM. Its SGLang path loads weights but is unstable at first chat completion.
+- Qwen must be served via SGLang.
+- Gemma4 should use vLLM, not SGLang, because the SGLang path previously produced repeated `<pad>` output.
+- Run only one large model at a time on DGX Spark unless explicitly coordinating GPU memory use.
 
 ## 1. SSH Into The Admin Workspace
 
@@ -50,30 +55,28 @@ git rev-parse --short HEAD
 Expected current commit at the time of this guide:
 
 ```text
-9d974eb
+Use `git rev-parse --short HEAD` after pulling `origin/master`.
 ```
 
-## 2. Verify SGLang Status
+## 2. Verify Model Endpoint Status
 
-Check the active SGLang model:
+Check active model endpoints:
 
 ```bash
-/srv/ai-ops/bin/check-sglang-local
+curl -fsS -H "Authorization: Bearer EMPTY" http://127.0.0.1:30001/v1/models || true
+curl -fsS -H "Authorization: Bearer EMPTY" http://127.0.0.1:30000/v1/models || true
 ```
 
-Expected for normal testing:
-
-```text
-/v1/models includes gpt-oss-20b
-```
-
-If needed, switch back to the validated default:
+Recommended switches:
 
 ```bash
-/srv/ai-ops/bin/switch-sglang-model gpt-oss-20b
+/srv/ai-ops/bin/switch-vllm-model nemotron-3-nano-30b-a3b-nvfp4
+/srv/ai-ops/bin/switch-sglang-model qwen3-30b-a3b-instruct-2507-fp8
 ```
 
-Model switching can take several minutes because the previous SGLang session is stopped and the selected model is loaded from local disk.
+Model switching can take several minutes because the previous model session is stopped and the selected model is loaded from local disk.
+
+Do not start vLLM and SGLang large models simultaneously unless there is a specific test reason and GPU memory has been checked.
 
 ## 3. Verify Runtime Assets
 
@@ -165,15 +168,17 @@ Use the admin/main repo process for final validation.
 
 On the login screen:
 
-1. Select `gpt-oss-20b` for normal testing.
+1. Select `vllm:nemotron-3-nano-30b-a3b-nvfp4` for current 신규 모델 testing.
+2. Select `sglang:qwen3-30b-a3b-instruct-2507-fp8` for Qwen comparison testing.
 2. Enter the app credentials.
 3. Click login.
 
 After login, the app verifies whether the selected SGLang model is active. If not, it calls:
 
-```bash
-/srv/ai-ops/bin/switch-sglang-model <selected-model>
-```
+The app can call the configured switch wrapper:
+
+- `/srv/ai-ops/bin/switch-vllm-model <selected-vllm-model>`
+- `/srv/ai-ops/bin/switch-sglang-model <selected-sglang-model>`
 
 Only allowlisted model names are accepted by the wrapper.
 
