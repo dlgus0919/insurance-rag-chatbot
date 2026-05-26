@@ -27,7 +27,7 @@ export async function initLoginPage({ onLogin } = {}) {
     }
 
     if (onLogin) {
-      const selectedModel = document.querySelector('input[name="llm-model"]:checked')?.value || 'gemma4';
+      const selectedModel = document.querySelector('input[name="llm-model"]:checked')?.value || 'ollama:exaone3.5:7.8b';
       localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, selectedModel);
 
       const originalText = loginButton.textContent;
@@ -67,7 +67,7 @@ function setupPasswordToggle() {
 }
 
 function restoreSelectedModel() {
-  const selectedModel = localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'gemma4';
+  const selectedModel = localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'ollama:exaone3.5:7.8b';
   const radio = document.querySelector(`input[name="llm-model"][value="${selectedModel}"]`);
   if (radio) radio.checked = true;
 }

@@ -709,7 +709,7 @@ async function exportChat(format) {
 }
 
 function getSelectedModel() {
-  return localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'gemma4';
+  return localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'ollama:exaone3.5:7.8b';
 }
 
 function getIndexMode() {

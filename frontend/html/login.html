@@ -60,10 +60,17 @@
         <label class="lp-field-label">AI 모델 선택</label>
         <div class="lp-model-group" id="model-select-group" style="display: flex; flex-direction: column; gap: 8px;">
           <label class="lp-model-option" style="display: block;">
-            <input type="radio" name="llm-model" value="gemma4" checked>
+            <input type="radio" name="llm-model" value="ollama:exaone3.5:7.8b" checked>
+            <span class="lp-model-card">
+              <span class="lp-model-name">EXAONE 3.5 (Ollama)</span>
+              <span class="lp-model-desc">저부하 로컬 모델 · 기본 테스트 권장</span>
+            </span>
+          </label>
+          <label class="lp-model-option" style="display: block;">
+            <input type="radio" name="llm-model" value="gemma4">
             <span class="lp-model-card">
               <span class="lp-model-name">Gemma 4 (vLLM)</span>
-              <span class="lp-model-desc">vLLM 초고속 추론 엔진 · 빠른 응답</span>
+              <span class="lp-model-desc">vLLM 초고속 추론 엔진 · 서버 기동 시 사용</span>
             </span>
           </label>
           <label class="lp-model-option" style="display: block;">

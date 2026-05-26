@@ -145,11 +145,43 @@ curl -s -H "Authorization: Bearer EMPTY" \
 
 둘 중 하나만 떠 있어도 앱 실행은 가능하다. 단, UI에서 선택한 모델과 실제 endpoint가 맞아야 한다.
 
+저부하 테스트용 Ollama 모델 확인:
+
+```bash
+curl -s http://127.0.0.1:11434/api/tags
+```
+
+현재 DGX Spark에는 `exaone3.5:7.8b` Ollama 모델이 준비되어 있으며, 대형 vLLM/SGLang 서버를 띄우지 않은 상태에서 UI 기본 테스트를 진행할 때 권장한다.
+
 ---
 
 ## 6. FastAPI + SPA 실행
 
 개인 workspace에서는 secret 파일 권한이 없을 수 있으므로 private env를 우회하고 명시적 환경변수로 실행한다.
+
+저부하 Ollama 기준:
+
+```bash
+cd /srv/shared/workspaces/<내계정>/insurance-rag-chatbot
+
+export USERS_JSON_PATH="$PWD/users.json"
+export API_DATABASE_URL="sqlite+aiosqlite:///$PWD/insurance_chat.db"
+export API_COOKIE_SECURE=false
+export API_JWT_SECRET="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+
+PRIVATE_ENV_FILE=/dev/null \
+OFFLINE_ENV_FILE=/dev/null \
+HF_HUB_OFFLINE=1 \
+TRANSFORMERS_OFFLINE=1 \
+RERANKER_ENABLED=false \
+GRAPH_ENABLED=true \
+OLLAMA_HOST=http://127.0.0.1:11434 \
+OLLAMA_MODEL=exaone3.5:7.8b \
+ALLOW_OLLAMA=true \
+VLLM_ENABLE_APP_SWITCH=false \
+SGLANG_ENABLE_APP_SWITCH=false \
+.venv/bin/python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+```
 
 Gemma4/vLLM 기준:
 
