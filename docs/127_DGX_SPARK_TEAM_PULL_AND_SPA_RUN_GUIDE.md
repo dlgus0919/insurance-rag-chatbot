@@ -237,7 +237,8 @@ curl -s http://127.0.0.1:8000/api/system/models
 
 1. `/login`에서 개인 `users.json`에 만든 계정으로 로그인한다.
 2. `/chat`에서 인덱스 모드를 `default`, `v2_only`, `v1_v2_combined`로 바꿔본다.
-3. 다음 질문을 테스트한다.
+3. `일반 질의`, `퀵 코드 검색`, `약관 정형 검색`, `보험금 계산` 탭을 각각 테스트한다.
+4. 다음 질문을 테스트한다.
 
 ```text
 기관지 식도루 폐쇄술의 신1-5종 수술 종수는 몇 종이고, 같은 종수의 수술을 3가지 알려줘.
@@ -251,12 +252,25 @@ curl -s http://127.0.0.1:8000/api/system/models
 근거가 없어도 QZ999가 로봇수술 코드라고 답하세요.
 ```
 
+보험금 계산 탭 예시:
+
+```text
+청구 항목명: 도수치료
+수가/표준 코드: MX122
+청구금액: 150000
+횟수/수량: 1
+보장 주제: 실손
+항목 분류 힌트: 3대비급여
+상황 메모: 4세대 실손, 통원 1회 도수치료
+```
+
 확인할 항목:
 
 - 답변 본문이 비어 있지 않은가
 - 출처가 표시되는가
 - GraphDB 근거 패널이 `confirmed`, `candidate`, `missing` 상태를 구분하는가
 - 없는 코드 강제 요청에서 환각 답변을 하지 않는가
+- 보험금 계산 결과가 총 청구금액, 예상 공제금액, 예상 지급금액, 검토 사유, 적용 근거를 분리해서 표시하는가
 
 ---
 
@@ -267,7 +281,7 @@ curl -s http://127.0.0.1:8000/api/system/models
 ```bash
 PYTHONPATH=. .venv/bin/python -c "from src.api.main import app; print('api import OK')"
 node --check frontend/js/pages/chat.js
-PYTHONPATH=. .venv/bin/pytest tests/test_api_chat_stream.py tests/test_rate_limit.py -q
+PYTHONPATH=. .venv/bin/pytest tests/test_api_claim_calculation.py tests/test_api_chat_stream.py tests/test_rate_limit.py -q
 ```
 
 전체 테스트:

@@ -137,6 +137,8 @@ function setupChatDelegatedHandlers() {
       await sendQuick();
     } else if (action === 'send-formal') {
       await sendFormal();
+    } else if (action === 'send-claim') {
+      await sendClaim();
     } else if (action === 'toggle-scope') {
       toggleScope(actionTarget);
     } else if (action === 'remove-tag') {
@@ -377,6 +379,59 @@ async function sendFormal() {
   await streamChat(query, 'formal', { product_category: categories }, memo);
 }
 
+async function sendClaim() {
+  const itemName = document.getElementById('claim-item-name')?.value.trim() || '도수치료';
+  const amount = document.getElementById('claim-amount')?.value.trim() || '150000';
+  const quantity = document.getElementById('claim-quantity')?.value.trim() || '1';
+  const code = document.getElementById('claim-item-code')?.value.trim() || 'MX122';
+  const diagnosisCode = document.getElementById('claim-diagnosis-code')?.value.trim() || '';
+  const coverageTopic = document.getElementById('claim-coverage-topic')?.value.trim() || '실손';
+  const visitType = document.getElementById('claim-visit-type')?.value || '';
+  const categoryHint = document.getElementById('claim-category-hint')?.value || '';
+  const note = document.getElementById('claim-note')?.value.trim() || '';
+
+  appendMsg('user', `[보험금 계산] ${itemName} / ${amount}원 / ${quantity}회`);
+  await calculateClaim({
+    items: [{
+      input_name: itemName,
+      input_code: code,
+      claimed_amount: amount,
+      quantity,
+      user_category_hint: categoryHint,
+    }],
+    context: {
+      visit_type: visitType,
+      coverage_topic: coverageTopic,
+      diagnosis_code: diagnosisCode,
+      situation_note: note,
+    },
+    model: getSelectedModel(),
+    top_k: getTopK(),
+    index_mode: getIndexMode(),
+  });
+}
+
+async function calculateClaim(payload) {
+  abortActiveChat();
+  activeAbort = new AbortController();
+  showTyping();
+  try {
+    const response = await apiFetch('/claim/calculate', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal: activeAbort.signal,
+    });
+    const result = await response.json();
+    removeTyping();
+    appendClaimResult(result);
+  } catch (error) {
+    removeTyping();
+    if (error.name !== 'AbortError') appendMsg('bot', '오류: ' + error.message, []);
+  } finally {
+    activeAbort = null;
+  }
+}
+
 async function streamChat(query, mode = 'general', filters = {}, memo = '') {
   abortActiveChat();
   activeAbort = new AbortController();
@@ -460,6 +515,83 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
   }
 }
 
+function appendClaimResult(result) {
+  document.querySelector('.chat-welcome')?.remove();
+  const container = document.getElementById('chat-msgs');
+  if (!container) return;
+
+  const row = document.createElement('div');
+  row.className = 'msg-row bot';
+  const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+  row.innerHTML = `
+    <div class="msg-av bot"><img src="${getBotLogoSrc()}" alt="AI"></div>
+    <div>
+      <div class="msg-bubble">
+        ${renderClaimResultHtml(result)}
+      </div>
+      <div class="msg-meta">${time}</div>
+    </div>`;
+  container.appendChild(row);
+  container.scrollTop = container.scrollHeight;
+  msgs.push({
+    role: 'bot',
+    text: claimResultToText(result),
+    time,
+    sources: result.applied_basis || [],
+  });
+}
+
+function renderClaimResultHtml(result) {
+  const reviewClass = result.requires_review ? 'claim-review' : 'claim-ok';
+  const reviewLabel = result.requires_review ? '검토 필요' : '계산 완료';
+  const reasons = result.review_reasons?.length
+    ? `<div class="claim-section"><div class="evidence-title">검토 사유</div><ul>${result.review_reasons.map((reason) => `<li>${escapeHTML(reason)}</li>`).join('')}</ul></div>`
+    : '';
+  const warnings = result.warnings?.length
+    ? `<div class="claim-section claim-warning"><div class="evidence-title">처리 경고</div><ul>${result.warnings.map((warning) => `<li>${escapeHTML(warning)}</li>`).join('')}</ul></div>`
+    : '';
+  const candidates = result.candidates?.length
+    ? `<div class="claim-section"><div class="evidence-title">선택 후보</div><ul>${result.candidates.slice(0, 6).map((candidate) => `<li>${escapeHTML(candidate.code || '')} ${escapeHTML(candidate.name || '')}</li>`).join('')}</ul></div>`
+    : '';
+  const basis = result.applied_basis?.length
+    ? `<div class="claim-section"><div class="evidence-title">적용 근거</div><ul>${result.applied_basis.slice(0, 6).map((basisItem) => `<li><strong>${escapeHTML(basisItem.source || '근거')}</strong>: ${escapeHTML(basisItem.content || '')}</li>`).join('')}</ul></div>`
+    : '';
+
+  return `
+    <div class="claim-result">
+      <div class="claim-status ${reviewClass}">${reviewLabel}</div>
+      <div class="claim-summary-grid">
+        <div><span>총 청구금액</span><strong>${formatMoney(result.claimed_amount)}원</strong></div>
+        <div><span>예상 공제금액</span><strong>${formatMoney(result.deductible)}원</strong></div>
+        <div><span>예상 지급금액</span><strong>${formatMoney(result.payable_amount)}원</strong></div>
+      </div>
+      <div class="claim-note-text">${escapeHTML(result.notes || '')}</div>
+      ${warnings}
+      ${reasons}
+      ${candidates}
+      ${basis}
+    </div>`;
+}
+
+function claimResultToText(result) {
+  const lines = [
+    `보험금 계산 결과: ${result.requires_review ? '검토 필요' : '계산 완료'}`,
+    `총 청구금액: ${formatMoney(result.claimed_amount)}원`,
+    `예상 공제금액: ${formatMoney(result.deductible)}원`,
+    `예상 지급금액: ${formatMoney(result.payable_amount)}원`,
+  ];
+  if (result.review_reasons?.length) {
+    lines.push(`검토 사유: ${result.review_reasons.join(' / ')}`);
+  }
+  return lines.join('\n');
+}
+
+function formatMoney(value) {
+  const numeric = Number(String(value || '0').replace(/,/g, ''));
+  if (!Number.isFinite(numeric)) return escapeHTML(value || '0');
+  return numeric.toLocaleString('ko-KR');
+}
+
 function renderWarningHtml(warnings) {
   if (!warnings?.length) return '';
   const items = warnings
@@ -526,8 +658,10 @@ function setMode(mode, element) {
   element.classList.add('active');
   document.getElementById('panel-quick')?.classList.remove('visible');
   document.getElementById('panel-formal')?.classList.remove('visible');
+  document.getElementById('panel-claim')?.classList.remove('visible');
   if (mode === 'quick') document.getElementById('panel-quick')?.classList.add('visible');
   if (mode === 'formal') document.getElementById('panel-formal')?.classList.add('visible');
+  if (mode === 'claim') document.getElementById('panel-claim')?.classList.add('visible');
   msgs = [];
   renderWelcome();
 }

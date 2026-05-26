@@ -81,6 +81,7 @@
       <button class="mode-tab active" type="button" data-mode="general">일반 질의</button>
       <button class="mode-tab" type="button" data-mode="quick">퀵 코드 검색</button>
       <button class="mode-tab" type="button" data-mode="formal">약관 정형 검색</button>
+      <button class="mode-tab" type="button" data-mode="claim">보험금 계산</button>
     </div>
 
     <div class="ocr-index-bar">
@@ -149,6 +150,57 @@
           ></textarea>
         </div>
         <button class="btn-sm" type="button" data-action="send-formal">검색</button>
+      </div>
+    </div>
+
+    <div class="sub-panel" id="panel-claim">
+      <div class="claim-grid">
+        <div class="p-field">
+          <label class="p-label">청구 항목명</label>
+          <input class="p-input" id="claim-item-name" type="text" placeholder="예: 도수치료"/>
+        </div>
+        <div class="p-field">
+          <label class="p-label">수가/표준 코드 <span style="color:var(--gray);font-weight:400;">(옵션)</span></label>
+          <input class="p-input" id="claim-item-code" type="text" placeholder="예: MX122 / 51040"/>
+        </div>
+        <div class="p-field">
+          <label class="p-label">청구금액</label>
+          <input class="p-input" id="claim-amount" type="text" placeholder="예: 150000"/>
+        </div>
+        <div class="p-field">
+          <label class="p-label">횟수/수량</label>
+          <input class="p-input" id="claim-quantity" type="text" value="1"/>
+        </div>
+        <div class="p-field">
+          <label class="p-label">진단코드</label>
+          <input class="p-input" id="claim-diagnosis-code" type="text" placeholder="예: M54.5"/>
+        </div>
+        <div class="p-field">
+          <label class="p-label">보장 주제</label>
+          <input class="p-input" id="claim-coverage-topic" type="text" placeholder="예: 실손, 3대비급여"/>
+        </div>
+        <div class="p-field">
+          <label class="p-label">방문 구분</label>
+          <select class="p-input" id="claim-visit-type">
+            <option value="">미지정</option>
+            <option value="outpatient">통원</option>
+            <option value="hospitalization">입원</option>
+          </select>
+        </div>
+        <div class="p-field">
+          <label class="p-label">항목 분류 힌트</label>
+          <select class="p-input" id="claim-category-hint">
+            <option value="">모름</option>
+            <option value="급여">급여</option>
+            <option value="비급여">비급여</option>
+            <option value="3대비급여">3대비급여</option>
+          </select>
+        </div>
+        <div class="p-field claim-note">
+          <label class="p-label">상황 메모</label>
+          <textarea class="p-input" id="claim-note" rows="2" placeholder="예: 4세대 실손, 통원 1회 도수치료, 영수증 금액 기준"></textarea>
+        </div>
+        <button class="btn-sm" type="button" data-action="send-claim">계산</button>
       </div>
     </div>
 

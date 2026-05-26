@@ -21,6 +21,7 @@ export const API_CONFIG = {
     ME: '/auth/me',
     CHAT: '/chat/stream',
     CHAT_STREAM: '/chat/stream',
+    CLAIM_CALCULATE: '/claim/calculate',
     CHAT_SESSIONS: '/sessions',
     CHAT_SESSIONS_CREATE: '/sessions',
     CHAT_SESSIONS_DELETE: '/sessions/{id}',

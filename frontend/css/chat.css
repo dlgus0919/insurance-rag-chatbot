@@ -204,6 +204,42 @@
   }
   .btn-sm:hover{background:var(--primary-hover);}
 
+  .claim-grid{
+    display:grid;
+    grid-template-columns:repeat(4,minmax(140px,1fr));
+    gap:12px;
+    align-items:end;
+  }
+  .claim-note{grid-column:1 / span 3;}
+  .claim-result{min-width:min(560px,72vw);}
+  .claim-status{
+    display:inline-flex;align-items:center;
+    padding:3px 9px;border-radius:999px;
+    font-size:11px;font-weight:800;margin-bottom:9px;
+  }
+  .claim-ok{background:#e9f8f0;color:#0a7c45;}
+  .claim-review{background:#fff2d9;color:#9a5b00;}
+  .claim-summary-grid{
+    display:grid;grid-template-columns:repeat(3,minmax(110px,1fr));
+    gap:8px;margin-bottom:9px;
+  }
+  .claim-summary-grid div{
+    background:var(--soft-bg);border:1px solid var(--border);
+    border-radius:8px;padding:8px 10px;
+  }
+  .claim-summary-grid span{
+    display:block;font-size:10px;color:var(--gray);font-weight:700;margin-bottom:3px;
+  }
+  .claim-summary-grid strong{font-size:14px;color:var(--navy);}
+  .claim-note-text{font-size:12px;color:var(--gray);margin:6px 0 8px;}
+  .claim-section{
+    margin-top:8px;padding:8px 10px;border:1px solid var(--border);
+    border-radius:8px;background:var(--soft-bg);font-size:11px;color:var(--navy);
+  }
+  .claim-section ul{margin:0;padding-left:15px;}
+  .claim-section li{margin:3px 0;line-height:1.5;}
+  .claim-warning{border-color:#f3c56b;background:#fff8e7;color:#7a4b00;}
+
   /* Messages */
   .chat-messages{
     flex:1;overflow-y:auto;padding:24px;
@@ -320,3 +356,9 @@
   .send-btn:active{transform:scale(0.94);}
   #chat-input:disabled{opacity:0.6;cursor:not-allowed;}
   .send-btn:disabled{opacity:0.5;cursor:not-allowed;transform:none;box-shadow:none;}
+
+  @media (max-width: 920px){
+    .claim-grid{grid-template-columns:repeat(2,minmax(140px,1fr));}
+    .claim-note{grid-column:1 / -1;}
+    .claim-summary-grid{grid-template-columns:1fr;}
+  }

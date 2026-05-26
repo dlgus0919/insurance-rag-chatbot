@@ -16,7 +16,7 @@ from src.api.db import init_db
 from src.api.exceptions import AppException, error_response
 from src.api.middleware import request_id_middleware
 from src.api.rate_limit import RateLimitExceeded, limiter
-from src.api.routes import admin, auth, chat, sessions, system
+from src.api.routes import admin, auth, chat, claim, sessions, system
 from src.api.settings import get_api_settings
 
 logger = logging.getLogger(__name__)
@@ -64,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(system.router, prefix="/api")
     app.include_router(auth.router, prefix="/api")
     app.include_router(chat.router, prefix="/api")
+    app.include_router(claim.router, prefix="/api")
     app.include_router(sessions.router, prefix="/api")
     app.include_router(admin.router, prefix="/api")
 
