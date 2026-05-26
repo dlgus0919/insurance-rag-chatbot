@@ -91,8 +91,10 @@ PYTHONPATH=. .venv/bin/pytest -q
 
 ```text
 8 passed, 1 warning
-408 passed, 3 warnings
+409 passed, 3 warnings
 ```
+
+실제 SPA 런타임 검증 중 `/api/system/status`가 구버전 `config.get_ingest_paths()`에 의존해 500을 반환하는 결함을 발견하여, 최신 `src.retrieval.index_mode.resolve_index_paths()` 기반으로 수정했다. 회귀 테스트 `tests/test_api_system_status.py`를 추가했고 전체 테스트는 `409 passed`로 재검증했다.
 
 ---
 

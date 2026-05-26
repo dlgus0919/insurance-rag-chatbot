@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from fastapi import APIRouter
 
 from src import config
 from src.api.schemas.system import HealthResponse, ModelInfo, ModelListResponse, SystemStatusResponse
 from src.llm.factory import format_model_label, list_available_models
+from src.retrieval.index_mode import resolve_index_paths
 
 router = APIRouter(tags=["system"])
 
@@ -84,17 +88,22 @@ async def models() -> ModelListResponse:
 async def status() -> SystemStatusResponse:
     """Report basic backend asset availability."""
 
+    default_bm25, default_chroma = resolve_index_paths("default")
+    v2_bm25, v2_chroma = resolve_index_paths("v2_only")
+    combined_bm25, combined_chroma = resolve_index_paths("v1_v2_combined")
+    users_path = Path(os.getenv("USERS_JSON_PATH", str(config.ROOT_DIR / "users.json")))
+
     paths = {
-        "chunks": config.get_ingest_paths(config.DEFAULT_OCR_VERSION)["chunks_path"].exists(),
-        "bm25": config.get_ingest_paths(config.DEFAULT_OCR_VERSION)["bm25_path"].exists(),
-        "chroma": config.get_ingest_paths(config.DEFAULT_OCR_VERSION)["chroma_dir"].exists(),
-        "bm25_v2_only": config.get_ingest_paths("v2_manual")["bm25_path"].exists(),
-        "chroma_v2_only": config.get_ingest_paths("v2_manual")["chroma_dir"].exists(),
-        "bm25_v1_v2_combined": config.get_ingest_paths("v1_v2_combined")["bm25_path"].exists(),
-        "chroma_v1_v2_combined": config.get_ingest_paths("v1_v2_combined")["chroma_dir"].exists(),
+        "chunks": config.CHUNKS_PATH.exists(),
+        "bm25": default_bm25.exists(),
+        "chroma": default_chroma.exists(),
+        "bm25_v2_only": v2_bm25.exists(),
+        "chroma_v2_only": v2_chroma.exists(),
+        "bm25_v1_v2_combined": combined_bm25.exists(),
+        "chroma_v1_v2_combined": combined_chroma.exists(),
         "graph": config.GRAPH_INDEX_PATH.exists(),
-        "relational": config.RELATIONAL_INDEX_DIR.exists(),
-        "users": config.ROOT_DIR.joinpath("users.json").exists(),
+        "relational": config.STANDARD_CODES_DB_PATH.exists(),
+        "users": users_path.exists(),
     }
     overall = "ok" if any(paths.values()) else "degraded"
     return SystemStatusResponse(status=overall, paths=paths)
