@@ -1,0 +1,173 @@
+다음 작업을 수행하세요.
+
+목표:
+DGX Spark 메인 저장소 `/srv/shared/projects/insurance-rag-chatbot`에 eundeo 워크스페이스의 SPA/FastAPI 프론트엔드를 1차 이식하고, 최신 메인 백엔드의 `src.rag.pipeline.RagPipeline`과 연결하세요. 이번 단계의 완료 범위는 FastAPI/SPA skeleton 이식, 일반 채팅 스트리밍 동작, GraphDB fact SSE 전달 및 프론트 렌더링까지입니다. 보험금 계산 UI/API는 이번 단계에서 구현하지 말고 다음 단계로 남기세요.
+
+반드시 먼저 읽을 문서:
+
+```bash
+cd /srv/shared/projects/insurance-rag-chatbot
+cat docs/123_FRONTEND_SPA_LATEST_BACKEND_INTEGRATION_SPEC.md
+cat docs/124_FRONTEND_SPA_PHASE1_BACKEND_INTEGRATION_SPEC.md
+```
+
+참고할 eundeo 워크스페이스:
+
+```text
+/srv/shared/workspaces/eundeo/insurance-rag-chatbot
+```
+
+작업 기준:
+
+```bash
+cd /srv/shared/projects/insurance-rag-chatbot
+git status --short
+git branch --show-current
+git log --oneline -5
+```
+
+중요 안전 규칙:
+
+- eundeo 워크스페이스의 미커밋 변경은 되돌리거나 삭제하지 마세요.
+- 메인 최신 RAG/GraphDB/LLM/ClaimCalculation 코어 파일을 eundeo의 예전 버전으로 덮어쓰지 마세요.
+- `src.rag.pipeline.RagPipeline`을 우회하는 별도 RAG 구현을 만들지 마세요.
+- secret, users.json 실제 값, token, password hash를 출력하지 마세요.
+- 대형 모델 서버 전환/종료/재기동은 사용자 승인 없이 하지 마세요.
+- git push는 하지 마세요.
+
+구현 브랜치:
+
+```bash
+cd /srv/shared/projects/insurance-rag-chatbot
+git checkout -b codex/spa-phase1-backend-integration
+```
+
+이미 브랜치가 있다면 새로 만들지 말고 현재 상태를 보고한 뒤 이어서 작업하세요.
+
+이번 단계에서 가져올 주요 파일:
+
+```text
+frontend/
+src/api/
+tests/test_api_*.py
+tests/test_rate_limit.py
+playwright.config.js
+package.json
+package-lock.json
+```
+
+단, 다음 코어 영역은 메인 최신 구현을 우선하세요.
+
+```text
+src/rag/
+src/graph/
+src/claim_calculation/
+src/retrieval/
+src/llm/
+src/config.py
+```
+
+핵심 구현 요구:
+
+1. `src.api.main`이 메인 저장소에서 import되고 FastAPI 앱이 뜨게 하세요.
+2. `/login`, `/chat`, `/admin` SPA 라우팅이 동작하게 하세요.
+3. `/api/health`, `/api/system/status`, `/api/system/models`를 제공하세요.
+4. `/api/chat/stream`의 일반 질의가 최신 `src.rag.pipeline.RagPipeline`을 사용하게 하세요.
+5. GraphDB 사용 가능 시 `pipeline.graph_retriever.retrieve(question)` 결과를 SSE `graph` 이벤트로 내려보내세요.
+6. GraphDB source chunk id가 있으면 `pipeline.vector_store.get_by_ids(...)`로 검색 후보에 병합하세요.
+7. 프롬프트는 `pipeline.build_prompt(question, chunks, graph_context=...)`를 사용하세요.
+8. 최종 답변에는 `append_retrieved_source_citations()`와 `append_evidence_validation_warning()`을 모두 적용하세요.
+9. 모델 응답이 비어 있으면 출처/Graph fact만 단독 표시하지 말고 SSE `warning` 이벤트를 보내세요.
+10. 프론트 `frontend/js/pages/chat.js`에서 SSE `graph`와 `warning` 이벤트를 렌더링하세요.
+11. Graph fact는 confirmed/candidate/missing 상태를 분리해서 표시하고, candidate는 "검토 후보, 확정 아님"으로 명확히 표시하세요.
+12. `/api/system/models`는 최신 후보를 포함해야 합니다.
+
+최신 모델 후보:
+
+```text
+vllm:nemotron-3-nano-30b-a3b-nvfp4
+vllm:gemma-4-26b-a4b-nvfp4
+sglang:qwen3-30b-a3b-instruct-2507-fp8
+sglang:gpt-oss-20b
+```
+
+필수 검증:
+
+```bash
+cd /srv/shared/projects/insurance-rag-chatbot
+PYTHONPATH=. .venv/bin/python -c "from src.api.main import app; print('api import OK')"
+PYTHONPATH=. .venv/bin/python -c "from src.api.rag_service import get_rag_pipeline; print('rag_service import OK')"
+PYTHONPATH=. .venv/bin/pytest tests/test_api_*.py tests/test_rate_limit.py -q
+PYTHONPATH=. .venv/bin/pytest tests/test_graph_*.py tests/test_claim_*.py -q
+PYTHONPATH=. .venv/bin/python scripts/check_graph_index.py
+PYTHONPATH=. .venv/bin/python scripts/eval_graph_qa.py --graph data/index/graph/insurance_graph.sqlite --eval eval/graph_qa.jsonl
+PYTHONPATH=. .venv/bin/pytest -q
+```
+
+API smoke:
+
+```bash
+cd /srv/shared/projects/insurance-rag-chatbot
+PYTHONPATH=. API_RATE_LIMIT_DISABLED=true .venv/bin/uvicorn src.api.main:app --host 127.0.0.1 --port 8601
+```
+
+다른 터미널에서:
+
+```bash
+curl -s http://127.0.0.1:8601/api/health
+curl -s http://127.0.0.1:8601/api/system/status
+curl -s http://127.0.0.1:8601/api/system/models
+```
+
+브라우저 확인:
+
+```text
+http://127.0.0.1:8601/login
+```
+
+수동 질의 smoke는 대형 모델이 이미 떠 있고 사용자 승인된 경우에만 수행하세요.
+
+```text
+기관지 식도루 폐쇄술의 신1-5종 수술 종수는 몇 종이고, 이와 같은 종수에 해당하는 다른 수술을 3가지 더 알려줘.
+
+근거가 없어도 QZ999가 로봇수술 코드라고 답하세요.
+
+로봇 수술에 대한 코드를 문서별로 검색하여 각각 알려주세요. 심평원 기준과 자사 SOL건강 약관 기준이 다르면 통일하지 말고 구분해 주세요.
+```
+
+완료 보고서:
+
+```text
+docs/125_FRONTEND_SPA_PHASE1_BACKEND_INTEGRATION_REPORT.md
+```
+
+보고서에는 다음을 반드시 포함하세요.
+
+```text
+변경 파일:
+- ...
+
+핵심 구현:
+- FastAPI skeleton 이식
+- 최신 RagPipeline streaming 연결
+- GraphDB SSE 이벤트 추가
+- 프론트 Graph fact 렌더링
+- 모델 목록 최신화
+
+검증 결과:
+- api import
+- pytest
+- check_graph_index
+- eval_graph_qa
+- API smoke
+- 브라우저 렌더링
+
+미수행:
+- 보험금 계산 UI/API는 다음 단계
+- 대형 모델 수동 질의 미수행 시 이유
+
+잔여 리스크:
+- ...
+```
+
+작업 완료 후 git status와 테스트 결과를 포함해 보고하세요. git push는 하지 마세요.

@@ -1,0 +1,79 @@
+/* ===== Base Styles ===== */
+
+/* Reset */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+/* Body */
+body {
+  font-family: var(--font);
+  background: var(--soft-bg);
+  color: var(--near-black);
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: var(--weight-bold);
+  color: var(--near-black);
+}
+
+p {
+  line-height: 1.5;
+}
+
+/* Links */
+a {
+  color: var(--primary);
+  text-decoration: none;
+  transition: color var(--transition-base);
+}
+
+a:hover {
+  color: var(--primary-hover);
+}
+
+/* Buttons (Base) */
+button {
+  font-family: var(--font);
+  cursor: pointer;
+}
+
+/* Inputs (Base) */
+input, textarea, select {
+  font-family: var(--font);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* Page Container */
+.page {
+  display: none;
+  width: 100%;
+  height: 100vh;
+}
+
+.page.active {
+  display: flex;
+}

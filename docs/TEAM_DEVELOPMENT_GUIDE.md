@@ -21,6 +21,7 @@ Tailscale IP: 100.88.5.57
 관련 상세 문서:
 
 - [DGX_SPARK_RUNBOOK.md](./DGX_SPARK_RUNBOOK.md) — 운영 환경 상세
+- [127_DGX_SPARK_TEAM_PULL_AND_SPA_RUN_GUIDE.md](./127_DGX_SPARK_TEAM_PULL_AND_SPA_RUN_GUIDE.md) — 팀원이 GitHub `master` pull 후 개인 workspace에서 FastAPI + SPA 버전을 실행하는 절차
 - [AI_REVIEWER_GUIDE.md](./AI_REVIEWER_GUIDE.md) — Claude 리뷰어 역할
 - [PERSONAL_AGENT_WORKFLOW.md](./PERSONAL_AGENT_WORKFLOW.md) — 팀원 개인 에이전트 규칙
 - [DISCORD_HARNESS_RUNBOOK.md](./DISCORD_HARNESS_RUNBOOK.md) — Discord Bot 상세

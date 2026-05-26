@@ -1,0 +1,89 @@
+/* ===== CSS 변수 정의 ===== */
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700;900&display=swap');
+
+:root {
+  /* 색상 팔레트 */
+  --primary: #0046FF;
+  --primary-hover: #1A5CFF;
+  --primary-light: #DCE8FF;
+  --navy: #071B3B;
+  --soft-bg: #EEF3FF;
+  --white: #FFFFFF;
+  --gray: #6B7280;
+  --near-black: #1A1A2E;
+  --border: #BDD0FF;
+  --medium-blue: #4878F0;
+  --row-alt: #F0F5FF;
+
+  /* 투명도 조정 색상 */
+  --navy-transparent: rgba(7, 27, 59, 0.5);
+  --white-transparent-light: rgba(255, 255, 255, 0.06);
+  --white-transparent-lighter: rgba(255, 255, 255, 0.10);
+  --white-transparent-semi: rgba(255, 255, 255, 0.48);
+  --white-transparent-focus: rgba(0, 70, 255, 0.09);
+  --blue-shadow-light: rgba(0, 70, 255, 0.22);
+  --blue-shadow-dark: rgba(0, 70, 255, 0.32);
+  --black-transparent-light: rgba(0, 0, 0, 0.04);
+  --black-transparent-medium: rgba(0, 0, 0, 0.06);
+  --black-transparent-dark: rgba(0, 0, 0, 0.07);
+
+  /* 폰트 */
+  --font: 'Noto Sans KR', sans-serif;
+  --font-size-xs: 10px;
+  --font-size-sm: 11px;
+  --font-size-base: 12px;
+  --font-size-md: 13px;
+  --font-size-lg: 14px;
+  --font-size-xl: 15px;
+  --font-size-2xl: 16px;
+  --font-size-3xl: 22px;
+  --font-size-5xl: 56px;
+
+  /* 폰트 가중치 */
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 700;
+  --weight-bold: 900;
+
+  /* 레이아웃 */
+  --sidebar-width: 268px;
+  --sidebar-w: var(--sidebar-width);
+  --border-radius-sm: 5px;
+  --border-radius-md: 8px;
+  --border-radius-lg: 12px;
+  --border-radius-xl: 24px;
+
+  /* 간격 */
+  --spacing-xs: 2px;
+  --spacing-sm: 4px;
+  --spacing-md: 8px;
+  --spacing-lg: 12px;
+  --spacing-xl: 16px;
+  --spacing-2xl: 18px;
+  --spacing-3xl: 24px;
+  --spacing-4xl: 32px;
+  --spacing-5xl: 40px;
+  --spacing-6xl: 48px;
+
+  /* 그림자 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.07);
+  --shadow-blue-sm: 0 2px 8px rgba(0, 70, 255, 0.22), 0 1px 2px rgba(0, 70, 255, 0.15);
+  --shadow-blue-md: 0 4px 16px rgba(0, 70, 255, 0.32);
+
+  /* 전환 */
+  --transition-fast: 0.1s;
+  --transition-base: 0.15s;
+  --transition-md: 0.18s;
+  --transition-lg: 0.2s;
+  --transition-xl: 0.45s;
+
+  /* 입력 필드 */
+  --input-border-color: #D9E3FF;
+  --input-bg-color: #FAFBFF;
+  --input-focus-border-color: #4D91FF;
+  --input-focus-bg-color: #FFFFFF;
+  --input-placeholder-color: #B8C4DB;
+  --input-icon-color: #B0BAD0;
+}

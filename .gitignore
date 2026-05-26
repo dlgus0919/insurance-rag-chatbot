@@ -5,6 +5,8 @@ __pycache__/
 .env
 .venv/
 venv/
+node_modules/
+frontend/node_modules/
 logs/
 users.json
 users.json.tmp
@@ -74,6 +76,8 @@ data/index/relational/*.sqlite
 # Python / local env
 .venv/
 venv/
+node_modules/
+frontend/node_modules/
 __pycache__/
 *.py[cod]
 .pytest_cache/

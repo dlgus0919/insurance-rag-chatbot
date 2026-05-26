@@ -85,7 +85,7 @@ def main(argv: list[str] | None = None) -> int:
 
     add_parser = subparsers.add_parser("add")
     add_parser.add_argument("username")
-    add_parser.add_argument("role", choices=[user_store.ROLE_EMPLOYEE, user_store.ROLE_ADMIN])
+    add_parser.add_argument("role", choices=[user_store.ROLE_EMPLOYEE, user_store.ROLE_ADMIN, user_store.ROLE_VIEWER])
 
     reset_parser = subparsers.add_parser("reset")
     reset_parser.add_argument("username")

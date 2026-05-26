@@ -1,0 +1,13 @@
+{
+  "name": "insurance-chatbot-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "esbuild js/app.js --bundle --minify --outfile=dist/app.min.js --format=esm",
+    "build:dev": "esbuild js/app.js --bundle --sourcemap --outfile=dist/app.dev.js --format=esm",
+    "watch": "esbuild js/app.js --bundle --sourcemap --outfile=dist/app.dev.js --format=esm --watch"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  }
+}

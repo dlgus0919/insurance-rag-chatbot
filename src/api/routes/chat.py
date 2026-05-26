@@ -1,0 +1,261 @@
+"""RAG-backed chat streaming routes."""
+
+from __future__ import annotations
+
+import asyncio
+import inspect
+import json
+import time
+
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from src import config
+from src.api.db import get_db
+from src.api.deps import log_audit_event, require_permission
+from src.api.exceptions import SessionNotFoundException
+from src.api.models import ChatMessage, ChatSession
+from src.api.rate_limit import limiter
+from src.api.rag_service import (
+    SYSTEM_PROMPT,
+    finalize_answer_for_question,
+    get_rag_pipeline,
+    prepare_formal_context,
+    prepare_quickcode_context,
+    prepare_retrieved_context,
+)
+from src.api.schemas.chat import ChatRequest
+from src.auth.users import User
+
+router = APIRouter(prefix="/chat", tags=["chat"])
+
+MODEL_ALIAS = {
+    "gemma4": f"vllm:{config.VLLM_DEFAULT_MODEL}",
+    "gpt-oss": f"sglang:{config.SGLANG_DEFAULT_MODEL}",
+}
+
+
+@router.post("/stream")
+@limiter.limit("20/minute")
+async def chat_stream(
+    chat_request: ChatRequest,
+    request: Request = None,
+    user: User = Depends(require_permission("chat.stream")),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Stream a real RAG answer and persist the completed turn."""
+
+    chat_session = await _ensure_session(db, user.username, chat_request.session_id, chat_request.query)
+    history = await _load_history(db, chat_session.id)
+
+    async def event_generator():
+        llm_stream = None
+        chunks = []
+        sources: list[dict] = []
+        graph_payload = None
+        warnings: list[dict] = []
+        deterministic_answer: str | None = None
+        tokens: list[str] = []
+        selected_model = _select_model(chat_request)
+        started = time.perf_counter()
+        try:
+            yield _sse("status", "searching")
+            pipeline = _get_pipeline(selected_model, chat_request.top_k, chat_request.index_mode)
+            system_prompt = SYSTEM_PROMPT
+            doc_filter = None
+            if chat_request.mode == "quickcode":
+                chunks, sources, prompt, system_prompt = await prepare_quickcode_context(chat_request.query)
+            elif chat_request.mode == "formal":
+                chunks, sources, prompt, doc_filter = await prepare_formal_context(
+                    pipeline,
+                    chat_request.query,
+                    chat_request.top_k,
+                    history,
+                    chat_request.filters,
+                    chat_request.memo,
+                )
+            else:
+                chunks, sources, prompt, graph_payload, warnings, deterministic_answer = await prepare_retrieved_context(
+                    pipeline,
+                    chat_request.query,
+                    chat_request.top_k,
+                    history,
+                )
+            yield _sse("sources", sources)
+            if graph_payload is not None:
+                yield _sse("graph", graph_payload)
+            for warning in warnings:
+                yield _sse("warning", warning)
+
+            if deterministic_answer is not None:
+                for token in _chunk_text(deterministic_answer):
+                    tokens.append(token)
+                    yield _sse("token", {"t": token})
+                    await asyncio.sleep(0)
+            else:
+                llm_stream = pipeline.llm.generate_stream(prompt, system=system_prompt, temperature=chat_request.temperature)
+                for token in llm_stream:
+                    tokens.append(token)
+                    yield _sse("token", {"t": token})
+                    await asyncio.sleep(0)
+
+            raw_answer = "".join(tokens).strip()
+            if not raw_answer:
+                empty_warning = {
+                    "code": "EMPTY_LLM_OUTPUT",
+                    "message": "모델 응답 본문이 비어 있어 답변을 생성하지 못했습니다.",
+                }
+                yield _sse("warning", empty_warning)
+                answer = "모델 응답 본문이 비어 있어 답변을 생성하지 못했습니다. 검색 근거를 다시 확인해 주세요."
+            else:
+                answer = finalize_answer_for_question(chat_request.query, raw_answer, chunks)
+            yield _sse("final", {"answer": answer})
+            yield _sse("done", {"session_id": chat_session.id, "answer": answer})
+            await _persist_turn(db, chat_session.id, chat_request.query, answer, sources)
+            await log_audit_event(
+                db,
+                "CHAT_QUERY",
+                user_id=user.username,
+                ip_address=_client_ip(request),
+                detail={
+                    "model": selected_model,
+                    "mode": chat_request.mode,
+                    "top_k": chat_request.top_k,
+                    "temperature": chat_request.temperature,
+                    "index_mode": chat_request.index_mode,
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "session_id": chat_session.id,
+                    "source_count": len(sources),
+                    "doc_filter": doc_filter,
+                    "request_id": getattr(getattr(request, "state", None), "request_id", None),
+                },
+            )
+        except asyncio.CancelledError:
+            await _close_stream(llm_stream)
+            raise
+        except Exception as exc:
+            await _close_stream(llm_stream)
+            yield _sse("error", {"code": "CHAT_STREAM_FAILED", "message": str(exc)})
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+
+@router.post("/quickcode")
+@limiter.limit("50/minute")
+async def chat_quickcode(
+    chat_request: ChatRequest,
+    request: Request = None,
+    user: User = Depends(require_permission("chat.stream")),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Stream a quick code search response."""
+
+    return await chat_stream(chat_request.copy(update={"mode": "quickcode"}), request, user, db)
+
+
+@router.post("/formal")
+@limiter.limit("30/minute")
+async def chat_formal(
+    chat_request: ChatRequest,
+    request: Request = None,
+    user: User = Depends(require_permission("chat.stream")),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Stream a formal policy-filtered response."""
+
+    return await chat_stream(chat_request.copy(update={"mode": "formal"}), request, user, db)
+
+
+def _select_model(request: ChatRequest) -> str:
+    if request.model:
+        return MODEL_ALIAS.get(request.model, request.model)
+    if request.provider == "openai":
+        return config.OPENAI_DEFAULT_MODEL
+    return config.OLLAMA_MODEL
+
+
+def _get_pipeline(model: str, top_k: int, index_mode: str):
+    if index_mode == "default":
+        return get_rag_pipeline(model, top_k)
+    return get_rag_pipeline(model, top_k, index_mode)
+
+
+def _client_ip(request: Request | None) -> str | None:
+    return request.client.host if request and request.client else None
+
+
+def _sse(event: str, data) -> str:
+    if isinstance(data, str):
+        payload = data
+    else:
+        payload = json.dumps(data, ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+def _chunk_text(text: str, size: int = 32):
+    """Yield deterministic answers through the same token SSE path."""
+
+    for start in range(0, len(text), size):
+        yield text[start:start + size]
+
+
+async def _ensure_session(
+    db: AsyncSession,
+    username: str,
+    session_id: str | None,
+    query: str,
+) -> ChatSession:
+    if session_id:
+        result = await db.execute(
+            select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == username)
+        )
+        chat_session = result.scalar_one_or_none()
+        if chat_session is None:
+            raise SessionNotFoundException(detail=f"session_id={session_id}")
+        return chat_session
+
+    title = query.strip()[:40] or "새로운 보상 질의"
+    chat_session = ChatSession(user_id=username, title=title)
+    db.add(chat_session)
+    await db.commit()
+    await db.refresh(chat_session)
+    return chat_session
+
+
+async def _load_history(db: AsyncSession, session_id: str) -> list[ChatMessage]:
+    result = await db.execute(
+        select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
+    )
+    return list(result.scalars())
+
+
+async def _persist_turn(
+    db: AsyncSession,
+    session_id: str,
+    query: str,
+    answer: str,
+    sources: list[dict],
+) -> None:
+    db.add_all(
+        [
+            ChatMessage(session_id=session_id, role="user", content=query, sources=None),
+            ChatMessage(session_id=session_id, role="assistant", content=answer, sources=sources),
+        ]
+    )
+    await db.commit()
+
+
+async def _close_stream(stream) -> None:
+    if stream is None:
+        return
+    aclose = getattr(stream, "aclose", None)
+    if aclose is not None:
+        result = aclose()
+        if inspect.isawaitable(result):
+            await result
+        return
+    close = getattr(stream, "close", None)
+    if close is not None:
+        close()
