@@ -158,10 +158,10 @@ async def prepare_retrieved_context(
                 found_ids = {hit.id for hit in graph_hits}
                 missing_ids = [chunk_id for chunk_id in source_chunk_ids if chunk_id not in found_ids]
                 if missing_ids:
-                    warnings.append({
-                        "code": "GRAPH_SOURCE_CHUNKS_MISSING",
-                        "message": f"GraphDB 근거 chunk 일부를 VectorStore에서 찾지 못했습니다: {', '.join(missing_ids[:5])}",
-                    })
+                    logger.info(
+                        "GraphDB source chunks are not present in current VectorStore: %s",
+                        ", ".join(missing_ids[:5]),
+                    )
         except Exception as exc:  # pragma: no cover - runtime fallback
             logger.warning("Graph retrieval failed in API path: %s", exc, exc_info=True)
             warnings.append({

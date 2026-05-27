@@ -86,12 +86,12 @@
 
     <div class="ocr-index-bar">
       <span class="mode-label">OCR 인덱스</span>
-      <label class="radio-pill">
-        <input type="radio" name="ocr-index" value="default" checked>
+      <label class="radio-pill" style="display: none;">
+        <input type="radio" name="ocr-index" value="default">
         <span>기본 운영 인덱스</span>
       </label>
       <label class="radio-pill">
-        <input type="radio" name="ocr-index" value="v2_only">
+        <input type="radio" name="ocr-index" value="v2_only" checked>
         <span>보정본 OCR만</span>
       </label>
       <label class="radio-pill">
@@ -155,22 +155,47 @@
 
     <div class="sub-panel" id="panel-claim">
       <div class="claim-grid">
-        <div class="p-field">
-          <label class="p-label">청구 항목명</label>
-          <input class="p-input" id="claim-item-name" type="text" placeholder="예: 도수치료"/>
+        <div class="p-field claim-generation">
+          <label class="p-label">실손 세대 기준</label>
+          <div class="claim-radio-group">
+            <label><input type="radio" name="claim-policy-generation" value="4th" checked/> 4세대 실손</label>
+            <label><input type="radio" name="claim-policy-generation" value="5th"/> 5세대 실손</label>
+          </div>
         </div>
-        <div class="p-field">
-          <label class="p-label">수가/표준 코드 <span style="color:var(--gray);font-weight:400;">(옵션)</span></label>
-          <input class="p-input" id="claim-item-code" type="text" placeholder="예: MX122 / 51040"/>
+        <div class="claim-lines" id="claim-lines">
+          <div class="claim-line-row" data-claim-line>
+            <div class="p-field">
+              <label class="p-label">청구 항목명</label>
+              <input class="p-input claim-item-name" type="text" placeholder="예: 도수치료"/>
+            </div>
+            <div class="p-field">
+              <label class="p-label">수가/표준 코드 <span style="color:var(--gray);font-weight:400;">(옵션)</span></label>
+              <input class="p-input claim-item-code" type="text" placeholder="예: MX122 / 51040"/>
+            </div>
+            <div class="p-field">
+              <label class="p-label">청구금액</label>
+              <input class="p-input claim-amount" type="text" placeholder="예: 150000"/>
+            </div>
+            <div class="p-field">
+              <label class="p-label">횟수/수량</label>
+              <input class="p-input claim-quantity" type="text" value="1"/>
+            </div>
+            <div class="p-field">
+              <label class="p-label">항목 분류 힌트</label>
+              <select class="p-input claim-category-hint">
+                <option value="">모름</option>
+                <option value="급여">급여</option>
+                <option value="비급여">비급여</option>
+                <option value="3대비급여">3대비급여</option>
+                <option value="중증비급여">5세대 중증 비급여</option>
+                <option value="비중증비급여">5세대 비중증 비급여</option>
+                <option value="처방약">처방약(약제비)</option>
+              </select>
+            </div>
+            <button class="btn-sm claim-remove-line" type="button" data-action="remove-claim-line" aria-label="청구 항목 삭제">삭제</button>
+          </div>
         </div>
-        <div class="p-field">
-          <label class="p-label">청구금액</label>
-          <input class="p-input" id="claim-amount" type="text" placeholder="예: 150000"/>
-        </div>
-        <div class="p-field">
-          <label class="p-label">횟수/수량</label>
-          <input class="p-input" id="claim-quantity" type="text" value="1"/>
-        </div>
+        <button class="btn-sm claim-add-line" type="button" data-action="add-claim-line">항목 추가</button>
         <div class="p-field">
           <label class="p-label">진단코드</label>
           <input class="p-input" id="claim-diagnosis-code" type="text" placeholder="예: M54.5"/>
@@ -187,18 +212,9 @@
             <option value="hospitalization">입원</option>
           </select>
         </div>
-        <div class="p-field">
-          <label class="p-label">항목 분류 힌트</label>
-          <select class="p-input" id="claim-category-hint">
-            <option value="">모름</option>
-            <option value="급여">급여</option>
-            <option value="비급여">비급여</option>
-            <option value="3대비급여">3대비급여</option>
-          </select>
-        </div>
         <div class="p-field claim-note">
           <label class="p-label">상황 메모</label>
-          <textarea class="p-input" id="claim-note" rows="2" placeholder="예: 4세대 실손, 통원 1회 도수치료, 영수증 금액 기준"></textarea>
+          <textarea class="p-input" id="claim-note" rows="2" placeholder="예: 통원 1회, 진료비 영수증 및 세부내역서 기준"></textarea>
         </div>
         <button class="btn-sm" type="button" data-action="send-claim">계산</button>
       </div>

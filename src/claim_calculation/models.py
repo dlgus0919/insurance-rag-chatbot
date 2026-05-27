@@ -16,6 +16,7 @@ class ClaimItemInput:
     claimed_amount: str = "0"
     quantity: str = "1"
     user_category_hint: str = ""  # 예: "급여", "비급여", "3대비급여", "모름"
+    is_prescription: bool = False  # 처방약 여부 (사용자 명시 또는 자동 감지)
 
 
 @dataclass
@@ -29,6 +30,8 @@ class ClaimCaseContext:
     diagnosis_name: str = ""  # 진단명
     accident_type: str = ""  # 사고: "accident", 질병: "disease", 상해: "injury"
     situation_note: str = ""  # 상황 메모
+    policy_generation: str = "4th"  # "4th" 또는 "5th"
+    facility_grade: str = ""  # "clinic" | "hospital" | "general_hospital" | "tertiary_hospital"
 
 
 @dataclass
@@ -83,6 +86,10 @@ class CalculationResult:
     review_reasons: list[str] = field(default_factory=list)
     notes: str = ""
     candidates: list[dict[str, str]] = field(default_factory=list)
+    policy_generation: str = "4th"
+    facility_grade: str = ""  # "clinic" | "hospital" | "general_hospital" | "tertiary_hospital"
+    line_results: list[dict[str, str | bool | list[str]]] = field(default_factory=list)
+    applied_limits: dict[str, str] = field(default_factory=dict)
 
 
 from decimal import Decimal, InvalidOperation

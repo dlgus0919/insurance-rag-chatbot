@@ -32,6 +32,7 @@ class PdfSource:
     product_type: str | None = None
     effective_date: str | None = None
     version: str | None = None
+    policy_generation: str | None = None
     requires_ocr: bool = False
 
 
@@ -65,6 +66,7 @@ PDF_SOURCES: list[PdfSource] = [
         product_name="신한 이지로운 실손의료보험(무배당)",
         product_type="실손",
         effective_date="2026-04-01",
+        policy_generation="4th",
     ),
     PdfSource(
         path=ROOT_DIR / "보상가이드북.pdf",
@@ -105,6 +107,7 @@ PDF_SOURCES: list[PdfSource] = [
         doc_short="표준약관",
         cloud_safe=True,
         product_type="표준약관",
+        policy_generation="5th",
     ),
     PdfSource(
         path=ROOT_DIR / "Claim 실무종합가이드.pdf",
@@ -174,21 +177,18 @@ ALLOW_OLLAMA: bool = os.getenv("ALLOW_OLLAMA", "true").lower() == "true"
 CLOUD_DEPLOY: bool = os.getenv("CLOUD_DEPLOY", "false").lower() == "true"
 SGLANG_BASE_URL: str = os.getenv("SGLANG_BASE_URL", "http://127.0.0.1:30000/v1")
 SGLANG_API_KEY: str = os.getenv("SGLANG_API_KEY", "EMPTY")
-SGLANG_DEFAULT_MODEL: str = os.getenv("SGLANG_DEFAULT_MODEL", "qwen3-30b-a3b-instruct-2507-fp8")
+SGLANG_DEFAULT_MODEL: str = os.getenv("SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
 SGLANG_REASONING_EFFORT: str = os.getenv("SGLANG_REASONING_EFFORT", "low")
 SGLANG_CANDIDATE_MODELS: list[str] = [
     model.strip()
-    for model in os.getenv(
-        "SGLANG_CANDIDATE_MODELS",
-        "qwen3-30b-a3b-instruct-2507-fp8,gpt-oss-20b",
-    ).split(",")
+    for model in os.getenv("SGLANG_CANDIDATE_MODELS", SGLANG_DEFAULT_MODEL).split(",")
     if model.strip()
 ]
 # `nvidia/Gemma-4-26B-A4B-NVFP4` is a vLLM-oriented NVFP4 checkpoint.
 # On the current native SGLang stack it serves but generates repeated <pad> tokens.
 SGLANG_DISABLED_MODELS: set[str] = {
     model.strip()
-    for model in os.getenv("SGLANG_DISABLED_MODELS", "gemma-4-26b-a4b-nvfp4").split(",")
+    for model in os.getenv("SGLANG_DISABLED_MODELS", "gemma-4-26b-a4b-nvfp4,nemotron-3-nano-30b-a3b-nvfp4").split(",")
     if model.strip()
 }
 SGLANG_MODEL_DIR: Path = Path(os.getenv("SGLANG_MODEL_DIR", "/srv/ai-ops/llm/models"))
@@ -224,13 +224,10 @@ def sglang_base_url_for_model(model: str) -> str:
 
 VLLM_BASE_URL: str = os.getenv("VLLM_BASE_URL", "http://127.0.0.1:30001/v1")
 VLLM_API_KEY: str = os.getenv("VLLM_API_KEY", "EMPTY")
-VLLM_DEFAULT_MODEL: str = os.getenv("VLLM_DEFAULT_MODEL", "nemotron-3-nano-30b-a3b-nvfp4")
+VLLM_DEFAULT_MODEL: str = os.getenv("VLLM_DEFAULT_MODEL", "gemma-4-26b-a4b-nvfp4")
 VLLM_CANDIDATE_MODELS: list[str] = [
     model.strip()
-    for model in os.getenv(
-        "VLLM_CANDIDATE_MODELS",
-        "nemotron-3-nano-30b-a3b-nvfp4,gemma-4-26b-a4b-nvfp4",
-    ).split(",")
+    for model in os.getenv("VLLM_CANDIDATE_MODELS", VLLM_DEFAULT_MODEL).split(",")
     if model.strip()
 ]
 VLLM_MODEL_ENDPOINTS: dict[str, str] = _parse_sglang_model_endpoints(os.getenv("VLLM_MODEL_ENDPOINTS", ""))

@@ -18,6 +18,7 @@ class ClaimItemRequest(BaseModel):
     claimed_amount: str = Field(..., min_length=1)
     quantity: str = "1"
     user_category_hint: str = ""
+    is_prescription: bool = False
 
 
 class ClaimCaseContextRequest(BaseModel):
@@ -30,6 +31,8 @@ class ClaimCaseContextRequest(BaseModel):
     diagnosis_name: str = ""
     accident_type: str = ""
     situation_note: str = ""
+    policy_generation: Literal["4th", "5th"] = "4th"
+    facility_grade: Literal["", "clinic", "hospital", "general_hospital", "tertiary_hospital"] = ""
 
 
 class ClaimCalculationRequest(BaseModel):
@@ -59,6 +62,9 @@ class ClaimCalculationResponse(BaseModel):
     review_reasons: list[str]
     notes: str
     candidates: list[dict[str, str]]
+    policy_generation: str = "4th"
+    line_results: list[dict] = Field(default_factory=list)
+    applied_limits: dict[str, str] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
     @classmethod
@@ -74,5 +80,8 @@ class ClaimCalculationResponse(BaseModel):
             review_reasons=result.review_reasons,
             notes=result.notes,
             candidates=result.candidates,
+            policy_generation=result.policy_generation,
+            line_results=result.line_results,
+            applied_limits=result.applied_limits,
             warnings=warnings or [],
         )

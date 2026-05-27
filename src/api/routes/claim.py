@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/claim", tags=["claim"])
 
 MODEL_ALIAS = {
-    "gemma4": f"vllm:{config.VLLM_DEFAULT_MODEL}",
-    "gpt-oss": f"sglang:{config.SGLANG_DEFAULT_MODEL}",
+    "gemma4": "vllm:gemma-4-26b-a4b-nvfp4",
+    "nemotron": "vllm:nemotron-3-nano-30b-a3b-nvfp4",
+    "gpt-oss": "sglang:gpt-oss-20b",
+    "qwen3": "sglang:qwen3-30b-a3b-instruct-2507-fp8",
 }
 
 

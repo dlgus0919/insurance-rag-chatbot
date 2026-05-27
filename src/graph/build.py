@@ -20,6 +20,65 @@ from src.graph.extractors import (
 )
 
 
+FEE_NAME_SPLIT_RE = re.compile(r"[-–—\[]")
+
+TRANSPLANT_STEM_ALIASES = {
+    "간장": "간",
+    "췌장": "췌",
+    "폐장": "폐",
+    "신장": "신",
+    "비장": "비",
+    "심장": "심장",
+}
+
+
+def _fee_name_bases(name: str) -> set[str]:
+    """수가 명칭에서 행 세부명칭을 뺀 보수적 비교 키를 만든다."""
+    normalized = normalize_name(name)
+    bases = {normalized} if normalized else set()
+    if normalized:
+        base = FEE_NAME_SPLIT_RE.split(normalized, maxsplit=1)[0]
+        if base:
+            bases.add(base)
+    return bases
+
+
+def _procedure_fee_variants(name: str) -> set[str]:
+    """실무가이드 수술명을 HIRA 수가명칭과 연결하기 위한 보수적 변형 집합."""
+    normalized = normalize_name(name)
+    variants = {normalized} if normalized else set()
+    if not normalized:
+        return variants
+
+    if normalized.endswith("이식수술"):
+        stem = normalized[: -len("이식수술")]
+        if stem:
+            variants.add(f"{stem}이식술")
+            short_stem = TRANSPLANT_STEM_ALIASES.get(stem)
+            if short_stem:
+                variants.add(f"{short_stem}이식술")
+
+    if normalized.endswith("수술"):
+        variants.add(normalized[: -len("수술")] + "술")
+
+    return {v for v in variants if len(v) >= 3}
+
+
+def _match_procedure_to_fee_code(proc_name: str, fee_name: str) -> tuple[bool, str | None, str | None]:
+    """수술명과 HIRA 수가명칭이 같은 시술을 가리키는지 보수적으로 판정한다."""
+    proc_variants = _procedure_fee_variants(proc_name)
+    fee_bases = _fee_name_bases(fee_name)
+    if not proc_variants or not fee_bases:
+        return False, None, None
+
+    for proc_variant in sorted(proc_variants, key=len, reverse=True):
+        for fee_base in sorted(fee_bases, key=len, reverse=True):
+            if fee_base == proc_variant:
+                return True, proc_variant, fee_base
+
+    return False, None, None
+
+
 def build_graph(
     chunks_path: str | Path,
     standard_db_path: str | Path,
@@ -133,16 +192,26 @@ def _build_cross_references(store: GraphStore) -> None:
         "SELECT node_id, canonical_name, normalized_name, properties_json FROM graph_nodes WHERE node_type = ?",
         (NodeType.SurgeryProcedure.value,),
     )
-    aliases = store.query("SELECT node_id, alias, normalized_alias FROM graph_aliases")
+    aliases = store.query(
+        """
+        SELECT a.node_id, a.alias, a.normalized_alias, n.node_type
+        FROM graph_aliases a
+        JOIN graph_nodes n ON a.node_id = n.node_id
+        """
+    )
 
     proc_map = {p["normalized_name"]: p["node_id"] for p in procedures}
-    alias_map = {a["normalized_alias"]: a["node_id"] for a in aliases}
+    alias_map = {
+        a["normalized_alias"]: a["node_id"]
+        for a in aliases
+        if a["node_type"] == NodeType.SurgeryProcedure.value
+    }
 
     # Gather category normalization mapping for procedures
     proc_cat_rows = store.query(
         """
-        SELECT
-            e.source_node_id as proc_id,
+        SELECT 
+            e.source_node_id as proc_id, 
             n.normalized_name as cat_norm,
             n_parent.normalized_name as parent_cat_norm
         FROM graph_edges e
@@ -200,7 +269,7 @@ def _build_cross_references(store: GraphStore) -> None:
         # Clean rule name for matching (remove hanja parens, numbers, etc.)
         rule_name_clean = re.sub(r"\([가-힣\w]+\)", "", rule["canonical_name"])
         raw_keywords = [k.strip() for k in re.split(r"[,·\/ㆍ\s]+", rule_name_clean) if k.strip()]
-
+        
         # Filter out general stop keywords like '수술'
         keywords = [kw for kw in raw_keywords if kw not in STOP_KEYWORDS]
 
@@ -250,26 +319,63 @@ def _build_cross_references(store: GraphStore) -> None:
         "SELECT node_id, canonical_name, normalized_name FROM graph_nodes WHERE node_type = ?",
         (NodeType.MedicalFeeCode.value,),
     )
+    fee_evidence_rows = store.query(
+        """
+        SELECT node_id, evidence_id
+        FROM graph_node_evidence
+        WHERE role IN ('source', 'support')
+        """
+    )
+    node_evidence_map: dict[str, list[str]] = {}
+    for row in fee_evidence_rows:
+        node_evidence_map.setdefault(row["node_id"], []).append(row["evidence_id"])
+
     for code in fee_codes:
         code_id = code["node_id"]
         norm_code_nm = normalize_name(code["canonical_name"])
 
         target_proc_id = None
+        match_method = "exact_name"
+        matched_proc_variant = None
+        matched_fee_base = None
         if norm_code_nm in proc_map:
             target_proc_id = proc_map[norm_code_nm]
         elif norm_code_nm in alias_map:
             target_proc_id = alias_map[norm_code_nm]
+            match_method = "alias"
+        else:
+            for proc in procedures:
+                matched, proc_variant, fee_base = _match_procedure_to_fee_code(
+                    proc["canonical_name"], code["canonical_name"]
+                )
+                if matched:
+                    target_proc_id = proc["node_id"]
+                    match_method = "semantic_fee_name"
+                    matched_proc_variant = proc_variant
+                    matched_fee_base = fee_base
+                    break
 
         if target_proc_id:
             edge_id = f"edge_proc_fee_{target_proc_id}_{code_id}"
+            evidence_ids = node_evidence_map.get(code_id, [])
+            source_evidence_id = evidence_ids[0] if evidence_ids else None
             store.upsert_edge(
                 Edge(
                     edge_id=edge_id,
                     source_node_id=target_proc_id,
                     target_node_id=code_id,
                     edge_type=EdgeType.HAS_MEDICAL_FEE_CODE,
+                    confidence=1.0 if match_method in {"exact_name", "alias"} else 0.95,
+                    properties={
+                        "match_method": match_method,
+                        "procedure_variant": matched_proc_variant,
+                        "fee_base": matched_fee_base,
+                    },
+                    source_evidence_id=source_evidence_id,
                 )
             )
+            for evidence_id in evidence_ids:
+                store.link_edge_evidence(edge_id, evidence_id, role="support")
 
     # 3. Match: SurgeryCategory (실무가이드) <-> SurgeryCategory (약관)
     categories = store.query(
@@ -280,10 +386,10 @@ def _build_cross_references(store: GraphStore) -> None:
         for cat2 in categories:
             if cat1["node_id"] == cat2["node_id"]:
                 continue
-
+            
             n1 = cat1["normalized_name"]
             n2 = cat2["normalized_name"]
-
+            
             is_match = False
             if n1 in n2 or n2 in n1:
                 is_match = True
@@ -305,5 +411,5 @@ def _build_cross_references(store: GraphStore) -> None:
                         properties={"relationship": "equivalent_category"},
                     )
                 )
-
+                
     store.commit()

@@ -38,6 +38,7 @@ EXTENDED_META_FIELDS = [
     "product_type",
     "effective_date",
     "version",
+    "policy_generation",
     "coverage_category",
     "clause_type",
     "content_type",

@@ -684,7 +684,52 @@ function toggleExport(event) {
 async function exportChat(format) {
   document.getElementById('exp-menu')?.classList.remove('open');
   if (!currentSession) {
-    toast('내보낼 채팅 세션이 없습니다.', 'warn');
+    if (!msgs || msgs.length === 0) {
+      toast('내보낼 채팅 세션이 없습니다.', 'warn');
+      return;
+    }
+    try {
+      let content = '';
+      let mime = 'text/plain';
+      if (format === 'json') {
+        content = JSON.stringify({
+          session_id: 'local',
+          title: '새로운 보상 질의',
+          created_at: new Date().toISOString(),
+          messages: msgs.map(m => ({
+            timestamp: new Date().toISOString(),
+            role: m.role,
+            content: m.text,
+            sources: m.sources || []
+          }))
+        }, null, 2);
+        mime = 'application/json; charset=utf-8';
+      } else if (format === 'csv') {
+        content = 'timestamp,role,content,sources\n' + msgs.map(m => {
+          const ts = new Date().toISOString();
+          const text = '"' + (m.text||'').replace(/"/g, '""') + '"';
+          const srcs = '"' + (m.sources||[]).map(s => s.filename || s.source || s.title || '출처').join('; ') + '"';
+          return ts + ',' + m.role + ',' + text + ',' + srcs;
+        }).join('\n');
+        mime = 'text/csv; charset=utf-8';
+      } else {
+        content = '=== 신한EZ손해보험 채팅 기록 ===\n생성일: ' + new Date().toISOString().split('T')[0] + '\n세션: 새로운 보상 질의\n\n';
+        content += msgs.map(m => '[' + new Date().toLocaleString('ko-KR') + '] ' + (m.role === 'user' ? '사용자' : '봇') + '\n> ' + m.text + '\n\n').join('');
+      }
+      const blob = new Blob([content], { type: mime });
+      const filename = `chat_local.${format}`;
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      toast(`${format.toUpperCase()} 파일로 내보냈습니다.`, 'success');
+    } catch (e) {
+      toast('로컬 내보내기 중 오류가 발생했습니다.', 'error');
+    }
     return;
   }
   try {

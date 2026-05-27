@@ -33,6 +33,12 @@ LOCAL_LARGE_MODEL_INFO: dict[str, dict[str, str]] = {
         "status": "validated",
         "use_case": "vLLM 로컬 답변",
     },
+    "nemotron-3-nano-30b-a3b-nvfp4": {
+        "family": "Nemotron 3 Nano",
+        "size": "30B A3B NVFP4",
+        "status": "staged",
+        "use_case": "vLLM 신규 비교 모델",
+    },
 }
 
 SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
@@ -47,6 +53,12 @@ SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
         "size": "26B A4B NVFP4",
         "status": "disabled",
         "use_case": "SGLang 비활성: NVFP4/vLLM 후보",
+    },
+    "qwen3-30b-a3b-instruct-2507-fp8": {
+        "family": "Qwen3 Instruct",
+        "size": "30B A3B FP8",
+        "status": "staged",
+        "use_case": "SGLang 신규 비교 모델",
     },
 }
 
@@ -113,6 +125,15 @@ def _served_models_for_endpoint(base_url: str, api_key: str | None = None) -> li
     return models
 
 
+def _served_models_by_endpoint(endpoints: list[str], api_key: str | None = None) -> dict[str, list[str]]:
+    """Return OpenAI-compatible /models results keyed by normalized endpoint."""
+
+    served: dict[str, list[str]] = {}
+    for endpoint in _ordered_unique([endpoint.rstrip("/") for endpoint in endpoints if endpoint]):
+        served[endpoint] = _served_models_for_endpoint(endpoint, api_key=api_key)
+    return served
+
+
 def list_sglang_large_models() -> list[str]:
     """Return configured large SGLang models, including staged local assets."""
 
@@ -129,13 +150,13 @@ def _available_vllm_models() -> list[str]:
     """Return vLLM models exposed in the UI."""
 
     candidates = list_vllm_large_models()
-    if not config.VLLM_STRICT_AVAILABLE_MODELS:
+    endpoints = [config.VLLM_BASE_URL, *config.VLLM_MODEL_ENDPOINTS.values(), *[config.vllm_base_url_for_model(model) for model in candidates]]
+    served_by_endpoint = _served_models_by_endpoint(endpoints, api_key=config.VLLM_API_KEY)
+    served_models = _ordered_unique([model for models in served_by_endpoint.values() for model in models])
+    if not served_models and not config.VLLM_STRICT_AVAILABLE_MODELS:
         return candidates
 
-    served_by_endpoint: dict[str, list[str]] = {}
-    for model in candidates:
-        endpoint = config.vllm_base_url_for_model(model)
-        served_by_endpoint.setdefault(endpoint, _served_models_for_endpoint(endpoint, api_key=config.VLLM_API_KEY))
+    candidates = _ordered_unique(candidates + served_models)
 
     available: list[str] = []
     for model in candidates:
@@ -155,13 +176,20 @@ def _available_sglang_models() -> list[str]:
     """Return SGLang models that should be exposed in the UI."""
 
     candidates = _configured_sglang_models()
-    if not config.SGLANG_STRICT_AVAILABLE_MODELS:
+    endpoints = [config.SGLANG_BASE_URL, *config.SGLANG_MODEL_ENDPOINTS.values(), *[config.sglang_base_url_for_model(model) for model in candidates]]
+    served_by_endpoint = _served_models_by_endpoint(endpoints, api_key=config.SGLANG_API_KEY)
+    served_models = _ordered_unique(
+        [
+            model
+            for models in served_by_endpoint.values()
+            for model in models
+            if not is_sglang_model_disabled(model)
+        ]
+    )
+    if not served_models and not config.SGLANG_STRICT_AVAILABLE_MODELS:
         return candidates
 
-    served_by_endpoint: dict[str, list[str]] = {}
-    for model in candidates:
-        endpoint = config.sglang_base_url_for_model(model)
-        served_by_endpoint.setdefault(endpoint, _served_models_for_endpoint(endpoint, api_key=config.SGLANG_API_KEY))
+    candidates = _ordered_unique(candidates + served_models)
 
     available: list[str] = []
     for model in candidates:

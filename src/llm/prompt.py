@@ -77,8 +77,12 @@ def _page_label(metadata: dict) -> str:
 def _context_label(metadata: dict) -> str:
     doc_short = metadata.get("doc_short", "")
     doc_name = metadata.get("doc_name") if not doc_short else ""
+    generation = metadata.get("policy_generation")
+    gen_str = f"({generation}세대)" if generation else ""
+    
     parts = [
         doc_name,
+        gen_str,
         metadata.get("volume"),
         metadata.get("part"),
         metadata.get("chapter"),
@@ -92,6 +96,9 @@ def format_source_citation(metadata: dict) -> str:
     """메타데이터를 표준 출처 표기로 변환한다."""
 
     doc_short = metadata.get("doc_short") or metadata.get("doc_name") or "문서"
+    generation = metadata.get("policy_generation")
+    if generation:
+        doc_short = f"{doc_short}({generation}세대)"
     hierarchy = " / ".join(
         str(part)
         for part in [
@@ -149,6 +156,9 @@ def build_user_prompt(question: str, chunks: list[Chunk]) -> str:
     for index, chunk in enumerate(chunks, start=1):
         label = _context_label(chunk.metadata)
         doc_short = chunk.metadata.get("doc_short", "")
+        generation = chunk.metadata.get("policy_generation")
+        if generation:
+            doc_short = f"{doc_short}({generation}세대)"
         prefix = f"[{doc_short}] " if doc_short else ""
         blocks.append(f"[컨텍스트 {index}: {prefix}{label}]\n{chunk.text}")
     context = "\n\n".join(blocks) if blocks else "제공된 컨텍스트가 없습니다."

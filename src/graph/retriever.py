@@ -127,7 +127,7 @@ class GraphRetriever:
         evidences = []
         rows = store.query(
             """
-            SELECT ge.*
+            SELECT ge.* 
             FROM graph_node_evidence gne
             JOIN graph_evidence ge ON gne.evidence_id = ge.evidence_id
             WHERE gne.node_id = ?
@@ -153,7 +153,7 @@ class GraphRetriever:
         evidences = []
         rows = store.query(
             """
-            SELECT ge.*
+            SELECT ge.* 
             FROM graph_edge_evidence gee
             JOIN graph_evidence ge ON gee.evidence_id = ge.evidence_id
             WHERE gee.edge_id = ?
@@ -178,7 +178,7 @@ class GraphRetriever:
     def retrieve(self, question: str) -> GraphRetrievalResult:
         plan = self.planner.plan(question)
         result = GraphRetrievalResult(plan=plan)
-
+        
         # fallback 대비: db_path가 없으면 경고만 남기고 리턴
         if not self.db_path.exists():
             result.warnings.append(f"Graph DB file not found at {self.db_path}. Running with empty graph fallback.")
@@ -202,8 +202,8 @@ class GraphRetriever:
                 # 수술 노드 조회
                 proc_nodes = store.query(
                     """
-                    SELECT * FROM graph_nodes
-                    WHERE node_type = 'SurgeryProcedure'
+                    SELECT * FROM graph_nodes 
+                    WHERE node_type = 'SurgeryProcedure' 
                       AND (normalized_name = ? OR node_id IN (
                           SELECT node_id FROM graph_aliases WHERE normalized_alias = ?
                       ))
@@ -217,8 +217,8 @@ class GraphRetriever:
                     fuzzy_param = f"%{norm_proc}%"
                     proc_nodes = store.query(
                         """
-                        SELECT * FROM graph_nodes
-                        WHERE node_type = 'SurgeryProcedure'
+                        SELECT * FROM graph_nodes 
+                        WHERE node_type = 'SurgeryProcedure' 
                           AND normalized_name LIKE ?
                         """,
                         (fuzzy_param,)
@@ -253,12 +253,12 @@ class GraphRetriever:
                         JOIN graph_nodes n ON e.target_node_id = n.node_id
                         WHERE e.source_node_id = ? AND e.edge_type = 'HAS_GRADE'
                           AND (? IS NULL OR n.node_id LIKE ?)
-                        ORDER BY
-                          CASE
+                        ORDER BY 
+                          CASE 
                             WHEN n.node_id LIKE 'grade_new_1_5_%' THEN 1
                             WHEN n.node_id LIKE 'grade_1_5_%' THEN 2
-                            WHEN n.node_id LIKE 'grade_1_3_%' THEN 3
-                            ELSE 4
+                            WHEN n.node_id LIKE 'grade_1_3_%' THEN 3 
+                            ELSE 4 
                           END ASC
                         """,
                         (proc_id, grade_prefix, f"{grade_prefix}%" if grade_prefix else None)
@@ -278,7 +278,7 @@ class GraphRetriever:
                         grade_node_id = grade_edges[0]["grade_id"]
                         for ge in grade_edges:
                             grade_canonical = ge["grade_name"]
-
+                            
                             # Evidence 조회
                             evs = self._get_edge_evidences(store, ge["edge_id"])
                             if ge["source_evidence_id"]:
@@ -314,11 +314,11 @@ class GraphRetriever:
                             """
                             SELECT DISTINCT p.node_id, p.canonical_name, e.confidence as edge_confidence, e.edge_id,
                               -- 1. 질문 대상 수술과 동일 대분류 HAS_CATEGORY 공유 여부
-                              (SELECT COUNT(*) FROM graph_edges e1
+                              (SELECT COUNT(*) FROM graph_edges e1 
                                JOIN graph_edges e2 ON e1.target_node_id = e2.target_node_id
                                WHERE e1.edge_type = 'HAS_CATEGORY' AND e2.edge_type = 'HAS_CATEGORY'
                                  AND e1.source_node_id = p.node_id AND e2.source_node_id = ?) as share_cat,
-
+                                 
                               -- 2. SOL [별표7] 후보 조항과 같은 category_large에 속하는지 여부
                               (SELECT COUNT(*) FROM graph_edges e_cat
                                JOIN graph_nodes n_cat ON e_cat.target_node_id = n_cat.node_id
@@ -329,7 +329,7 @@ class GraphRetriever:
                                      JOIN graph_nodes n_rule ON e_rule.source_node_id = n_rule.node_id
                                      WHERE e_rule.target_node_id = ? AND e_rule.edge_type = 'POLICY_COVERS_PROCEDURE'
                                  )) as share_rule_cat,
-
+                                 
                               -- 3. evidence 존재 여부
                               (CASE WHEN e.source_evidence_id IS NOT NULL THEN 1
                                     WHEN EXISTS (SELECT 1 FROM graph_edge_evidence WHERE edge_id = e.edge_id) THEN 1
@@ -337,7 +337,7 @@ class GraphRetriever:
                             FROM graph_edges e
                             JOIN graph_nodes p ON e.source_node_id = p.node_id
                             WHERE e.target_node_id = ? AND e.edge_type = 'HAS_GRADE' AND e.source_node_id != ?
-                            ORDER BY
+                            ORDER BY 
                               share_cat DESC,
                               share_rule_cat DESC,
                               has_evidence DESC,
@@ -353,7 +353,7 @@ class GraphRetriever:
                         for peer in peers:
                             peer_id = peer["node_id"]
                             peer_canonical = peer["canonical_name"]
-
+                            
                             # Peer evidences
                             peevs = self._get_edge_evidences(store, peer["edge_id"])
                             for ev in peevs:
@@ -363,7 +363,7 @@ class GraphRetriever:
                             # Peer 카테고리 정보 조회
                             cat_edges = store.query(
                                 """
-                                SELECT n.canonical_name
+                                SELECT n.canonical_name 
                                 FROM graph_edges e
                                 JOIN graph_nodes n ON e.target_node_id = n.node_id
                                 WHERE e.source_node_id = ? AND e.edge_type = 'HAS_CATEGORY'
@@ -382,7 +382,7 @@ class GraphRetriever:
                                 """,
                                 (peer_id,)
                             )
-
+                            
                             rule_props = {}
                             if rule_edges:
                                 rp = rule_edges[0]["rule_props"]
@@ -427,14 +427,14 @@ class GraphRetriever:
                     else:
                         for re_edge in rule_edges:
                             rule_props = json.loads(re_edge["rule_props"]) if re_edge["rule_props"] else {}
-
+                            
                             # Evidence
                             revs = self._get_edge_evidences(store, re_edge["edge_id"])
                             if re_edge["source_evidence_id"]:
                                 rsev = self._get_evidence_by_id(store, re_edge["source_evidence_id"])
                                 if rsev and rsev not in revs:
                                     revs.append(rsev)
-
+                            
                             for ev in revs:
                                 if ev.chunk_id:
                                     source_chunk_ids.add(ev.chunk_id)
@@ -455,7 +455,7 @@ class GraphRetriever:
             if "category_grade_listing" in plan.intents and plan.category and plan.grade_value:
                 # 5종 코드 매칭
                 grade_node_key = f"grade_new_1_5_{plan.grade_value}"
-
+                
                 procs = store.query(
                     """
                     SELECT DISTINCT p.node_id, p.canonical_name, e_grd.edge_id, e_grd.source_evidence_id, e_grd.confidence as edge_confidence
@@ -503,7 +503,9 @@ class GraphRetriever:
                     fee_edges = store.query(
                         """
                         SELECT e.edge_id, e.confidence as edge_confidence,
-                               n.node_id as fee_id, n.canonical_name as fee_name
+                               n.node_id as fee_id,
+                               n.canonical_name as fee_name,
+                               json_extract(n.properties_json, '$.code') as fee_code
                         FROM graph_edges e
                         JOIN graph_nodes n ON e.target_node_id = n.node_id
                         WHERE e.source_node_id = ? AND e.edge_type = 'HAS_MEDICAL_FEE_CODE'
@@ -529,12 +531,16 @@ class GraphRetriever:
                                 if ev.chunk_id:
                                     source_chunk_ids.add(ev.chunk_id)
 
+                            fee_object = fe["fee_code"] or fe["fee_name"]
+                            if fe["fee_code"] and fe["fee_name"] and fe["fee_code"] != fe["fee_name"]:
+                                fee_object = f"{fe['fee_code']} ({fe['fee_name']})"
+
                             facts.append(GraphFact(
                                 subject=proc_canonical,
                                 relation="HAS_MEDICAL_FEE_CODE",
-                                object=fe["fee_name"],
+                                object=fee_object,
                                 confidence=fe["edge_confidence"],
-                                status="confirmed" if fe["edge_confidence"] >= 1.0 else "candidate",
+                                status="confirmed" if fe["edge_confidence"] >= 0.95 and len(fevs) > 0 else "candidate",
                                 evidence=fevs
                             ))
 
@@ -563,7 +569,7 @@ class GraphRetriever:
                         for re_edge in rule_edges:
                             rule_props = json.loads(re_edge["rule_props"]) if re_edge["rule_props"] else {}
                             ratio_val = rule_props.get("payment_ratio")
-
+                            
                             revs = self._get_edge_evidences(store, re_edge["edge_id"])
                             if re_edge["source_evidence_id"]:
                                 rsev = self._get_evidence_by_id(store, re_edge["source_evidence_id"])
@@ -590,28 +596,28 @@ class GraphRetriever:
                 placeholders = ",".join(["?"] * len(numbers))
                 rules = store.query(
                     f"""
-                    SELECT * FROM graph_nodes
+                    SELECT * FROM graph_nodes 
                     WHERE node_type = 'PolicyBenefitRule'
                       AND json_extract(properties_json, '$.appendix_name') = ?
                       AND json_extract(properties_json, '$.appendix_number') IN ({placeholders})
                     """,
                     (plan.appendix, *numbers)
                 )
-
+                
                 for rule in rules:
                     rule_id = rule["node_id"]
                     rule_props = json.loads(rule["properties_json"]) if rule["properties_json"] else {}
-
+                    
                     # 4.3 DEFINED_IN_APPENDIX evidence 연결 및 status 하향 처리
                     evs = self._get_node_evidences(store, rule_id)
                     for ev in evs:
                         if ev.chunk_id:
                             source_chunk_ids.add(ev.chunk_id)
-
+                            
                     status = "confirmed" if len(evs) > 0 else "candidate"
                     if len(evs) == 0:
                         result.warnings.append(f"주의: 규정 조항 '{rule_id}'에 연동된 근거(evidence) 문서가 존재하지 않아 검토 후보(candidate)로 하향 처리되었습니다.")
-
+                    
                     facts.append(GraphFact(
                         subject=rule_id,
                         relation="DEFINED_IN_APPENDIX",

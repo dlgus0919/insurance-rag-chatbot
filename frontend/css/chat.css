@@ -210,6 +210,23 @@
     gap:12px;
     align-items:end;
   }
+  .claim-generation{grid-column:1 / -1;}
+  .claim-radio-group{display:flex;gap:12px;align-items:center;min-height:34px;}
+  .claim-radio-group label{display:flex;gap:5px;align-items:center;font-size:12px;font-weight:700;color:var(--navy);}
+  .claim-lines{grid-column:1 / -1;display:flex;flex-direction:column;gap:8px;}
+  .claim-line-row{
+    display:grid;
+    grid-template-columns:repeat(5,minmax(120px,1fr)) auto;
+    gap:8px;
+    align-items:end;
+    padding:8px;
+    border:1px solid var(--border);
+    border-radius:8px;
+    background:#fff;
+  }
+  .claim-add-line{justify-self:start;}
+  .claim-remove-line{background:#6b7280;padding-left:10px;padding-right:10px;}
+  .claim-remove-line:hover{background:#4b5563;}
   .claim-note{grid-column:1 / span 3;}
   .claim-result{min-width:min(560px,72vw);}
   .claim-status{
@@ -286,6 +303,28 @@
     max-width:72%;padding:11px 15px;border-radius:16px;
     font-size:13px;line-height:1.65;
   }
+  .msg-bubble p{margin:0 0 8px;}
+  .msg-bubble p:last-child{margin-bottom:0;}
+  .msg-bubble ol,.msg-bubble ul{margin:6px 0 8px;padding-left:20px;}
+  .msg-bubble li{margin:3px 0;}
+  .msg-bubble code{
+    padding:1px 4px;border-radius:4px;background:var(--soft-bg);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace;font-size:12px;
+  }
+  .msg-table-wrap{
+    max-width:100%;overflow-x:auto;margin:8px 0 10px;
+    border:1px solid var(--border);border-radius:8px;background:#fff;
+  }
+  .msg-table{
+    width:100%;border-collapse:collapse;min-width:520px;font-size:12px;line-height:1.55;
+  }
+  .msg-table th,.msg-table td{
+    padding:7px 8px;border-bottom:1px solid var(--border);border-right:1px solid var(--border);
+    text-align:left;vertical-align:top;
+  }
+  .msg-table th:last-child,.msg-table td:last-child{border-right:none;}
+  .msg-table tr:last-child td{border-bottom:none;}
+  .msg-table th{background:var(--soft-bg);color:var(--navy);font-weight:800;white-space:nowrap;}
   .msg-row.bot .msg-bubble{
     background:var(--white);border:1px solid var(--border);
     border-top-left-radius:4px;color:var(--near-black);
@@ -359,6 +398,7 @@
 
   @media (max-width: 920px){
     .claim-grid{grid-template-columns:repeat(2,minmax(140px,1fr));}
+    .claim-line-row{grid-template-columns:repeat(2,minmax(120px,1fr));}
     .claim-note{grid-column:1 / -1;}
     .claim-summary-grid{grid-template-columns:1fr;}
   }

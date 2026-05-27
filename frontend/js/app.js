@@ -2,8 +2,8 @@ import { getToken, getUser, removeToken, removeUser, setUser } from './storage.j
 import { isAuthenticated } from './modules/auth.js';
 import { toast } from './modules/ui.js';
 import { apiFetch } from './utils.js';
-import { initLoginCanvas, initLoginPage } from './pages/login.js';
-import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js';
+import { initLoginCanvas, initLoginPage } from './pages/login.js?v=20260527_model_discovery2';
+import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260527_markdown_render';
 import { initAdminPage } from './pages/admin.js';
 
 const PAGES = {

@@ -19,6 +19,19 @@ def test_payload_uses_openai_chat_completions_shape() -> None:
     assert payload["stream"] is False
 
 
+def test_payload_disables_nemotron_thinking_for_vllm() -> None:
+    client = OpenAICompatibleClient(
+        "nemotron-3-nano-30b-a3b-nvfp4",
+        base_url="http://localhost:30001/v1",
+        api_key="EMPTY",
+        provider="vllm",
+    )
+
+    payload = client._payload("질문", "시스템", 0.1, stream=True)
+
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 def test_generate_reports_connection_error(monkeypatch) -> None:
     client = OpenAICompatibleClient("gpt-oss-20b", base_url="http://localhost:9/v1", api_key="EMPTY")
 
@@ -56,13 +69,13 @@ class DummyResponse:
 
 def test_generate_stream_gemma4_yields_immediately(monkeypatch) -> None:
     client = OpenAICompatibleClient("gemma-4-26b-a4b-nvfp4", base_url="http://localhost:30001/v1", api_key="EMPTY", provider="vllm")
-
+    
     mock_lines = [
         b'data: {"choices":[{"delta":{"content":"\xed\x85\x8c"}}]}', # '테'
         b'data: {"choices":[{"delta":{"content":"\xec\x8a\xa4\xed\x8a\xb8"}}]}', # '스트'
         b'data: [DONE]'
     ]
-
+    
     def mock_post(*args, **kwargs):
         return DummyResponse(200, mock_lines)
 
@@ -74,14 +87,14 @@ def test_generate_stream_gemma4_yields_immediately(monkeypatch) -> None:
 
 def test_generate_stream_harmony_gates_output(monkeypatch) -> None:
     client = OpenAICompatibleClient("gpt-oss-20b", base_url="http://localhost:30000/v1", api_key="EMPTY", provider="sglang")
-
+    
     mock_lines = [
         b'data: {"choices":[{"delta":{"content":"<|channel|>analysis<|message|>\xec\x83\x9d\xea\xb0\x81"}}]}', # '생각'
         b'data: {"choices":[{"delta":{"content":"<|channel|>final<|message|>\xec\xb5\x9c\xec\xa2\x85"}}]}', # '최종'
         b'data: {"choices":[{"delta":{"content":" \xeb\x8b\xb5\xeb\xb3\x80"}}]}', # ' 답변'
         b'data: [DONE]'
     ]
-
+    
     def mock_post(*args, **kwargs):
         return DummyResponse(200, mock_lines)
 

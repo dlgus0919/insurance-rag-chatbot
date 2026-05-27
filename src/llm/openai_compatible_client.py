@@ -31,6 +31,13 @@ def _uses_harmony_stream(model: str, provider: str) -> bool:
     return "gpt-oss" in name or "harmony" in name
 
 
+def _should_disable_thinking(model: str, provider: str) -> bool:
+    """Return whether the serving template should emit final content directly."""
+
+    name = model.lower()
+    return provider == "vllm" and "nemotron" in name
+
+
 class OpenAICompatibleClient:
     """Client for local OpenAI-compatible servers such as SGLang."""
 
@@ -71,6 +78,8 @@ class OpenAICompatibleClient:
         }
         if self.provider == "sglang" and config.SGLANG_REASONING_EFFORT:
             payload["reasoning_effort"] = config.SGLANG_REASONING_EFFORT
+        if _should_disable_thinking(self.model, self.provider):
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
         return payload
 
     def generate(
@@ -95,7 +104,8 @@ class OpenAICompatibleClient:
             raise RuntimeError(f"SGLang 응답 오류(status={response.status_code}): {response.text[:300]}")
         data = response.json()
         self.last_usage = data.get("usage", {})
-        content = data["choices"][0]["message"].get("content", "")
+        message = data["choices"][0]["message"]
+        content = message.get("content") or ""
         if _uses_harmony_stream(self.model, self.provider):
             return _extract_final_content(content)
         else:
@@ -114,11 +124,11 @@ class OpenAICompatibleClient:
             ) as response:
                 if response.status_code >= 400:
                     raise RuntimeError(f"SGLang 스트림 오류(status={response.status_code}): {response.text[:300]}")
-
+                
                 harmony_mode = _uses_harmony_stream(self.model, self.provider)
                 buffer = ""
                 emitting = not harmony_mode
-
+                
                 for raw in response.iter_lines():
                     if not raw:
                         continue
@@ -136,13 +146,13 @@ class OpenAICompatibleClient:
                     token = delta.get("content") or ""
                     if not token:
                         continue
-
+                        
                     if not harmony_mode:
                         cleaned = HARMONY_TOKEN_RE.sub("", token)
                         if cleaned:
                             yield cleaned
                         continue
-
+                        
                     if emitting:
                         cleaned = HARMONY_TOKEN_RE.sub("", token.replace("<|return|>", "").replace("<|end|>", ""))
                         if cleaned:

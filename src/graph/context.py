@@ -17,6 +17,19 @@ def _conflicting_fact_groups(facts) -> list[tuple[tuple[str, str], list[str]]]:
     return [(key, values) for key, values in grouped.items() if len(values) > 1]
 
 
+def _merge_table_cell(existing: str, value: str) -> str:
+    if existing == "N/A":
+        return value
+    if existing.startswith("[MISSING]") and not value.startswith("[MISSING]"):
+        return value
+    if value.startswith("[MISSING]") and existing != "N/A":
+        return existing
+    values = existing.split("<br>")
+    if value in values:
+        return existing
+    return f"{existing}<br>{value}"
+
+
 def build_graph_context(result: GraphRetrievalResult) -> str:
     if not result.facts:
         return ""
@@ -25,9 +38,9 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
     # 만약 intents가 비어있다면 ordinary_rag로 기본 동작
     if not intents:
         intents = ["ordinary_rag"]
-
+        
     keep_indices = set()
-
+    
     # 각 intent에 대해 살려야 할 fact들의 index를 수집
     for intent in intents:
         if intent == "surgery_grade_lookup":
@@ -59,7 +72,7 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
         else: # ordinary_rag 등
             for i, f in enumerate(result.facts):
                 keep_indices.add(i)
-
+                
     filtered_facts = [result.facts[i] for i in sorted(list(keep_indices))]
 
     if not filtered_facts:
@@ -98,15 +111,17 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
             elif f.relation == "HAS_MEDICAL_FEE_CODE":
                 if f.status == "missing":
                     reason = f.properties.get('reason', '데이터 연결 없음')
-                    surgery_info[subj]["fee_code"] = f"[MISSING] ({reason})"
+                    value = f"[MISSING] ({reason})"
                 else:
-                    surgery_info[subj]["fee_code"] = f"[{f.status.upper()}] {f.object}"
+                    value = f"[{f.status.upper()}] {f.object}"
+                surgery_info[subj]["fee_code"] = _merge_table_cell(surgery_info[subj]["fee_code"], value)
             elif f.relation == "PAYS_BY_RATIO":
                 if f.status == "missing":
                     reason = f.properties.get('reason', '데이터 연결 없음')
-                    surgery_info[subj]["ratio"] = f"[MISSING] ({reason})"
+                    value = f"[MISSING] ({reason})"
                 else:
-                    surgery_info[subj]["ratio"] = f"[{f.status.upper()}] {f.object}"
+                    value = f"[{f.status.upper()}] {f.object}"
+                surgery_info[subj]["ratio"] = _merge_table_cell(surgery_info[subj]["ratio"], value)
 
         lines.append("### 카테고리/등급 수술 목록 요약 표")
         lines.append("| 수술명 | 등급 | 수가코드 (Medical Fee Code) | SOL 지급비율 (Payment Ratio) |")
@@ -139,7 +154,7 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
                     ev = fact.evidence[0]
                     page_info = f" p.{ev.page_start}" if ev.page_start is not None else ""
                     evidence_str = f" [근거: {ev.doc_short}{page_info}]"
-
+                
                 # 중요 속성 표시
                 props_list = []
                 if fact.properties:
@@ -147,7 +162,7 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
                         if k in ["appendix_number", "grade_value", "payment_ratio", "matched_keyword"]:
                             props_list.append(f"{k}: {v}")
                 props_str = f" (속성: {', '.join(props_list)})" if props_list else ""
-
+                
                 lines.append(f"  - [{fact.status.upper()}] {fact.subject} --({fact.relation})--> {fact.object or 'N/A'}{evidence_str}{props_str}")
             lines.append("")
 

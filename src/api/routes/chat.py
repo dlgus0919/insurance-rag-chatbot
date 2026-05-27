@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import time
 
 from fastapi import APIRouter, Depends, Request
@@ -15,7 +16,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src import config
 from src.api.db import get_db
 from src.api.deps import log_audit_event, require_permission
-from src.api.exceptions import SessionNotFoundException
 from src.api.models import ChatMessage, ChatSession
 from src.api.rate_limit import limiter
 from src.api.rag_service import (
@@ -30,10 +30,13 @@ from src.api.schemas.chat import ChatRequest
 from src.auth.users import User
 
 router = APIRouter(prefix="/chat", tags=["chat"])
+logger = logging.getLogger(__name__)
 
 MODEL_ALIAS = {
-    "gemma4": f"vllm:{config.VLLM_DEFAULT_MODEL}",
-    "gpt-oss": f"sglang:{config.SGLANG_DEFAULT_MODEL}",
+    "gemma4": "vllm:gemma-4-26b-a4b-nvfp4",
+    "nemotron": "vllm:nemotron-3-nano-30b-a3b-nvfp4",
+    "gpt-oss": "sglang:gpt-oss-20b",
+    "qwen3": "sglang:qwen3-30b-a3b-instruct-2507-fp8",
 }
 
 
@@ -212,10 +215,15 @@ async def _ensure_session(
             select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == username)
         )
         chat_session = result.scalar_one_or_none()
-        if chat_session is None:
-            raise SessionNotFoundException(detail=f"session_id={session_id}")
-        return chat_session
+        if chat_session is not None:
+            return chat_session
 
+        logger.info("Ignoring stale chat session id for user %s: %s", username, session_id)
+
+    return await _create_session(db, username, query)
+
+
+async def _create_session(db: AsyncSession, username: str, query: str) -> ChatSession:
     title = query.strip()[:40] or "새로운 보상 질의"
     chat_session = ChatSession(user_id=username, title=title)
     db.add(chat_session)

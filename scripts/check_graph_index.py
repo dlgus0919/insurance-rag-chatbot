@@ -67,7 +67,7 @@ def main() -> None:
 
     # 6. Hard Query Coverage Check
     print("\n--- Hard Query Fixture Coverage ---")
-
+    
     # Query 1 Check:
     # "기관지 식도루 폐쇄술" 수술 노드 존재 여부
     proc_bronchial = store.query(
@@ -75,25 +75,25 @@ def main() -> None:
     )
     q1_node_ok = len(proc_bronchial) > 0
     print(f"  Q1 Target Node (기관지 식도루 폐쇄술): {'PASS' if q1_node_ok else 'FAIL'}")
-
+    
     # 신1-5종 등급 연결 여부
     q1_grade_ok = False
     if q1_node_ok:
         node_id = proc_bronchial[0]["node_id"]
         grades = store.query(
             """
-            SELECT e.*, n.canonical_name
-            FROM graph_edges e
-            JOIN graph_nodes n ON e.target_node_id = n.node_id
+            SELECT e.*, n.canonical_name 
+            FROM graph_edges e 
+            JOIN graph_nodes n ON e.target_node_id = n.node_id 
             WHERE e.source_node_id = ? AND e.edge_type = 'HAS_GRADE'
-            """,
+            """, 
             (node_id,)
         )
         for g in grades:
             if "신1-5종" in g["canonical_name"]:
                 print(f"    - Has Grade: {g['canonical_name']}")
                 q1_grade_ok = True
-
+    
     # Peer procedures check
     q1_peers_ok = False
     if q1_grade_ok:
@@ -101,11 +101,11 @@ def main() -> None:
         # Check if there are other procedures connected to the same grade
         peers = store.query(
             """
-            SELECT COUNT(DISTINCT source_node_id) as count
-            FROM graph_edges
+            SELECT COUNT(DISTINCT source_node_id) as count 
+            FROM graph_edges 
             WHERE target_node_id = (
-                SELECT target_node_id FROM graph_edges
-                WHERE source_node_id = ? AND edge_type = 'HAS_GRADE'
+                SELECT target_node_id FROM graph_edges 
+                WHERE source_node_id = ? AND edge_type = 'HAS_GRADE' 
                 AND target_node_id LIKE 'grade_new_1_5_%' LIMIT 1
             ) AND source_node_id != ?
             """,
@@ -128,7 +128,7 @@ def main() -> None:
             q1_policy_ok = True
         else:
             print("    - PolicyBenefitRule covers this procedure: No")
-
+            
     print(f"  Q1 Overall Coverage: {'PASS' if (q1_node_ok and q1_grade_ok and q1_peers_ok and q1_policy_ok) else 'FAIL'}")
 
     # Query 2 Check:
@@ -138,7 +138,7 @@ def main() -> None:
     )
     q2_cat_ok = len(digestive_nodes) > 0
     print(f"  Q2 Target Category (소화기계): {'PASS' if q2_cat_ok else 'FAIL'}")
-
+    
     # Check if there are grade 5 procedures in digestive category
     q2_proc_ok = False
     if q2_cat_ok:
@@ -166,14 +166,31 @@ def main() -> None:
         "SELECT COUNT(*) as count FROM graph_edges WHERE edge_type = 'HAS_MEDICAL_FEE_CODE'"
     )[0]["count"]
     print(f"    - Medical Fee Code links count: {hira_link_count}")
+    q2_fee_ok = hira_link_count > 0
 
+    pancreas_fee_rows = store.query(
+        """
+        SELECT n.canonical_name, e.source_evidence_id
+        FROM graph_edges e
+        JOIN graph_nodes n ON e.target_node_id = n.node_id
+        WHERE e.source_node_id = 'proc_췌장이식수술'
+          AND e.edge_type = 'HAS_MEDICAL_FEE_CODE'
+        ORDER BY n.canonical_name
+        """
+    )
+    pancreas_fee_codes = [row["canonical_name"] for row in pancreas_fee_rows]
+    q2_pancreas_fee_ok = {"췌이식술-부분", "췌이식술-췌장 및 십이지장"}.issubset(set(pancreas_fee_codes))
+    q2_pancreas_evidence_ok = all(row["source_evidence_id"] for row in pancreas_fee_rows)
+    print(f"    - Pancreas Transplant Fee Codes: {', '.join(pancreas_fee_codes) if pancreas_fee_codes else 'missing'}")
+    print(f"    - Pancreas Fee Code Evidence: {'PASS' if q2_pancreas_evidence_ok else 'FAIL'}")
+    
     # Check if Policy Appendix payment ratio mapping exists
     policy_ratio_count = store.query(
         "SELECT COUNT(*) as count FROM graph_edges WHERE edge_type = 'PAYS_BY_RATIO'"
     )[0]["count"]
     print(f"    - Policy Appendix payment ratio links count: {policy_ratio_count}")
 
-    q2_overall = q2_cat_ok and q2_proc_ok and hira_link_count > 0 and policy_ratio_count > 0
+    q2_overall = q2_cat_ok and q2_proc_ok and q2_fee_ok and q2_pancreas_fee_ok and q2_pancreas_evidence_ok and policy_ratio_count > 0
     print(f"  Q2 Overall Coverage: {'PASS' if q2_overall else 'FAIL'}")
 
     # 7. Detailed Rule, Grade, Payment Ratio & Evidence Verification
@@ -190,47 +207,47 @@ def main() -> None:
         WHERE e.edge_type = 'POLICY_COVERS_PROCEDURE'
         """
     )
-
+    
     total_cover_edges = len(cover_edges)
     print(f"  Total POLICY_COVERS_PROCEDURE edges: {total_cover_edges}")
-
+    
     if total_cover_edges == 0:
         print("  [FAIL] No POLICY_COVERS_PROCEDURE edges found.")
         sys.exit(1)
-
+        
     invalid_rules = 0
     invalid_evidence = 0
     invalid_edge_evidence = 0
-
+    
     for idx, edge in enumerate(cover_edges):
         # 1) Rule Properties Validation
         try:
             props = json.loads(edge["rule_props"])
         except Exception:
             props = {}
-
+            
         rule_no = props.get("appendix_number")
         grade = props.get("grade_value")
         ratio = props.get("payment_ratio")
-
+        
         # Validate rule number (should be format like '18' or '17-1')
         if not rule_no or not re.match(r"^\d+(?:-\d+)?$", str(rule_no)):
             if invalid_rules < 5:
                 print(f"    - Invalid rule number '{rule_no}' for node {edge['source_node_id']}")
             invalid_rules += 1
-
+            
         # Validate grade (should be 1-5 or N)
         if not grade or str(grade) not in {"1", "2", "3", "4", "5", "N"}:
             if invalid_rules < 5:
                 print(f"    - Invalid grade '{grade}' for node {edge['source_node_id']}")
             invalid_rules += 1
-
+            
         # Validate payment ratio (should be 0%, 10%, 30%, 50%, 100%)
         if not ratio or str(ratio) not in {"0%", "10%", "30%", "50%", "100%"}:
             if invalid_rules < 5:
                 print(f"    - Invalid payment ratio '{ratio}' for node {edge['source_node_id']}")
             invalid_rules += 1
-
+            
         # 2) source_evidence_id Validation
         sev_id = edge["source_evidence_id"]
         if not sev_id:
@@ -244,7 +261,7 @@ def main() -> None:
                 if invalid_evidence < 5:
                     print(f"    - Evidence ID '{sev_id}' on edge {edge['edge_id']} does not exist in graph_evidence")
                 invalid_evidence += 1
-
+                
         # 3) graph_edge_evidence Validation
         edge_id = edge["edge_id"]
         if sev_id:
@@ -261,10 +278,10 @@ def main() -> None:
     print(f"    - Invalid Rule Props (rule_no/grade/ratio): {invalid_rules}")
     print(f"    - Missing/Invalid source_evidence_id: {invalid_evidence}")
     print(f"    - Missing graph_edge_evidence mapping: {invalid_edge_evidence}")
-
+    
     q3_ok = (invalid_rules == 0) and (invalid_evidence == 0) and (invalid_edge_evidence == 0)
     print(f"  Detailed Integrity Check: {'PASS' if q3_ok else 'FAIL'}")
-
+    
     if not q3_ok:
         sys.exit(1)
 

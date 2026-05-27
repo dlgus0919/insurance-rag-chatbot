@@ -1,7 +1,8 @@
 import { createAlertModal } from '../modules/modal.js';
 import { showError } from '../ui/notification.js';
+import { fetchAPI } from '../api.js';
 import { STORAGE_KEYS } from '../config.js';
-import { isEmpty } from '../utils.js';
+import { escapeHTML, isEmpty } from '../utils.js';
 
 export async function initLoginPage({ onLogin } = {}) {
   const loginButton = document.querySelector('.lp-btn');
@@ -9,6 +10,7 @@ export async function initLoginPage({ onLogin } = {}) {
   const passwordInput = document.getElementById('lpw') || document.getElementById('password');
 
   setupPasswordToggle();
+  await renderAvailableModelOptions();
   restoreSelectedModel();
 
   if (!loginButton || !usernameInput || !passwordInput || loginButton.dataset.phase2Bound) {
@@ -27,7 +29,12 @@ export async function initLoginPage({ onLogin } = {}) {
     }
 
     if (onLogin) {
-      const selectedModel = document.querySelector('input[name="llm-model"]:checked')?.value || 'ollama:exaone3.5:7.8b';
+      const selectedModel = document.querySelector('input[name="llm-model"]:checked')?.value;
+      if (!selectedModel) {
+        showError('현재 서버에서 사용 가능한 LLM 모델이 없습니다.');
+        createAlertModal('모델 선택 오류', '현재 서버에서 사용 가능한 LLM 모델이 없습니다. vLLM/SGLang/Ollama 상태를 확인해 주세요.', null).show();
+        return;
+      }
       localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, selectedModel);
 
       const originalText = loginButton.textContent;
@@ -67,9 +74,54 @@ function setupPasswordToggle() {
 }
 
 function restoreSelectedModel() {
-  const selectedModel = localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'ollama:exaone3.5:7.8b';
-  const radio = document.querySelector(`input[name="llm-model"][value="${selectedModel}"]`);
-  if (radio) radio.checked = true;
+  const savedModel = localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL);
+  const radios = [...document.querySelectorAll('input[name="llm-model"]')];
+  if (!radios.length) return;
+
+  const savedRadio = savedModel ? radios.find((radio) => radio.value === savedModel) : null;
+  const defaultRadio = radios.find((radio) => radio.dataset.default === 'true') || radios[0];
+  const selectedRadio = savedRadio || defaultRadio;
+  selectedRadio.checked = true;
+  localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, selectedRadio.value);
+}
+
+async function renderAvailableModelOptions() {
+  const group = document.getElementById('model-select-group');
+  if (!group) return;
+
+  try {
+    const response = await fetchAPI('/system/models');
+    const models = response.providers?.local || [];
+    if (!models.length) {
+      group.innerHTML = '<div class="lp-model-status">현재 서버에 로드되어 노출 가능한 로컬 LLM 모델이 없습니다.</div>';
+      return;
+    }
+
+    const defaultIds = new Set(Object.values(response.defaults || {}).filter(Boolean));
+    group.innerHTML = models.map((model, index) => renderModelOption(model, defaultIds.has(model.id) || index === 0)).join('');
+  } catch (error) {
+    console.warn('Failed to load model list:', error);
+    group.innerHTML = '<div class="lp-model-status">모델 목록을 불러오지 못했습니다. 서버 상태를 확인해 주세요.</div>';
+  }
+}
+
+function renderModelOption(model, isDefault) {
+  return `
+    <label class="lp-model-option" style="display: block;">
+      <input type="radio" name="llm-model" value="${escapeHTML(model.id)}" data-default="${isDefault ? 'true' : 'false'}">
+      <span class="lp-model-card">
+        <span class="lp-model-name">${escapeHTML(model.label || model.id)}</span>
+        <span class="lp-model-desc">${escapeHTML(describeModel(model.id))}</span>
+      </span>
+    </label>`;
+}
+
+function describeModel(modelId) {
+  if (modelId.startsWith('vllm:')) return 'vLLM 서버에서 현재 서빙 중인 모델';
+  if (modelId.startsWith('sglang:')) return 'SGLang 서버에서 현재 서빙 중인 모델';
+  if (modelId.startsWith('ollama:')) return 'Ollama에 설치되어 사용 가능한 저부하 모델';
+  if (modelId.startsWith('openai:')) return 'OpenAI API 설정이 있을 때 사용 가능한 클라우드 모델';
+  return '서버에서 사용 가능하다고 보고된 모델';
 }
 
 export function initLoginCanvas() {

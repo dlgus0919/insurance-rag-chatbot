@@ -19,7 +19,7 @@ def populated_db() -> str:
         path = tmp.name
 
     store = GraphStore(path)
-
+    
     # 1. Nodes
     # SurgeryProcedure
     proc1 = Node(
@@ -47,7 +47,7 @@ def populated_db() -> str:
         canonical_name="췌장 이식수술",
         normalized_name="췌장이식수술"
     )
-
+    
     # SurgeryGrade
     grade4 = Node(
         node_id="grade_new_1_5_4",
@@ -63,7 +63,7 @@ def populated_db() -> str:
         normalized_name="신15종5종",
         properties={"payment_ratio": "100%"}
     )
-
+    
     # SurgeryCategory
     cat_resp = Node(
         node_id="cat_respiratory",
@@ -85,6 +85,18 @@ def populated_db() -> str:
         canonical_name="QZ966",
         normalized_name="qz966"
     )
+    fee_pancreas_1 = Node(
+        node_id="fee_pancreas_001",
+        node_type=NodeType.MedicalFeeCode,
+        canonical_name="Q8061",
+        normalized_name="q8061"
+    )
+    fee_pancreas_2 = Node(
+        node_id="fee_pancreas_002",
+        node_type=NodeType.MedicalFeeCode,
+        canonical_name="Q8062",
+        normalized_name="q8062"
+    )
 
     # PolicyBenefitRule
     rule18 = Node(
@@ -95,7 +107,7 @@ def populated_db() -> str:
         properties={"appendix_number": "18", "grade_value": "4", "payment_ratio": "50%"}
     )
 
-    for n in [proc1, proc2, proc_liver, proc_pancreas, grade4, grade5, cat_resp, cat_dig, fee_liver, rule18]:
+    for n in [proc1, proc2, proc_liver, proc_pancreas, grade4, grade5, cat_resp, cat_dig, fee_liver, fee_pancreas_1, fee_pancreas_2, rule18]:
         store.upsert_node(n)
 
     # 2. Evidence
@@ -185,15 +197,31 @@ def populated_db() -> str:
         confidence=1.0,
         source_evidence_id="ev_001"
     )
+    edge_f2 = Edge(
+        edge_id="edge_f_pancreas_1",
+        source_node_id="proc_pancreas_transplant",
+        target_node_id="fee_pancreas_001",
+        edge_type=EdgeType.HAS_MEDICAL_FEE_CODE,
+        confidence=0.95,
+        source_evidence_id="ev_001"
+    )
+    edge_f3 = Edge(
+        edge_id="edge_f_pancreas_2",
+        source_node_id="proc_pancreas_transplant",
+        target_node_id="fee_pancreas_002",
+        edge_type=EdgeType.HAS_MEDICAL_FEE_CODE,
+        confidence=0.95,
+        source_evidence_id="ev_001"
+    )
 
-    for e in [edge_g1, edge_g2, edge_g3, edge_g4, edge_c1, edge_c2, edge_c3, edge_p1, edge_f1]:
+    for e in [edge_g1, edge_g2, edge_g3, edge_g4, edge_c1, edge_c2, edge_c3, edge_p1, edge_f1, edge_f2, edge_f3]:
         store.upsert_edge(e)
         if e.source_evidence_id:
             store.link_edge_evidence(e.edge_id, e.source_evidence_id, "support")
 
     store.commit()
     store.close()
-
+    
     yield path
     try:
         Path(path).unlink()
@@ -209,9 +237,9 @@ def test_retriever_hard_query_1(populated_db: str) -> None:
         "그 중 SOL 처음건강보험 [별표7]에서 동일한 대분류 항목에 들어가는 수술이 있다면 표시해줘."
     )
     result = retriever.retrieve(query)
-
+    
     assert len(result.facts) > 0
-
+    
     # 1. Check Grade Fact (confirmed)
     grade_facts = [f for f in result.facts if f.relation == "HAS_GRADE" and f.subject == "기관지 식도루 폐쇄술"]
     assert len(grade_facts) == 1
@@ -225,7 +253,7 @@ def test_retriever_hard_query_1(populated_db: str) -> None:
     peer_facts = [f for f in result.facts if f.relation == "SAME_GRADE_PEER"]
     assert len(peer_facts) >= 1
     assert peer_facts[0].subject == "폐장 이식수술"
-
+    
     # 3. Check Policy Covers Fact (candidate)
     policy_facts = [f for f in result.facts if f.relation == "POLICY_COVERS_PROCEDURE"]
     assert len(policy_facts) == 1
@@ -241,29 +269,28 @@ def test_retriever_hard_query_2(populated_db: str) -> None:
         "각각의 수가코드와 SOL 건강보험에서 지급되는 보험금 비율도 같이 알려줘."
     )
     result = retriever.retrieve(query)
-
+    
     # Check that digestive grade 5 surgeries are fetched: 간장 이식수술, 췌장 이식수술
     facts = result.facts
     assert len(facts) > 0
-
+    
     # Liver Transplant: has fee code (confirmed), missing policy (missing)
     liver_fee = [f for f in facts if f.subject == "간장 이식수술" and f.relation == "HAS_MEDICAL_FEE_CODE"]
     assert len(liver_fee) == 1
     assert liver_fee[0].object == "QZ966"
     assert liver_fee[0].status == "confirmed"
-
-    # Pancreas Transplant: missing fee code (missing), missing policy (missing)
+    
+    # Pancreas Transplant: HIRA has two fee code rows.
     pancreas_fee = [f for f in facts if f.subject == "췌장 이식수술" and f.relation == "HAS_MEDICAL_FEE_CODE"]
-    assert len(pancreas_fee) == 1
-    assert pancreas_fee[0].object is None
-    assert pancreas_fee[0].status == "missing"
+    assert {f.object for f in pancreas_fee} == {"Q8061", "Q8062"}
+    assert all(f.status == "confirmed" for f in pancreas_fee)
 
 
 def test_retriever_missing_db() -> None:
     # Testing graceful fallback on non-existent DB
     retriever = GraphRetriever("non_existent_db_12345.sqlite")
     result = retriever.retrieve("기관지 식도루 폐쇄술의 수술 등급을 알려줘.")
-
+    
     assert len(result.facts) == 0
     assert len(result.warnings) == 1
     assert "not found" in result.warnings[0]

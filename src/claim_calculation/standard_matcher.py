@@ -13,7 +13,7 @@ def match_standard_code(input_name: str, input_code: str = "") -> list[StandardM
     1. input_code가 주어진 경우 exact match를 우선 시도한다.
     2. exact match가 실패하거나 input_code가 없는 경우 input_name으로 fuzzy search를 수행한다.
     3. 검색 결과가 2개 이상인 경우 모든 결과의 requires_user_disambiguation을 True로 설정한다.
-    4. pay_opn_cd_nm이 "추가확인"이거나 비어있으면 requires_review를 True로 설정한다.
+    4. pay_opn_cd_nm이 "추가확인", "면책"이거나 비어있으면 requires_review를 True로 설정한다.
     """
     input_code = input_code.strip()
     input_name = input_name.strip()
@@ -52,8 +52,8 @@ def _row_to_standard_match(row: dict[str, Any], match_confidence: str) -> Standa
     pay_opn = row.get("pay_opn_cd_nm") or ""
     pay_opn_clean = pay_opn.strip()
 
-    # pay_opn_cd_nm이 "추가확인"이거나 비어있는 경우
-    requires_review = (pay_opn_clean == "추가확인") or (not pay_opn_clean)
+    # pay_opn_cd_nm이 "추가확인", "면책"이거나 비어있는 경우
+    requires_review = (pay_opn_clean == "추가확인") or ("면책" in pay_opn_clean) or (not pay_opn_clean)
 
     return StandardMatch(
         std_cd=row.get("std_cd") or "",
