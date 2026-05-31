@@ -29,3 +29,9 @@ def test_large_eval_allows_required_any_after_normalization():
     answer = "기존에는 40 %만 보상했으나 이후 80 %까지 보상합니다."
 
     assert _contains_any(answer, ["40%"])
+
+
+def test_large_eval_normalizes_korean_money_units():
+    answer = "연간 한도는 3,500,000원이며 공제금액은 60,000원입니다."
+
+    assert _contains_all(answer, ["350만원", "6만원"])

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json as jsonlib
 import re
+import time
 from typing import Iterator
 
 import requests
@@ -11,8 +12,10 @@ import requests
 from src import config
 
 DEFAULT_TIMEOUT = 120
+MAX_RETRIES = 3
 FINAL_MARKER_RE = re.compile(r"<\|channel\|>final<\|message\|>")
 HARMONY_TOKEN_RE = re.compile(r"<\|(?:channel|message|end|start|return)\|>|<pad>")
+RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 
 
 def _extract_final_content(content: str) -> str:
@@ -36,6 +39,19 @@ def _should_disable_thinking(model: str, provider: str) -> bool:
 
     name = model.lower()
     return provider == "vllm" and "nemotron" in name
+
+
+def _retry_delay_seconds(response: requests.Response | None, attempt: int) -> float:
+    """Return a bounded retry delay for transient local-serving errors."""
+
+    if response is not None:
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                return max(0.0, min(float(retry_after), 10.0))
+            except ValueError:
+                pass
+    return min(float(2 ** attempt), 10.0)
 
 
 class OpenAICompatibleClient:
@@ -91,15 +107,26 @@ class OpenAICompatibleClient:
     ) -> str:
         """Generate a non-streaming answer. num_ctx is ignored by OpenAI-compatible APIs."""
 
-        try:
-            response = requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json=self._payload(prompt, system, temperature, stream=False),
-                timeout=DEFAULT_TIMEOUT,
-            )
-        except requests.RequestException as exc:
-            raise RuntimeError(f"SGLang 호출 실패: {exc}") from exc
+        response: requests.Response | None = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._headers(),
+                    json=self._payload(prompt, system, temperature, stream=False),
+                    timeout=DEFAULT_TIMEOUT,
+                )
+            except requests.RequestException as exc:
+                if attempt < MAX_RETRIES:
+                    time.sleep(_retry_delay_seconds(None, attempt))
+                    continue
+                raise RuntimeError(f"SGLang 호출 실패: {exc}") from exc
+            if response.status_code not in RETRYABLE_STATUS_CODES or attempt >= MAX_RETRIES:
+                break
+            time.sleep(_retry_delay_seconds(response, attempt))
+
+        if response is None:
+            raise RuntimeError("SGLang 호출 실패: 응답을 받지 못했습니다.")
         if response.status_code >= 400:
             raise RuntimeError(f"SGLang 응답 오류(status={response.status_code}): {response.text[:300]}")
         data = response.json()
@@ -114,59 +141,67 @@ class OpenAICompatibleClient:
     def generate_stream(self, prompt: str, system: str = "", temperature: float = 0.2) -> Iterator[str]:
         """Yield streaming answer tokens."""
 
-        try:
-            with requests.post(
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json=self._payload(prompt, system, temperature, stream=True),
-                stream=True,
-                timeout=DEFAULT_TIMEOUT,
-            ) as response:
-                if response.status_code >= 400:
-                    raise RuntimeError(f"SGLang 스트림 오류(status={response.status_code}): {response.text[:300]}")
-                
-                harmony_mode = _uses_harmony_stream(self.model, self.provider)
-                buffer = ""
-                emitting = not harmony_mode
-                
-                for raw in response.iter_lines():
-                    if not raw:
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                with requests.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._headers(),
+                    json=self._payload(prompt, system, temperature, stream=True),
+                    stream=True,
+                    timeout=DEFAULT_TIMEOUT,
+                ) as response:
+                    if response.status_code in RETRYABLE_STATUS_CODES and attempt < MAX_RETRIES:
+                        time.sleep(_retry_delay_seconds(response, attempt))
                         continue
-                    line = raw.decode("utf-8")
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[len("data: ") :]
-                    if payload.strip() == "[DONE]":
-                        break
-                    try:
-                        data = jsonlib.loads(payload)
-                    except jsonlib.JSONDecodeError:
-                        continue
-                    delta = data.get("choices", [{}])[0].get("delta", {})
-                    token = delta.get("content") or ""
-                    if not token:
-                        continue
-                        
-                    if not harmony_mode:
-                        cleaned = HARMONY_TOKEN_RE.sub("", token)
-                        if cleaned:
-                            yield cleaned
-                        continue
-                        
-                    if emitting:
-                        cleaned = HARMONY_TOKEN_RE.sub("", token.replace("<|return|>", "").replace("<|end|>", ""))
-                        if cleaned:
-                            yield cleaned
-                        continue
-                    buffer += token
-                    match = FINAL_MARKER_RE.search(buffer)
-                    if match:
-                        emitting = True
-                        cleaned = _extract_final_content(buffer)
-                        if cleaned:
-                            yield cleaned
-        except requests.RequestException as exc:
-            raise RuntimeError(f"SGLang 스트림 호출 실패: {exc}") from exc
+                    if response.status_code >= 400:
+                        raise RuntimeError(f"SGLang 스트림 오류(status={response.status_code}): {response.text[:300]}")
+
+                    harmony_mode = _uses_harmony_stream(self.model, self.provider)
+                    buffer = ""
+                    emitting = not harmony_mode
+
+                    for raw in response.iter_lines():
+                        if not raw:
+                            continue
+                        line = raw.decode("utf-8")
+                        if not line.startswith("data: "):
+                            continue
+                        payload = line[len("data: ") :]
+                        if payload.strip() == "[DONE]":
+                            break
+                        try:
+                            data = jsonlib.loads(payload)
+                        except jsonlib.JSONDecodeError:
+                            continue
+                        delta = data.get("choices", [{}])[0].get("delta", {})
+                        token = delta.get("content") or ""
+                        if not token:
+                            continue
+
+                        if not harmony_mode:
+                            cleaned = HARMONY_TOKEN_RE.sub("", token)
+                            if cleaned:
+                                yield cleaned
+                            continue
+
+                        if emitting:
+                            cleaned = HARMONY_TOKEN_RE.sub("", token.replace("<|return|>", "").replace("<|end|>", ""))
+                            if cleaned:
+                                yield cleaned
+                            continue
+                        buffer += token
+                        match = FINAL_MARKER_RE.search(buffer)
+                        if match:
+                            emitting = True
+                            cleaned = _extract_final_content(buffer)
+                            if cleaned:
+                                yield cleaned
+                    return
+            except requests.RequestException as exc:
+                if attempt < MAX_RETRIES:
+                    time.sleep(_retry_delay_seconds(None, attempt))
+                    continue
+                raise RuntimeError(f"SGLang 스트림 호출 실패: {exc}") from exc
 
     def list_models(self) -> list[str]:
         """Return model IDs reported by the configured endpoint."""

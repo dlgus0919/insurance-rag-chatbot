@@ -84,7 +84,16 @@ def test_list_available_models_hides_cloud_in_offline_mode(monkeypatch) -> None:
     monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
     monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint, api_key=None: [])
 
-    assert factory.list_available_models() == {"sglang": ["gpt-oss-20b"], "vllm": ["gemma-4-26b-a4b-nvfp4"], "ollama": [], "openai": []}
+    assert factory.list_available_models() == {
+        "sglang": ["gpt-oss-20b"],
+        "vllm": [
+            "gemma-4-26b-a4b-nvfp4",
+            "gemma-4-31b-it-nvfp4",
+            "nemotron-3-nano-30b-a3b-nvfp4",
+        ],
+        "ollama": [],
+        "openai": [],
+    }
 
 
 def test_build_llm_routes_to_ollama(monkeypatch) -> None:

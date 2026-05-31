@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Literal, Optional, Set
 
 from src.graph.query_planner import GraphQueryPlan, GraphQueryPlanner
+from src.graph.schema import EdgeType, NodeType
 from src.graph.store import GraphStore
-from src.graph.normalizer import normalize_name
+from src.graph.normalizer import normalize_code, normalize_name
 
 
 @dataclass
@@ -42,6 +44,47 @@ class GraphRetrievalResult:
     source_chunk_ids: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     debug: dict[str, Any] = field(default_factory=dict)
+    session_assertions: List["SessionAssertion"] = field(default_factory=list)
+    review_paths: List["GraphReviewPath"] = field(default_factory=list)
+    required_evidence: List[str] = field(default_factory=list)
+    review_actions: List[str] = field(default_factory=list)
+
+
+@dataclass
+class SessionAssertion:
+    kind: Literal["diagnosis", "procedure", "fee_code", "coverage_topic", "condition", "complication"]
+    value: str
+    source: Literal["question", "claim_form", "receipt_parser", "detail_statement_parser"] = "question"
+    confidence: float = 1.0
+    notes: str = ""
+
+
+@dataclass
+class GraphPathStep:
+    source: Literal["session", "graphdb"]
+    subject: str
+    relation: str
+    object: Optional[str]
+    status: Literal["asserted", "confirmed", "candidate", "missing"]
+    evidence: List[GraphEvidence] = field(default_factory=list)
+    notes: str = ""
+
+
+@dataclass
+class GraphReviewPath:
+    path_id: str
+    path_type: Literal[
+        "complication_review",
+        "diagnosis_review",
+        "procedure_policy_review",
+        "claim_condition_review",
+        "claim_calculation_review",
+    ]
+    steps: List[GraphPathStep] = field(default_factory=list)
+    status: Literal["missing", "candidate", "review_required", "confirmed"] = "missing"
+    summary: str = ""
+    required_evidence: List[str] = field(default_factory=list)
+    review_actions: List[str] = field(default_factory=list)
 
 
 def _grade_prefix_for_system(grade_system: str | None) -> str | None:
@@ -100,10 +143,31 @@ def _dedupe_facts(facts: List[GraphFact]) -> List[GraphFact]:
     return [merged[key] for key in order]
 
 
+_REVIEW_GRAPH_STEP_LIMIT = 8
+_SOURCE_PRIORITY_SCORE = {
+    "high": 30,
+    "medium": 15,
+    "low": 5,
+}
+
+
+def _load_json_object(raw: Any) -> dict[str, Any]:
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        loaded = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
 class GraphRetriever:
     def __init__(self, db_path: str | Path) -> None:
         self.db_path = Path(db_path)
         self.planner = GraphQueryPlanner()
+        self.complication_keywords = ["합병증", "합병증 치료", "수술 후 합병증", "부작용", "후유증", "미용 목적 시술 후 합병증"]
 
     def _get_evidence_by_id(self, store: GraphStore, evidence_id: str) -> Optional[GraphEvidence]:
         rows = store.query("SELECT * FROM graph_evidence WHERE evidence_id = ?", (evidence_id,))
@@ -127,7 +191,7 @@ class GraphRetriever:
         evidences = []
         rows = store.query(
             """
-            SELECT ge.* 
+            SELECT ge.*
             FROM graph_node_evidence gne
             JOIN graph_evidence ge ON gne.evidence_id = ge.evidence_id
             WHERE gne.node_id = ?
@@ -153,7 +217,7 @@ class GraphRetriever:
         evidences = []
         rows = store.query(
             """
-            SELECT ge.* 
+            SELECT ge.*
             FROM graph_edge_evidence gee
             JOIN graph_evidence ge ON gee.evidence_id = ge.evidence_id
             WHERE gee.edge_id = ?
@@ -175,10 +239,476 @@ class GraphRetriever:
             ))
         return evidences
 
+    def _query_nodes_by_type(self, store: GraphStore, node_type: NodeType, names: list[str]) -> list[Any]:
+        if not names:
+            return []
+        matched: list[Any] = []
+        seen: set[str] = set()
+        for name in names:
+            normalized = normalize_name(name)
+            rows = store.query(
+                """
+                SELECT *
+                FROM graph_nodes
+                WHERE node_type = ?
+                  AND (normalized_name = ? OR normalized_name LIKE ?)
+                """,
+                (node_type.value, normalized, f"%{normalized}%"),
+            )
+            for row in rows:
+                if row["node_id"] not in seen:
+                    matched.append(row)
+                    seen.add(row["node_id"])
+        return matched
+
+    def _find_linked_sources(
+        self,
+        store: GraphStore,
+        target_node_id: str,
+        edge_type: EdgeType,
+    ) -> list[dict[str, Any]]:
+        return [
+            dict(row)
+            for row in store.query(
+                """
+                SELECT e.edge_id, e.properties_json, e.confidence,
+                       src.node_id as node_id, src.node_type as node_type,
+                       src.canonical_name as canonical_name, src.properties_json as node_props
+                FROM graph_edges e
+                JOIN graph_nodes src ON e.source_node_id = src.node_id
+                WHERE e.target_node_id = ? AND e.edge_type = ?
+                """,
+                (target_node_id, edge_type.value),
+            )
+        ]
+
+    def _find_linked_targets(
+        self,
+        store: GraphStore,
+        source_node_id: str,
+        edge_type: EdgeType,
+    ) -> list[dict[str, Any]]:
+        return [
+            dict(row)
+            for row in store.query(
+                """
+                SELECT e.edge_id, e.properties_json, e.confidence,
+                       dst.node_id as node_id, dst.node_type as node_type,
+                       dst.canonical_name as canonical_name, dst.properties_json as node_props
+                FROM graph_edges e
+                JOIN graph_nodes dst ON e.target_node_id = dst.node_id
+                WHERE e.source_node_id = ? AND e.edge_type = ?
+                """,
+                (source_node_id, edge_type.value),
+            )
+        ]
+
+    def _build_session_assertions(self, plan: GraphQueryPlan, question: str) -> list[SessionAssertion]:
+        assertions: list[SessionAssertion] = []
+        for code in plan.diagnosis_codes:
+            assertions.append(SessionAssertion(kind="diagnosis", value=code))
+        if plan.procedure_name:
+            assertions.append(SessionAssertion(kind="procedure", value=plan.procedure_name))
+        if plan.hira_code:
+            assertions.append(SessionAssertion(kind="fee_code", value=plan.hira_code))
+        for topic in plan.coverage_topics:
+            assertions.append(SessionAssertion(kind="coverage_topic", value=topic))
+        for condition in plan.conditions:
+            assertions.append(SessionAssertion(kind="condition", value=condition))
+        if plan.complication_asserted:
+            matched_concept = "합병증"
+            for keyword in self.complication_keywords:
+                if keyword in question:
+                    matched_concept = keyword
+                    break
+            assertions.append(SessionAssertion(kind="complication", value=matched_concept))
+        return assertions
+
+    def _matches_context(self, plan: GraphQueryPlan, node_id: str, store: GraphStore) -> bool:
+        generation_targets = self._find_linked_targets(store, node_id, EdgeType.APPLIES_TO_GENERATION)
+        if plan.policy_generation and generation_targets:
+            allowed = {row["canonical_name"] for row in generation_targets}
+            if plan.policy_generation == "5th" and "5세대" not in allowed and "공통" not in allowed:
+                return False
+            if plan.policy_generation == "4th" and "4세대" not in allowed and "공통" not in allowed:
+                return False
+
+        visit_targets = self._find_linked_targets(store, node_id, EdgeType.APPLIES_TO_VISIT)
+        if plan.visit_type and visit_targets:
+            allowed = {row["canonical_name"] for row in visit_targets}
+            mapping = {"outpatient": "통원", "hospitalization": "입원"}
+            if mapping.get(plan.visit_type) not in allowed:
+                return False
+
+        facility_targets = self._find_linked_targets(store, node_id, EdgeType.APPLIES_TO_FACILITY)
+        if plan.facility_type and facility_targets:
+            allowed = {row["canonical_name"] for row in facility_targets}
+            if plan.facility_type not in allowed:
+                return False
+        return True
+
+    def _linked_target_names(self, store: GraphStore, node_id: str, edge_type: EdgeType) -> set[str]:
+        return {row["canonical_name"] for row in self._find_linked_targets(store, node_id, edge_type)}
+
+    def _review_clause_match_state(
+        self,
+        store: GraphStore,
+        plan: GraphQueryPlan,
+        clause: dict[str, Any],
+        relation: EdgeType,
+        matched_object: str,
+    ) -> tuple[bool, int, str]:
+        """Return whether a clause is directly usable for the user's asserted context."""
+        node_id = clause["node_id"]
+        props = _load_json_object(clause.get("node_props") or clause.get("properties_json"))
+        condition_targets = self._linked_target_names(store, node_id, EdgeType.APPLIES_WHEN)
+        topic_targets = self._linked_target_names(store, node_id, EdgeType.HAS_TOPIC)
+        generation_targets = self._linked_target_names(store, node_id, EdgeType.APPLIES_TO_GENERATION)
+        visit_targets = self._linked_target_names(store, node_id, EdgeType.APPLIES_TO_VISIT)
+        facility_targets = self._linked_target_names(store, node_id, EdgeType.APPLIES_TO_FACILITY)
+
+        plan_conditions = set(plan.conditions or [])
+        plan_topics = set(plan.coverage_topics or [])
+        condition_match = bool(condition_targets & plan_conditions)
+        topic_match = bool(topic_targets & plan_topics)
+
+        score = _SOURCE_PRIORITY_SCORE.get(str(props.get("source_priority") or ""), 0)
+        score += int((clause.get("confidence") or 0) * 10)
+        score += 8 if props.get("decision_polarity") in {"exclusion", "coverage", "review", "evidence"} else 0
+        score += 8 if relation == EdgeType.APPLIES_WHEN else 0
+        score += 6 if relation == EdgeType.HAS_TOPIC else 0
+        score += 4 if relation == EdgeType.RELATES_TO_COMPLICATION else 0
+        score += 25 if condition_match else 0
+        score += 15 if topic_match else 0
+        if matched_object and matched_object in condition_targets | topic_targets:
+            score += 10
+
+        if plan.policy_generation:
+            generation_name = "5세대" if plan.policy_generation == "5th" else "4세대"
+            if generation_name in generation_targets:
+                score += 8
+            elif "공통" in generation_targets:
+                score += 3
+        if plan.visit_type:
+            visit_name = {"outpatient": "통원", "hospitalization": "입원"}.get(plan.visit_type)
+            if visit_name and visit_name in visit_targets:
+                score += 5
+        if plan.facility_type and plan.facility_type in facility_targets:
+            score += 5
+
+        condition_gate_ok = not condition_targets or condition_match
+        topic_gate_ok = not topic_targets or topic_match or not plan_topics
+        context_direct = condition_match or topic_match or relation in {EdgeType.APPLIES_WHEN, EdgeType.HAS_TOPIC}
+        if relation == EdgeType.RELATES_TO_COMPLICATION:
+            context_direct = context_direct or not condition_targets
+        strong = condition_gate_ok and topic_gate_ok and context_direct
+        note = str(props.get("decision_polarity") or "")
+        if strong:
+            note = f"{note}; 입력 조건 직접 일치".strip("; ")
+        elif condition_targets:
+            note = f"{note}; 조건 후보({', '.join(sorted(condition_targets))})".strip("; ")
+        return strong, score, note
+
+    def _collect_review_paths(
+        self,
+        store: GraphStore,
+        plan: GraphQueryPlan,
+        question: str,
+    ) -> tuple[list[SessionAssertion], list[GraphReviewPath], set[str]]:
+        session_assertions = self._build_session_assertions(plan, question)
+        review_paths: list[GraphReviewPath] = []
+        source_chunk_ids: set[str] = set()
+
+        def append_source_chunks(evidences: list[GraphEvidence]) -> None:
+            for evidence in evidences:
+                if evidence.chunk_id:
+                    source_chunk_ids.add(evidence.chunk_id)
+
+        # complication review
+        if plan.complication_asserted:
+            concept_names = [a.value for a in session_assertions if a.kind == "complication"] or ["합병증"]
+            nodes = self._query_nodes_by_type(store, NodeType.ComplicationConcept, concept_names)
+            steps = [
+                GraphPathStep(
+                    source="session",
+                    subject="질문/입력",
+                    relation="ASSERTS",
+                    object=name,
+                    status="asserted",
+                )
+                for name in concept_names
+            ]
+            status: Literal["missing", "candidate", "review_required", "confirmed"] = "review_required"
+            summary = "질문에서 합병증 상황이 주장되어 관련 약관 조항과 증빙 요건을 검토했습니다."
+            required_evidence: list[str] = []
+            review_actions: list[str] = []
+            confirmed_exclusion = False
+            candidate_exclusion = False
+            matched_any = False
+            graph_steps: list[tuple[int, GraphPathStep, list[GraphEvidence], str]] = []
+            for node in nodes:
+                for clause in self._find_linked_sources(store, node["node_id"], EdgeType.RELATES_TO_COMPLICATION):
+                    if not self._matches_context(plan, clause["node_id"], store):
+                        continue
+                    matched_any = True
+                    evidences = self._get_node_evidences(store, clause["node_id"])
+                    strong_match, score, note = self._review_clause_match_state(
+                        store,
+                        plan,
+                        clause,
+                        EdgeType.RELATES_TO_COMPLICATION,
+                        node["canonical_name"],
+                    )
+                    graph_steps.append((
+                        score,
+                        GraphPathStep(
+                            source="graphdb",
+                            subject=clause["canonical_name"],
+                            relation="RELATES_TO_COMPLICATION",
+                            object=node["canonical_name"],
+                            status="confirmed" if strong_match else "candidate",
+                            evidence=evidences,
+                            notes=note,
+                        ),
+                        evidences,
+                        clause["node_id"],
+                    ))
+                    if _load_json_object(clause["node_props"]).get("decision_polarity") == "exclusion":
+                        if strong_match:
+                            confirmed_exclusion = True
+                        else:
+                            candidate_exclusion = True
+                    for decision in self._find_linked_targets(store, clause["node_id"], EdgeType.HAS_DECISION):
+                        graph_steps.append((
+                            score - 1,
+                            GraphPathStep(
+                                source="graphdb",
+                                subject=clause["canonical_name"],
+                                relation="HAS_DECISION",
+                                object=decision["canonical_name"],
+                                status="confirmed" if strong_match else "candidate",
+                                evidence=evidences,
+                                notes=note,
+                            ),
+                            evidences,
+                            clause["node_id"],
+                        ))
+                        if decision["canonical_name"] == "면책":
+                            if strong_match:
+                                confirmed_exclusion = True
+                            else:
+                                candidate_exclusion = True
+                    for req in self._find_linked_targets(store, clause["node_id"], EdgeType.REQUIRES_EVIDENCE):
+                        required_evidence.append(req["canonical_name"])
+                    for action in self._find_linked_targets(store, clause["node_id"], EdgeType.HAS_REVIEW_ACTION):
+                        review_actions.append(action["canonical_name"])
+            selected_graph_steps = sorted(
+                graph_steps,
+                key=lambda item: (-item[0], item[1].subject, item[1].relation, item[1].object or ""),
+            )[:_REVIEW_GRAPH_STEP_LIMIT]
+            seen_steps: set[tuple[str, str, str | None]] = set()
+            for _, step, evidences, _ in selected_graph_steps:
+                key = (step.subject, step.relation, step.object)
+                if key in seen_steps:
+                    continue
+                seen_steps.add(key)
+                append_source_chunks(evidences)
+                steps.append(step)
+            if not matched_any:
+                status = "missing"
+                summary = "합병증 관련 직접 조항을 구조화 그래프에서 확인하지 못했습니다."
+            elif confirmed_exclusion:
+                status = "confirmed"
+                summary = "질문/입력 조건과 직접 맞는 합병증 관련 면책/제외 조항을 확인했습니다."
+            elif candidate_exclusion:
+                summary = "합병증 관련 면책 후보 조항이 있으나, 입력 조건과 직접 일치하는지 추가 확인이 필요합니다."
+            review_paths.append(
+                GraphReviewPath(
+                    path_id=f"complication::{normalize_name(question)[:40]}",
+                    path_type="complication_review",
+                    steps=steps,
+                    status=status,
+                    summary=summary,
+                    required_evidence=sorted(set(required_evidence)),
+                    review_actions=sorted(set(review_actions)),
+                )
+            )
+
+        # diagnosis review
+        if plan.diagnosis_codes:
+            for code in plan.diagnosis_codes:
+                rows = store.query(
+                    "SELECT * FROM graph_nodes WHERE node_type = ? AND normalized_name = ?",
+                    (NodeType.DiagnosisCode.value, normalize_code(code)),
+                )
+                steps = [
+                    GraphPathStep(
+                        source="session",
+                        subject="질문/입력",
+                        relation="ASSERTS",
+                        object=code,
+                        status="asserted",
+                    )
+                ]
+                status: Literal["missing", "candidate", "review_required", "confirmed"] = "missing"
+                summary = "문서에서 직접 연결된 진단코드 근거를 찾지 못했습니다."
+                required_evidence: list[str] = []
+                review_actions: list[str] = []
+                if rows:
+                    diag_node = rows[0]
+                    clauses = self._find_linked_sources(store, diag_node["node_id"], EdgeType.RELATES_TO_DIAGNOSIS)
+                    cases = self._find_linked_sources(store, diag_node["node_id"], EdgeType.RELATES_TO_DIAGNOSIS)
+                    combined = clauses + [case for case in cases if case["node_id"] not in {c["node_id"] for c in clauses}]
+                    if combined:
+                        status = "confirmed"
+                        summary = "문서에 직접 언급된 진단코드와 연결된 약관/사례 근거를 찾았습니다."
+                    for node in combined:
+                        if not self._matches_context(plan, node["node_id"], store):
+                            continue
+                        evidences = self._get_node_evidences(store, node["node_id"])
+                        append_source_chunks(evidences)
+                        steps.append(
+                            GraphPathStep(
+                                source="graphdb",
+                                subject=node["canonical_name"],
+                                relation="RELATES_TO_DIAGNOSIS",
+                                object=code,
+                                status="confirmed",
+                                evidence=evidences,
+                            )
+                        )
+                        for req in self._find_linked_targets(store, node["node_id"], EdgeType.REQUIRES_EVIDENCE):
+                            required_evidence.append(req["canonical_name"])
+                        for action in self._find_linked_targets(store, node["node_id"], EdgeType.HAS_REVIEW_ACTION):
+                            review_actions.append(action["canonical_name"])
+                review_paths.append(
+                    GraphReviewPath(
+                        path_id=f"diagnosis::{normalize_name(code)}",
+                        path_type="diagnosis_review",
+                        steps=steps,
+                        status=status,
+                        summary=summary,
+                        required_evidence=sorted(set(required_evidence)),
+                        review_actions=sorted(set(review_actions)),
+                    )
+                )
+
+        # claim condition / topic review
+        condition_names = list(dict.fromkeys(plan.conditions + plan.coverage_topics))
+        if condition_names:
+            session_steps: list[GraphPathStep] = []
+            graph_candidates: list[tuple[int, GraphPathStep, list[GraphEvidence], dict[str, Any], bool]] = []
+            matched_any = False
+            required_evidence: list[str] = []
+            review_actions: list[str] = []
+            confirmed_exclusion = False
+            for name in condition_names:
+                session_steps.append(
+                    GraphPathStep(source="session", subject="질문/입력", relation="ASSERTS", object=name, status="asserted")
+                )
+                cond_nodes = self._query_nodes_by_type(store, NodeType.ClaimCondition, [name])
+                for cond in cond_nodes:
+                    for clause in self._find_linked_sources(store, cond["node_id"], EdgeType.APPLIES_WHEN):
+                        if not self._matches_context(plan, clause["node_id"], store):
+                            continue
+                        matched_any = True
+                        evidences = self._get_node_evidences(store, clause["node_id"])
+                        strong_match, score, note = self._review_clause_match_state(
+                            store,
+                            plan,
+                            clause,
+                            EdgeType.APPLIES_WHEN,
+                            cond["canonical_name"],
+                        )
+                        graph_candidates.append((
+                            score,
+                            GraphPathStep(
+                                source="graphdb",
+                                subject=clause["canonical_name"],
+                                relation="APPLIES_WHEN",
+                                object=cond["canonical_name"],
+                                status="confirmed" if strong_match else "candidate",
+                                evidence=evidences,
+                                notes=note,
+                            )
+                            ,
+                            evidences,
+                            clause,
+                            strong_match,
+                        ))
+                topic_nodes = self._query_nodes_by_type(store, NodeType.CoverageItem, [name])
+                for topic in topic_nodes:
+                    for clause in self._find_linked_sources(store, topic["node_id"], EdgeType.HAS_TOPIC):
+                        if not self._matches_context(plan, clause["node_id"], store):
+                            continue
+                        matched_any = True
+                        evidences = self._get_node_evidences(store, clause["node_id"])
+                        strong_match, score, note = self._review_clause_match_state(
+                            store,
+                            plan,
+                            clause,
+                            EdgeType.HAS_TOPIC,
+                            topic["canonical_name"],
+                        )
+                        graph_candidates.append((
+                            score,
+                            GraphPathStep(
+                                source="graphdb",
+                                subject=clause["canonical_name"],
+                                relation="HAS_TOPIC",
+                                object=topic["canonical_name"],
+                                status="confirmed" if strong_match else "candidate",
+                                evidence=evidences,
+                                notes=note,
+                            )
+                            ,
+                            evidences,
+                            clause,
+                            strong_match,
+                        ))
+            steps: list[GraphPathStep] = list(session_steps)
+            selected_candidates = sorted(
+                graph_candidates,
+                key=lambda item: (-item[0], item[1].subject, item[1].relation, item[1].object or ""),
+            )
+            seen_candidates: set[tuple[str, str, str | None]] = set()
+            for _, step, evidences, clause, strong_match in selected_candidates:
+                key = (step.subject, step.relation, step.object)
+                if key in seen_candidates:
+                    continue
+                seen_candidates.add(key)
+                append_source_chunks(evidences)
+                steps.append(step)
+                clause_props = _load_json_object(clause.get("node_props"))
+                if strong_match and clause_props.get("decision_polarity") == "exclusion":
+                    confirmed_exclusion = True
+                for decision in self._find_linked_targets(store, clause["node_id"], EdgeType.HAS_DECISION):
+                    if strong_match and decision["canonical_name"] == "면책":
+                        confirmed_exclusion = True
+                for req in self._find_linked_targets(store, clause["node_id"], EdgeType.REQUIRES_EVIDENCE):
+                    required_evidence.append(req["canonical_name"])
+                for action in self._find_linked_targets(store, clause["node_id"], EdgeType.HAS_REVIEW_ACTION):
+                    review_actions.append(action["canonical_name"])
+                if len(steps) - len(session_steps) >= _REVIEW_GRAPH_STEP_LIMIT:
+                    break
+            review_paths.append(
+                GraphReviewPath(
+                    path_id=f"condition::{normalize_name(' '.join(condition_names))[:40]}",
+                    path_type="claim_condition_review",
+                    steps=steps,
+                    status="confirmed" if matched_any and confirmed_exclusion else ("review_required" if matched_any else "missing"),
+                    summary="문서 기반 보장 주제/판단 조건 검토 경로를 수집했습니다." if matched_any else "직접 연결된 판단 조건 경로를 찾지 못했습니다.",
+                    required_evidence=sorted(set(required_evidence)),
+                    review_actions=sorted(set(review_actions)),
+                )
+            )
+
+        return session_assertions, review_paths, source_chunk_ids
+
     def retrieve(self, question: str) -> GraphRetrievalResult:
         plan = self.planner.plan(question)
         result = GraphRetrievalResult(plan=plan)
-        
+
         # fallback 대비: db_path가 없으면 경고만 남기고 리턴
         if not self.db_path.exists():
             result.warnings.append(f"Graph DB file not found at {self.db_path}. Running with empty graph fallback.")
@@ -195,6 +725,12 @@ class GraphRetriever:
             facts: List[GraphFact] = []
             source_chunk_ids: Set[str] = set()
             debug_info: dict[str, Any] = {}
+            session_assertions, review_paths, review_chunk_ids = self._collect_review_paths(store, plan, question)
+            source_chunk_ids.update(review_chunk_ids)
+            result.session_assertions = session_assertions
+            result.review_paths = review_paths
+            result.required_evidence = sorted({item for path in review_paths for item in path.required_evidence})
+            result.review_actions = sorted({item for path in review_paths for item in path.review_actions})
 
             # INTENT 1: surgery_grade_lookup / same_grade_surgery_list
             if plan.procedure_name:
@@ -202,8 +738,8 @@ class GraphRetriever:
                 # 수술 노드 조회
                 proc_nodes = store.query(
                     """
-                    SELECT * FROM graph_nodes 
-                    WHERE node_type = 'SurgeryProcedure' 
+                    SELECT * FROM graph_nodes
+                    WHERE node_type = 'SurgeryProcedure'
                       AND (normalized_name = ? OR node_id IN (
                           SELECT node_id FROM graph_aliases WHERE normalized_alias = ?
                       ))
@@ -217,8 +753,8 @@ class GraphRetriever:
                     fuzzy_param = f"%{norm_proc}%"
                     proc_nodes = store.query(
                         """
-                        SELECT * FROM graph_nodes 
-                        WHERE node_type = 'SurgeryProcedure' 
+                        SELECT * FROM graph_nodes
+                        WHERE node_type = 'SurgeryProcedure'
                           AND normalized_name LIKE ?
                         """,
                         (fuzzy_param,)
@@ -253,12 +789,12 @@ class GraphRetriever:
                         JOIN graph_nodes n ON e.target_node_id = n.node_id
                         WHERE e.source_node_id = ? AND e.edge_type = 'HAS_GRADE'
                           AND (? IS NULL OR n.node_id LIKE ?)
-                        ORDER BY 
-                          CASE 
+                        ORDER BY
+                          CASE
                             WHEN n.node_id LIKE 'grade_new_1_5_%' THEN 1
                             WHEN n.node_id LIKE 'grade_1_5_%' THEN 2
-                            WHEN n.node_id LIKE 'grade_1_3_%' THEN 3 
-                            ELSE 4 
+                            WHEN n.node_id LIKE 'grade_1_3_%' THEN 3
+                            ELSE 4
                           END ASC
                         """,
                         (proc_id, grade_prefix, f"{grade_prefix}%" if grade_prefix else None)
@@ -278,7 +814,7 @@ class GraphRetriever:
                         grade_node_id = grade_edges[0]["grade_id"]
                         for ge in grade_edges:
                             grade_canonical = ge["grade_name"]
-                            
+
                             # Evidence 조회
                             evs = self._get_edge_evidences(store, ge["edge_id"])
                             if ge["source_evidence_id"]:
@@ -314,11 +850,11 @@ class GraphRetriever:
                             """
                             SELECT DISTINCT p.node_id, p.canonical_name, e.confidence as edge_confidence, e.edge_id,
                               -- 1. 질문 대상 수술과 동일 대분류 HAS_CATEGORY 공유 여부
-                              (SELECT COUNT(*) FROM graph_edges e1 
+                              (SELECT COUNT(*) FROM graph_edges e1
                                JOIN graph_edges e2 ON e1.target_node_id = e2.target_node_id
                                WHERE e1.edge_type = 'HAS_CATEGORY' AND e2.edge_type = 'HAS_CATEGORY'
                                  AND e1.source_node_id = p.node_id AND e2.source_node_id = ?) as share_cat,
-                                 
+
                               -- 2. SOL [별표7] 후보 조항과 같은 category_large에 속하는지 여부
                               (SELECT COUNT(*) FROM graph_edges e_cat
                                JOIN graph_nodes n_cat ON e_cat.target_node_id = n_cat.node_id
@@ -329,7 +865,7 @@ class GraphRetriever:
                                      JOIN graph_nodes n_rule ON e_rule.source_node_id = n_rule.node_id
                                      WHERE e_rule.target_node_id = ? AND e_rule.edge_type = 'POLICY_COVERS_PROCEDURE'
                                  )) as share_rule_cat,
-                                 
+
                               -- 3. evidence 존재 여부
                               (CASE WHEN e.source_evidence_id IS NOT NULL THEN 1
                                     WHEN EXISTS (SELECT 1 FROM graph_edge_evidence WHERE edge_id = e.edge_id) THEN 1
@@ -337,7 +873,7 @@ class GraphRetriever:
                             FROM graph_edges e
                             JOIN graph_nodes p ON e.source_node_id = p.node_id
                             WHERE e.target_node_id = ? AND e.edge_type = 'HAS_GRADE' AND e.source_node_id != ?
-                            ORDER BY 
+                            ORDER BY
                               share_cat DESC,
                               share_rule_cat DESC,
                               has_evidence DESC,
@@ -353,7 +889,7 @@ class GraphRetriever:
                         for peer in peers:
                             peer_id = peer["node_id"]
                             peer_canonical = peer["canonical_name"]
-                            
+
                             # Peer evidences
                             peevs = self._get_edge_evidences(store, peer["edge_id"])
                             for ev in peevs:
@@ -363,7 +899,7 @@ class GraphRetriever:
                             # Peer 카테고리 정보 조회
                             cat_edges = store.query(
                                 """
-                                SELECT n.canonical_name 
+                                SELECT n.canonical_name
                                 FROM graph_edges e
                                 JOIN graph_nodes n ON e.target_node_id = n.node_id
                                 WHERE e.source_node_id = ? AND e.edge_type = 'HAS_CATEGORY'
@@ -382,7 +918,7 @@ class GraphRetriever:
                                 """,
                                 (peer_id,)
                             )
-                            
+
                             rule_props = {}
                             if rule_edges:
                                 rp = rule_edges[0]["rule_props"]
@@ -427,14 +963,14 @@ class GraphRetriever:
                     else:
                         for re_edge in rule_edges:
                             rule_props = json.loads(re_edge["rule_props"]) if re_edge["rule_props"] else {}
-                            
+
                             # Evidence
                             revs = self._get_edge_evidences(store, re_edge["edge_id"])
                             if re_edge["source_evidence_id"]:
                                 rsev = self._get_evidence_by_id(store, re_edge["source_evidence_id"])
                                 if rsev and rsev not in revs:
                                     revs.append(rsev)
-                            
+
                             for ev in revs:
                                 if ev.chunk_id:
                                     source_chunk_ids.add(ev.chunk_id)
@@ -455,7 +991,7 @@ class GraphRetriever:
             if "category_grade_listing" in plan.intents and plan.category and plan.grade_value:
                 # 5종 코드 매칭
                 grade_node_key = f"grade_new_1_5_{plan.grade_value}"
-                
+
                 procs = store.query(
                     """
                     SELECT DISTINCT p.node_id, p.canonical_name, e_grd.edge_id, e_grd.source_evidence_id, e_grd.confidence as edge_confidence
@@ -569,7 +1105,7 @@ class GraphRetriever:
                         for re_edge in rule_edges:
                             rule_props = json.loads(re_edge["rule_props"]) if re_edge["rule_props"] else {}
                             ratio_val = rule_props.get("payment_ratio")
-                            
+
                             revs = self._get_edge_evidences(store, re_edge["edge_id"])
                             if re_edge["source_evidence_id"]:
                                 rsev = self._get_evidence_by_id(store, re_edge["source_evidence_id"])
@@ -596,28 +1132,28 @@ class GraphRetriever:
                 placeholders = ",".join(["?"] * len(numbers))
                 rules = store.query(
                     f"""
-                    SELECT * FROM graph_nodes 
+                    SELECT * FROM graph_nodes
                     WHERE node_type = 'PolicyBenefitRule'
                       AND json_extract(properties_json, '$.appendix_name') = ?
                       AND json_extract(properties_json, '$.appendix_number') IN ({placeholders})
                     """,
                     (plan.appendix, *numbers)
                 )
-                
+
                 for rule in rules:
                     rule_id = rule["node_id"]
                     rule_props = json.loads(rule["properties_json"]) if rule["properties_json"] else {}
-                    
+
                     # 4.3 DEFINED_IN_APPENDIX evidence 연결 및 status 하향 처리
                     evs = self._get_node_evidences(store, rule_id)
                     for ev in evs:
                         if ev.chunk_id:
                             source_chunk_ids.add(ev.chunk_id)
-                            
+
                     status = "confirmed" if len(evs) > 0 else "candidate"
                     if len(evs) == 0:
                         result.warnings.append(f"주의: 규정 조항 '{rule_id}'에 연동된 근거(evidence) 문서가 존재하지 않아 검토 후보(candidate)로 하향 처리되었습니다.")
-                    
+
                     facts.append(GraphFact(
                         subject=rule_id,
                         relation="DEFINED_IN_APPENDIX",
@@ -645,6 +1181,8 @@ class GraphRetriever:
                 warnings.append("주의: 약관 매칭(POLICY_COVERS_PROCEDURE)은 confidence 0.8 이하의 추정(candidate) 관계입니다. 공식 지급 여부 판단 시 검토용 후보로만 활용해야 합니다.")
             if has_missing:
                 warnings.append("알림: 일부 요청 항목(수가코드 혹은 약관 매핑 등)에 대한 구조화 데이터(missing)가 존재하지 않습니다.")
+            if review_paths:
+                warnings.append("알림: 문서 기반 검토 경로(graph review path)가 추가되어 자동 확정 대신 검토 중심으로 응답해야 할 수 있습니다.")
 
             result.facts = facts
             result.source_chunk_ids = sorted(list(source_chunk_ids))

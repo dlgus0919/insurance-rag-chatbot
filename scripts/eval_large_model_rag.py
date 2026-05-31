@@ -106,6 +106,12 @@ HYPHEN_TRANSLATION = str.maketrans(
 
 def _normalize_for_match(text: str) -> str:
     normalized = unicodedata.normalize("NFKC", text).translate(HYPHEN_TRANSLATION)
+    normalized = re.sub(
+        r"(\d[\d,]*)\s*만\s*원?",
+        lambda m: f"{int(m.group(1).replace(',', '')) * 10000}원",
+        normalized,
+    )
+    normalized = re.sub(r"(?<=\d),(?=\d)", "", normalized)
     normalized = re.sub(r"(\d)\s+%", r"\1%", normalized)
     normalized = re.sub(r"\s+", " ", normalized)
     return normalized.strip()

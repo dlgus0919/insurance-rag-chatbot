@@ -53,9 +53,12 @@ def test_extract_final_content_preserves_plain_text() -> None:
 
 
 class DummyResponse:
-    def __init__(self, status_code, lines):
+    def __init__(self, status_code, lines, text="", payload=None, headers=None):
         self.status_code = status_code
         self.lines = lines
+        self.text = text
+        self._payload = payload or {"choices": [{"message": {"content": "ok"}}]}
+        self.headers = headers or {}
 
     def __enter__(self):
         return self
@@ -66,16 +69,19 @@ class DummyResponse:
     def iter_lines(self):
         return self.lines
 
+    def json(self):
+        return self._payload
+
 
 def test_generate_stream_gemma4_yields_immediately(monkeypatch) -> None:
     client = OpenAICompatibleClient("gemma-4-26b-a4b-nvfp4", base_url="http://localhost:30001/v1", api_key="EMPTY", provider="vllm")
-    
+
     mock_lines = [
         b'data: {"choices":[{"delta":{"content":"\xed\x85\x8c"}}]}', # '테'
         b'data: {"choices":[{"delta":{"content":"\xec\x8a\xa4\xed\x8a\xb8"}}]}', # '스트'
         b'data: [DONE]'
     ]
-    
+
     def mock_post(*args, **kwargs):
         return DummyResponse(200, mock_lines)
 
@@ -87,14 +93,14 @@ def test_generate_stream_gemma4_yields_immediately(monkeypatch) -> None:
 
 def test_generate_stream_harmony_gates_output(monkeypatch) -> None:
     client = OpenAICompatibleClient("gpt-oss-20b", base_url="http://localhost:30000/v1", api_key="EMPTY", provider="sglang")
-    
+
     mock_lines = [
         b'data: {"choices":[{"delta":{"content":"<|channel|>analysis<|message|>\xec\x83\x9d\xea\xb0\x81"}}]}', # '생각'
         b'data: {"choices":[{"delta":{"content":"<|channel|>final<|message|>\xec\xb5\x9c\xec\xa2\x85"}}]}', # '최종'
         b'data: {"choices":[{"delta":{"content":" \xeb\x8b\xb5\xeb\xb3\x80"}}]}', # ' 답변'
         b'data: [DONE]'
     ]
-    
+
     def mock_post(*args, **kwargs):
         return DummyResponse(200, mock_lines)
 
@@ -102,3 +108,40 @@ def test_generate_stream_harmony_gates_output(monkeypatch) -> None:
 
     result = list(client.generate_stream("질문"))
     assert "".join(result) == "최종 답변"
+
+
+def test_generate_retries_after_429(monkeypatch) -> None:
+    client = OpenAICompatibleClient("gpt-oss-20b", base_url="http://localhost:30000/v1", api_key="EMPTY")
+    responses = iter(
+        [
+            DummyResponse(429, [], text="too many", headers={"Retry-After": "0"}),
+            DummyResponse(200, [], payload={"choices": [{"message": {"content": "정상 답변"}}], "usage": {}}),
+        ]
+    )
+
+    monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: next(responses))
+
+    assert client.generate("질문") == "정상 답변"
+
+
+def test_generate_stream_retries_after_429(monkeypatch) -> None:
+    client = OpenAICompatibleClient("gpt-oss-20b", base_url="http://localhost:30000/v1", api_key="EMPTY", provider="sglang")
+    responses = iter(
+        [
+            DummyResponse(429, [], text="too many", headers={"Retry-After": "0"}),
+            DummyResponse(
+                200,
+                [
+                    b'data: {"choices":[{"delta":{"content":"<|channel|>final<|message|>\xec\xb5\x9c\xec\xa2\x85"}}]}',
+                    b'data: {"choices":[{"delta":{"content":" \xeb\x8b\xb5\xeb\xb3\x80"}}]}',
+                    b'data: [DONE]',
+                ],
+            ),
+        ]
+    )
+
+    monkeypatch.setattr("time.sleep", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: next(responses))
+
+    assert "".join(client.generate_stream("질문")) == "최종 답변"

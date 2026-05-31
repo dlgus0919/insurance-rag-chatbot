@@ -178,6 +178,41 @@ def test_query_with_filter_falls_back_to_table_chunks(tmp_path) -> None:
     assert [hit.id for hit in hits] == ["table"]
 
 
+def test_get_by_ids_falls_back_from_graph_v2_manual_chunk_id(tmp_path) -> None:
+    """GraphDB evidence id의 v2_manual 삽입 표기가 현재 VectorStore id와 달라도 조회한다."""
+    store = VectorStore(tmp_path / "chroma")
+    store.upsert(
+        ids=["자사_SOL건강_ch_011755"],
+        embeddings=np.asarray([[1.0, 0.0]], dtype=np.float32),
+        metadatas=[{"doc_short": "자사_SOL건강", "page_start": 384}],
+        documents=["SOL 건강보험 별표7 수술분류표 근거"],
+    )
+
+    hits = store.get_by_ids(["자사_SOL건강_v2_manual_ch_011755"])
+
+    assert len(hits) == 1
+    assert hits[0].id == "자사_SOL건강_v2_manual_ch_011755"
+    assert hits[0].metadata["page_start"] == 384
+
+
+def test_get_by_doc_page_finds_overlapping_page_range(tmp_path) -> None:
+    """GraphDB chunk id 동기화가 깨져도 doc_short/page evidence로 청크를 복구한다."""
+    store = VectorStore(tmp_path / "chroma")
+    store.upsert(
+        ids=["sol_384", "sol_390"],
+        embeddings=np.asarray([[1.0, 0.0], [0.9, 0.1]], dtype=np.float32),
+        metadatas=[
+            {"doc_short": "자사_SOL건강", "page_start": 384, "page_end": 389},
+            {"doc_short": "자사_SOL건강", "page_start": 390, "page_end": 390},
+        ],
+        documents=["별표7 수술분류표", "다른 페이지"],
+    )
+
+    hits = store.get_by_doc_page("자사_SOL건강", 384, 384)
+
+    assert [hit.id for hit in hits] == ["sol_384"]
+
+
 def test_vector_store_reset_drops_previous_collection_entries(tmp_path) -> None:
     path = tmp_path / "chroma"
     store = VectorStore(path)

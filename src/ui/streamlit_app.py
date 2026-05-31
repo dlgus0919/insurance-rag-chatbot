@@ -704,10 +704,45 @@ def render_graph_evidences(graph_result) -> None:
         return
 
     facts = []
+    review_paths = []
     if isinstance(graph_result, dict):
         facts = graph_result.get("facts", [])
+        review_paths = graph_result.get("graph_review_paths", []) or graph_result.get("review_paths", [])
     else:
         facts = getattr(graph_result, "facts", [])
+        review_paths = getattr(graph_result, "review_paths", [])
+
+    if review_paths:
+        st.markdown("**📌 구조화 검토 경로**")
+        for path in review_paths[:4]:
+            status = path.get("status", "review_required") if isinstance(path, dict) else getattr(path, "status", "review_required")
+            status_label = path.get("status_label", "") if isinstance(path, dict) else ""
+            if not status_label:
+                status_label = {
+                    "confirmed": "확정 근거",
+                    "review_required": "검토 필요",
+                    "candidate": "검토 후보",
+                    "missing": "구조화 근거 없음",
+                }.get(status, status)
+            path_type = path.get("path_type", "") if isinstance(path, dict) else getattr(path, "path_type", "")
+            path_type_label = path.get("path_type_label", "") if isinstance(path, dict) else ""
+            if not path_type_label:
+                path_type_label = {
+                    "complication_review": "합병증/후유증 검토",
+                    "diagnosis_review": "진단코드 검토",
+                    "procedure_policy_review": "수술/약관 검토",
+                    "claim_condition_review": "청구 조건 검토",
+                    "claim_calculation_review": "보험금 계산 검토",
+                }.get(path_type, path_type or "구조화 검토")
+            summary = path.get("summary", "") if isinstance(path, dict) else getattr(path, "summary", "")
+            required = path.get("required_evidence", []) if isinstance(path, dict) else getattr(path, "required_evidence", [])
+            actions = path.get("review_actions", []) if isinstance(path, dict) else getattr(path, "review_actions", [])
+            st.markdown(f"- **{path_type_label} · {status_label}**: {summary}")
+            if required:
+                st.markdown(f"  - 필요 증빙: {', '.join(required)}")
+            if actions:
+                st.markdown(f"  - 권장 검토 조치: {', '.join(actions)}")
+        st.divider()
 
     if not facts:
         return
@@ -1328,6 +1363,14 @@ def render_claim_calculation_panel(model: str, get_pipeline_or_show_error, sessi
 
         if result.requires_review:
             st.warning("⚠️ 추가 심사 및 정밀 검토가 필요합니다.")
+            if getattr(result, "missing_evidence", None):
+                st.markdown("#### 추가 확인 필요 서류")
+                for item in result.missing_evidence:
+                    st.write(f"- {item}")
+            if getattr(result, "review_actions", None):
+                st.markdown("#### 권장 검토 조치")
+                for item in result.review_actions:
+                    st.write(f"- {item}")
             for reason in result.review_reasons:
                 st.write(f"- {reason}")
         else:

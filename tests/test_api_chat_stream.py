@@ -3,7 +3,7 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from src.api.db import Base
-from src.api.models import ChatMessage, ChatSession
+from src.api.models import AuditLog, ChatMessage, ChatSession
 from src.api.rag_service import prepare_retrieved_context
 from src.api.routes import chat, sessions
 from src.api.schemas.chat import ChatRequest
@@ -54,25 +54,32 @@ class FakePipeline:
         self.graph_retriever = None
 
     def retrieve_hits(self, question, top_k=None, doc_filter=None, return_debug=False, graph_hits=None):
-        return (
-            [
-                type(
-                    "Hit",
-                    (),
-                    {
-                        "id": "chunk-1",
-                        "document": "도수치료 약관 내용",
-                        "metadata": {
-                            "pdf_filename": "약관.pdf",
-                            "doc_short": "약관",
-                            "page_start": 14,
-                            "page_end": 14,
-                        },
+        hits = [
+            type(
+                "Hit",
+                (),
+                {
+                    "id": "chunk-1",
+                    "document": "도수치료 약관 내용",
+                    "metadata": {
+                        "pdf_filename": "약관.pdf",
+                        "doc_short": "약관",
+                        "page_start": 14,
+                        "page_end": 14,
                     },
-                )()
-            ],
-            None,
-        )
+                    "score": 0.91,
+                },
+            )()
+        ]
+        debug = None
+        if return_debug:
+            debug = chat.DebugInfo(
+                dense_hits=[],
+                bm25_hits=[],
+                rrf_hits=[],
+                final_hits=[],
+            )
+        return (hits, debug)
 
     def build_prompt(self, question, chunks, graph_context=None):
         return f"질문: {question}\n근거 수: {len(chunks)}"
@@ -160,6 +167,9 @@ async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkey
     assert messages[1].role == "assistant"
     assert "실손 답변" in messages[1].content
     assert messages[1].sources[0]["filename"] == "약관.pdf"
+    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
+    audit_entry = audit_result.scalar_one()
+    assert audit_entry.detail["rag_diagnostics"]["steps"][-1]["label"] == "LLM 답변 생성"
 
 
 @pytest.mark.anyio
@@ -194,7 +204,7 @@ async def test_chat_stream_recovers_from_stale_session_id(db_session, monkeypatc
 
 @pytest.mark.anyio
 async def test_prepare_retrieved_context_hides_missing_graph_chunk_warning() -> None:
-    _chunks, _sources, _prompt, graph_payload, warnings, _deterministic_answer = await prepare_retrieved_context(
+    _chunks, _sources, _prompt, graph_payload, warnings, _deterministic_answer, debug = await prepare_retrieved_context(
         FakeGraphPipeline(),
         "기관지 식도루 폐쇄술의 신1-5종 수술 종수는?",
         8,
@@ -203,3 +213,36 @@ async def test_prepare_retrieved_context_hides_missing_graph_chunk_warning() -> 
 
     assert graph_payload["source_chunk_ids"] == ["missing-graph-chunk"]
     assert warnings == []
+    assert debug is not None
+
+
+
+def test_rag_diagnostics_include_clarification_and_normalized_terms() -> None:
+    debug = chat.DebugInfo(dense_hits=[], bm25_hits=[], rrf_hits=[], final_hits=[])
+    debug.graph_result = GraphRetrievalResult(
+        plan=GraphQueryPlan(
+            intents=['session_claim_path_review'],
+            normalized_terms={'영수증만': '증빙 부족'},
+            term_correction_candidates=[{'raw': '엠알아이', 'normalized': 'MRI', 'confidence': 0.72}],
+            ambiguous_terms=['실손 세대'],
+            clarification_questions=['어느 실손 세대 기준인지 확인해 주세요.'],
+        ),
+        review_paths=[object()],
+    )
+
+    payload = chat._build_rag_diagnostics(
+        question='영수증만 있는 도수치료 청구를 계산해도 되나요?',
+        model='sglang:gpt-oss-20b',
+        index_mode='default',
+        effective_index_mode='default',
+        debug=debug,
+        source_count=1,
+        warnings=[],
+        elapsed_ms=123.4,
+    )
+
+    assert payload['normalized_terms'] == {'영수증만': '증빙 부족'}
+    assert payload['term_correction_candidates'][0]['raw'] == '엠알아이'
+    assert payload['ambiguous_terms'] == ['실손 세대']
+    assert payload['clarification_questions'] == ['어느 실손 세대 기준인지 확인해 주세요.']
+    assert payload['graph_review_path_count'] == 1

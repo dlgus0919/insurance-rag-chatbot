@@ -61,6 +61,31 @@ def _is_exclusion_match(match: StandardMatch | None) -> bool:
     return "면책" in opinion or "보상제외" in opinion or opinion in {"제외", "미보상"}
 
 
+def _is_evidence_requirement_satisfied(requirement: str, provided_tags: list[str]) -> bool:
+    normalized_requirement = "".join((requirement or "").split())
+    if not normalized_requirement:
+        return True
+    for tag in provided_tags or []:
+        normalized_tag = "".join((tag or "").split())
+        if normalized_tag and (normalized_requirement in normalized_tag or normalized_tag in normalized_requirement):
+            return True
+    return False
+
+
+def _append_unique(items: list[str], value: str) -> None:
+    if value and value not in items:
+        items.append(value)
+
+
+def _is_confirmed_exclusion_step(step: Any) -> bool:
+    if getattr(step, "status", "") != "confirmed":
+        return False
+    if getattr(step, "relation", "") == "HAS_DECISION" and getattr(step, "object", "") == "면책":
+        return True
+    notes = str(getattr(step, "notes", "") or "")
+    return getattr(step, "relation", "") == "RELATES_TO_COMPLICATION" and notes.startswith("exclusion")
+
+
 def _line_deductible(
     amount: Decimal,
     category: str,
@@ -153,7 +178,13 @@ def _calculate_line_items(
         line_review = False
         line_reasons: list[str] = []
 
-        if _is_exclusion_match(match):
+        if _is_ambiguous_match(match):
+            deductible = Decimal("0")
+            payable = Decimal("0")
+            rule = "표준모델 후보 모호성으로 계산 보류"
+            line_review = True
+            line_reasons.append("동일 항목명에 복수 표준모델 후보가 있어 임의 후보로 보험금을 산출하지 않았습니다. 정확한 수가/표준코드를 입력해야 합니다.")
+        elif _is_exclusion_match(match):
             deductible = amount
             payable = Decimal("0")
             opinion = match.pay_opn_cd_nm or "면책"
@@ -241,6 +272,41 @@ def _calculate_line_items(
     return total_payable, total_deductible, line_results, review_reasons
 
 
+def _has_exclusion_match(standard_matches: list[StandardMatch]) -> bool:
+    """표준모델 DB가 면책/보상제외로 판정한 행이 있는지 확인한다."""
+
+    return any(_is_exclusion_match(match) for match in standard_matches)
+
+
+def _is_ambiguous_match(match: StandardMatch | None) -> bool:
+    """복수 후보로 인해 산출을 보류해야 하는 표준모델 매칭인지 확인한다."""
+
+    return bool(match and match.requires_user_disambiguation and not match.std_cd)
+
+
+def _should_trust_deterministic_baseline(
+    standard_matches: list[StandardMatch],
+    disambiguation_required: bool,
+) -> bool:
+    """계산 파이프라인의 최종값을 결정론 규칙으로 보호해야 하는지 판정한다."""
+
+    if disambiguation_required:
+        return False
+    if not standard_matches:
+        return False
+    return all(not _is_ambiguous_match(match) for match in standard_matches)
+
+
+def _build_deterministic_formula_code(claimed: Decimal, deductible: Decimal, payable: Decimal) -> str:
+    """결정론 fallback이 적용된 경우에도 감사 가능한 계산 코드를 남긴다."""
+
+    return (
+        f"claimed_amount = Decimal('{claimed}')\n"
+        f"deductible = Decimal('{deductible}')\n"
+        f"payable_amount = Decimal('{payable}')"
+    )
+
+
 def run_claim_calculation(
     rag_pipeline: Any,
     items: list[ClaimItemInput],
@@ -283,8 +349,9 @@ def run_claim_calculation(
             db_review_reasons.append(f"항목 '{item.input_name}'에 매칭되는 비급여 표준모델 코드가 없습니다.")
         else:
             # 2개 이상 모호성 감지
-            if len(matches) > 1:
+            if len(matches) > 1 and not item.input_code.strip():
                 disambiguation_required = True
+                db_review_required = True
                 candidate_info = ", ".join([f"{m.std_cd}({m.std_cd_nm})" for m in matches])
                 db_review_reasons.append(
                     f"항목 '{item.input_name}'의 표준모델 매칭 후보가 2개 이상 존재하여 선택 모호성이 발생했습니다. "
@@ -296,6 +363,17 @@ def run_claim_calculation(
                         "name": m.std_cd_nm,
                         "mid_category": m.mid_category_cd_nm or ""
                     })
+                standard_matches.append(
+                    StandardMatch(
+                        std_cd="",
+                        std_cd_nm=item.input_name,
+                        pay_opn_cd_nm="후보 모호",
+                        match_confidence="ambiguous",
+                        requires_user_disambiguation=True,
+                        requires_review=True,
+                    )
+                )
+                continue
 
             # 첫 번째 결과를 대표 매치로 선택
             repr_match = matches[0]
@@ -324,6 +402,24 @@ def run_claim_calculation(
             query_parts = []
             if context.situation_note:
                 query_parts.append(context.situation_note)
+            if context.diagnosis_code:
+                query_parts.append(context.diagnosis_code)
+            if context.diagnosis_name:
+                query_parts.append(context.diagnosis_name)
+            if context.coverage_topic:
+                query_parts.append(context.coverage_topic)
+            if context.complication_asserted:
+                query_parts.append("합병증")
+            if context.treatment_purpose:
+                query_parts.append(context.treatment_purpose)
+            if context.policy_generation:
+                query_parts.append(context.policy_generation)
+            if context.visit_type:
+                query_parts.append("통원" if context.visit_type == "outpatient" else "입원")
+            if context.facility_type:
+                query_parts.append(context.facility_type)
+            for tag in context.evidence_tags:
+                query_parts.append(tag)
             for item in items:
                 query_parts.append(item.input_name)
             question = " ".join(query_parts)
@@ -344,6 +440,12 @@ def run_claim_calculation(
                         "content": f"[CANDIDATE] {fact.subject} --({fact.relation})--> {fact.object or 'N/A'} (이유: {fact.properties.get('matched_keyword', '')} 매칭)",
                         "page": "N/A"
                     })
+            for path in getattr(graph_result, "review_paths", []) or []:
+                retrieved_evidences.append({
+                    "source": f"GraphDB ReviewPath ({path.status})",
+                    "content": f"{path.path_type}: {path.summary}",
+                    "page": "N/A",
+                })
         except Exception as e:
             logger.error(f"GraphDB 근거 조회 중 에러 발생: {e}")
 
@@ -369,18 +471,37 @@ def run_claim_calculation(
             except Exception as e:
                 logger.error(f"RAG 근거 조회 중 에러 발생: {e}")
 
+    (
+        baseline_payable_val,
+        baseline_deductible_val,
+        baseline_line_results,
+        baseline_review_reasons,
+    ) = _calculate_line_items(
+        items=items,
+        context=context,
+        standard_matches=standard_matches,
+    )
     deterministic_line_results: list[dict[str, str | bool | list[str]]] = []
     deterministic_review_reasons: list[str] = []
-    use_deterministic_calculation = use_fake_planner
+    enforce_baseline = _should_trust_deterministic_baseline(standard_matches, disambiguation_required)
+    has_exclusion = _has_exclusion_match(standard_matches)
+    use_deterministic_calculation = use_fake_planner or has_exclusion
 
     if use_deterministic_calculation:
-        payable_val, deductible_val, deterministic_line_results, deterministic_review_reasons = _calculate_line_items(
-            items=items,
-            context=context,
-            standard_matches=standard_matches,
-        )
+        payable_val = baseline_payable_val
+        deductible_val = baseline_deductible_val
+        deterministic_line_results = baseline_line_results
+        deterministic_review_reasons = baseline_review_reasons
         sandbox_code = "# deterministic line-item calculation"
-        plan = CalculationPlan(decision="calculable", formula_intent=sandbox_code)
+        if has_exclusion:
+            sandbox_code = "# deterministic exclusion guard: standard-code opinion is excluded"
+            plan = CalculationPlan(
+                decision="not_covered",
+                formula_intent=sandbox_code,
+                uncertainties=baseline_review_reasons,
+            )
+        else:
+            plan = CalculationPlan(decision="calculable", formula_intent=sandbox_code)
     # 4. LLM 계산 계획 수립
     elif disambiguation_required:
         plan = CalculationPlan(
@@ -398,6 +519,7 @@ def run_claim_calculation(
         sandbox_code = plan.formula_intent
         try:
             exec_res = execute_calculation(sandbox_code)
+            sandbox_code = exec_res.get("code", sandbox_code)
             local_vars = exec_res.get("variables", {})
 
             # 유연한 변수명 매칭 추출
@@ -406,23 +528,53 @@ def run_claim_calculation(
 
             payable_val = Decimal(str(raw_payable))
             deductible_val = Decimal(str(raw_deductible))
+            if enforce_baseline and (payable_val != baseline_payable_val or deductible_val != baseline_deductible_val):
+                payable_val = baseline_payable_val
+                deductible_val = baseline_deductible_val
+                deterministic_line_results = baseline_line_results
+                deterministic_review_reasons.extend(baseline_review_reasons)
+                deterministic_review_reasons.append(
+                    "LLM 산식 결과가 표준모델/세대별 결정론 계산 기준과 달라 결정론 계산값을 최종 지급예상액에 적용했습니다."
+                )
         except Exception as e:
             sandbox_error_occurred = True
             sandbox_error_msg = f"AST 샌드박스 연산 실행 에러: {str(e)}"
             logger.error(sandbox_error_msg)
-            payable_val = Decimal("0")
-            deductible_val = Decimal("0")
+            if enforce_baseline:
+                payable_val = baseline_payable_val
+                deductible_val = baseline_deductible_val
+                deterministic_line_results = baseline_line_results
+                deterministic_review_reasons.extend(baseline_review_reasons)
+                deterministic_review_reasons.append(
+                    "LLM 산식 실행에 실패하여 표준모델/세대별 결정론 계산값을 최종 지급예상액에 적용했습니다."
+                )
+            else:
+                payable_val = Decimal("0")
+                deductible_val = Decimal("0")
     elif not use_deterministic_calculation:
         # 계산 불가 또는 보상 제외
-        sandbox_code = ""
+        if enforce_baseline:
+            payable_val = baseline_payable_val
+            deductible_val = baseline_deductible_val
+            deterministic_line_results = baseline_line_results
+            deterministic_review_reasons.extend(baseline_review_reasons)
+            deterministic_review_reasons.append(
+                "LLM이 계산 가능 산식을 반환하지 않아 표준모델/세대별 결정론 계산값을 최종 지급예상액에 적용했습니다."
+            )
+            sandbox_code = _build_deterministic_formula_code(total_claimed, deductible_val, payable_val)
+        else:
+            sandbox_code = ""
+            payable_val = Decimal("0")
+            deductible_val = Decimal("0")
         sandbox_error_occurred = False
         sandbox_error_msg = ""
-        payable_val = Decimal("0")
-        deductible_val = Decimal("0")
 
     # 6. 최종 지급예상액 검증 및 검토 플래그 결정
     review_required = False
     review_reasons = []
+    missing_evidence: list[str] = []
+    structured_review_actions: list[str] = []
+    confirmed_exclusion_path_found = False
 
     if deterministic_review_reasons:
         review_required = True
@@ -459,6 +611,47 @@ def run_claim_calculation(
 
     # Graph candidate rule 검토 플래그 강제 적용
     if graph_result:
+        review_paths = getattr(graph_result, "review_paths", []) or []
+        if context.complication_asserted and review_paths:
+            review_required = True
+            reason = "합병증/후유증/부작용 상황이 주장되어 구조화 검토 경로와 추가 서류 확인이 필요합니다."
+            if reason not in review_reasons:
+                review_reasons.append(reason)
+
+        for path in review_paths:
+            if path.status in {"candidate", "review_required", "missing"}:
+                review_required = True
+            if path.required_evidence:
+                review_required = True
+                missing_requirements = [
+                    req
+                    for req in path.required_evidence
+                    if not _is_evidence_requirement_satisfied(req, context.evidence_tags or [])
+                ]
+                if missing_requirements:
+                    for req in missing_requirements:
+                        _append_unique(missing_evidence, req)
+                    reason = f"검토 경로상 추가 증빙이 요구됩니다: {', '.join(missing_requirements)}"
+                    if reason not in review_reasons:
+                        review_reasons.append(reason)
+            for action in path.review_actions:
+                _append_unique(structured_review_actions, action)
+                reason = f"권장 검토 조치: {action}"
+                if reason not in review_reasons:
+                    review_reasons.append(reason)
+
+            has_confirmed_exclusion = any(_is_confirmed_exclusion_step(step) for step in path.steps)
+            if has_confirmed_exclusion:
+                confirmed_exclusion_path_found = True
+                payable_val = Decimal("0")
+                deductible_val = total_claimed
+                payable_str = "0"
+                deductible_str = f"{total_claimed:,.0f}".replace(",", "")
+                review_required = True
+                reason = "문서 기반 검토 경로에서 면책 판단 조항이 직접 연결되어 지급예상액을 0원으로 보수 처리했습니다."
+                if reason not in review_reasons:
+                    review_reasons.append(reason)
+
         # candidate PAYS_BY_RATIO 만 있고 confirmed 정보가 없는 경우 검토 강제
         has_candidate_ratio = any(f.status == "candidate" and f.relation == "PAYS_BY_RATIO" for f in graph_result.facts)
         has_confirmed = any(f.status == "confirmed" for f in graph_result.facts)
@@ -534,6 +727,21 @@ def run_claim_calculation(
     except Exception:
         pass
 
+    calculation_status = "auto_calculated"
+    if confirmed_exclusion_path_found or plan.decision == "not_covered":
+        calculation_status = "not_covered"
+    elif disambiguation_required or plan.decision == "needs_more_info":
+        calculation_status = "blocked_missing_info"
+    elif review_required:
+        calculation_status = "estimated_review_required"
+
+    notes_by_status = {
+        "auto_calculated": "지급예상액 계산이 성공적으로 완료되었습니다.",
+        "estimated_review_required": "추가 심사 검토가 필요합니다.",
+        "blocked_missing_info": "필수 정보 또는 표준코드 선택이 부족하여 자동 계산을 보류했습니다.",
+        "not_covered": "면책/보상제외 판단 근거가 확인되어 지급예상액을 0원으로 보수 처리했습니다.",
+    }
+
     return CalculationResult(
         claimed_amount=str(total_claimed),
         payable_amount=payable_str,
@@ -543,9 +751,12 @@ def run_claim_calculation(
         applied_basis=applied_basis,
         requires_review=review_required,
         review_reasons=review_reasons,
-        notes="지급예상액 계산이 성공적으로 완료되었습니다." if not review_required else "추가 심사 검토가 필요합니다.",
+        notes=notes_by_status[calculation_status],
         candidates=disambiguation_candidates,
         policy_generation=_normalize_policy_generation(context.policy_generation),
         line_results=deterministic_line_results,
         applied_limits=_applied_limits,
+        calculation_status=calculation_status,
+        missing_evidence=missing_evidence,
+        review_actions=structured_review_actions,
     )

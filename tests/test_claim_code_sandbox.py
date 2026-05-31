@@ -41,6 +41,20 @@ def test_sandbox_ast_validation_import_rejection():
     assert "모듈 import는 허용되지 않습니다" in str(excinfo.value)
 
 
+def test_sandbox_tolerates_decimal_import_only():
+    """LLM이 붙인 `from decimal import Decimal`은 제거 후 정상 실행한다."""
+    code = """
+from decimal import Decimal
+claimed_amount = Decimal('100000')
+deductible = Decimal('50000')
+payable_amount = claimed_amount - deductible
+"""
+    result = execute_calculation(code)
+
+    assert result["variables"]["payable_amount"] == Decimal("50000")
+    assert "from decimal import Decimal" not in result["code"]
+
+
 def test_sandbox_ast_validation_illegal_function_rejection():
     """eval, exec, open 등 화이트리스트에 없는 함수 호출을 완벽하게 차단하는지 테스트한다."""
     unsafe_eval = "eval('1 + 1')"

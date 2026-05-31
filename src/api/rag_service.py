@@ -17,7 +17,7 @@ from src.rag.pipeline import RagPipeline, _deterministic_guard_answer, _hit_to_c
 from src.rag.table_store import TableStore
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
-from src.retrieval.index_mode import INDEX_MODES, resolve_index_paths
+from src.retrieval.index_mode import INDEX_MODES, resolve_effective_index_mode, resolve_index_paths
 from src.retrieval.reranker import build_reranker
 from src.retrieval.vector_store import VectorStore
 
@@ -152,6 +152,12 @@ async def prepare_retrieved_context(
         try:
             graph_result = pipeline.graph_retriever.retrieve(question)
             graph_context = build_graph_context(graph_result)
+            clarification_questions = list(getattr(getattr(graph_result, "plan", None), "clarification_questions", []) or [])
+            if clarification_questions:
+                warnings.append({
+                    "code": "CLARIFICATION_RECOMMENDED",
+                    "message": "질문에 빠진 조건이 있어 확인 질문이 권장됩니다: " + " / ".join(clarification_questions[:3]),
+                })
             source_chunk_ids = getattr(graph_result, "source_chunk_ids", []) or []
             if source_chunk_ids:
                 graph_hits = pipeline.vector_store.get_by_ids(source_chunk_ids)
@@ -172,15 +178,17 @@ async def prepare_retrieved_context(
             graph_context = ""
             graph_hits = []
 
-    hits, _ = pipeline.retrieve_hits(question, top_k=top_k, graph_hits=graph_hits)
+    hits, debug = pipeline.retrieve_hits(question, top_k=top_k, graph_hits=graph_hits, return_debug=True)
     chunks = [_hit_to_chunk(hit) for hit in hits]
     sources = [chunk_to_source(chunk) for chunk in chunks]
     prompt = pipeline.build_prompt(question, chunks, graph_context=graph_context)
     history_context = build_history_context(history)
     if history_context:
         prompt = f"{history_context}\n\n{prompt}"
-    deterministic_answer = _deterministic_guard_answer(question, chunks)
-    return chunks, sources, prompt, graph_result_to_payload(graph_result), warnings, deterministic_answer
+    deterministic_answer = _deterministic_guard_answer(question, chunks, graph_context=graph_context)
+    if debug is not None:
+        debug.graph_result = graph_result
+    return chunks, sources, prompt, graph_result_to_payload(graph_result), warnings, deterministic_answer, debug
 
 
 def extract_structured_terms(query: str) -> list[str]:
@@ -214,6 +222,25 @@ def build_history_context(messages: list[ChatMessage]) -> str:
     return "\n".join(lines)
 
 
+def graph_review_status_label(status: str) -> str:
+    return {
+        "confirmed": "확정 근거",
+        "review_required": "검토 필요",
+        "candidate": "검토 후보",
+        "missing": "구조화 근거 없음",
+    }.get(status or "", status or "검토 필요")
+
+
+def graph_review_path_type_label(path_type: str) -> str:
+    return {
+        "complication_review": "합병증/후유증 검토",
+        "diagnosis_review": "진단코드 검토",
+        "procedure_policy_review": "수술/약관 검토",
+        "claim_condition_review": "청구 조건 검토",
+        "claim_calculation_review": "보험금 계산 검토",
+    }.get(path_type or "", path_type or "구조화 검토")
+
+
 def graph_result_to_payload(result: Any) -> dict | None:
     """Convert GraphRetrievalResult dataclasses into a JSON-safe API payload."""
 
@@ -221,6 +248,8 @@ def graph_result_to_payload(result: Any) -> dict | None:
         return None
     plan = getattr(result, "plan", None)
     facts = []
+    review_paths = []
+    session_assertions = []
     for fact in getattr(result, "facts", []) or []:
         evidences = []
         for evidence in getattr(fact, "evidence", []) or []:
@@ -244,16 +273,74 @@ def graph_result_to_payload(result: Any) -> dict | None:
             "properties": dict(getattr(fact, "properties", {}) or {}),
         })
 
+    for assertion in getattr(result, "session_assertions", []) or []:
+        session_assertions.append({
+            "kind": getattr(assertion, "kind", ""),
+            "value": getattr(assertion, "value", ""),
+            "source": getattr(assertion, "source", "question"),
+            "confidence": getattr(assertion, "confidence", 1.0),
+            "notes": getattr(assertion, "notes", ""),
+        })
+
+    for path in getattr(result, "review_paths", []) or []:
+        steps = []
+        for step in getattr(path, "steps", []) or []:
+            evidences = []
+            for evidence in getattr(step, "evidence", []) or []:
+                evidences.append({
+                    "doc_short": getattr(evidence, "doc_short", ""),
+                    "page_start": getattr(evidence, "page_start", None),
+                    "page_end": getattr(evidence, "page_end", None),
+                    "chunk_id": getattr(evidence, "chunk_id", None),
+                })
+            steps.append({
+                "source": getattr(step, "source", ""),
+                "subject": getattr(step, "subject", ""),
+                "relation": getattr(step, "relation", ""),
+                "object": getattr(step, "object", None),
+                "status": getattr(step, "status", "candidate"),
+                "evidence": evidences,
+                "notes": getattr(step, "notes", ""),
+            })
+        review_paths.append({
+            "path_id": getattr(path, "path_id", ""),
+            "path_type": getattr(path, "path_type", ""),
+            "path_type_label": graph_review_path_type_label(getattr(path, "path_type", "")),
+            "steps": steps,
+            "status": getattr(path, "status", "missing"),
+            "status_label": graph_review_status_label(getattr(path, "status", "missing")),
+            "summary": getattr(path, "summary", ""),
+            "required_evidence": list(getattr(path, "required_evidence", []) or []),
+            "review_actions": list(getattr(path, "review_actions", []) or []),
+        })
+
     return {
         "plan": {
             "intents": list(getattr(plan, "intents", []) or []),
             "procedure_name": getattr(plan, "procedure_name", None),
             "category": getattr(plan, "category", None),
             "grade_system": getattr(plan, "grade_system", None),
-            "requested_grade": getattr(plan, "requested_grade", None),
+            "grade_value": getattr(plan, "grade_value", None),
             "requested_peer_count": getattr(plan, "requested_peer_count", None),
+            "diagnosis_codes": list(getattr(plan, "diagnosis_codes", []) or []),
+            "coverage_topics": list(getattr(plan, "coverage_topics", []) or []),
+            "conditions": list(getattr(plan, "conditions", []) or []),
+            "complication_asserted": getattr(plan, "complication_asserted", False),
+            "treatment_purpose": getattr(plan, "treatment_purpose", None),
+            "evidence_tags": list(getattr(plan, "evidence_tags", []) or []),
+            "policy_generation": getattr(plan, "policy_generation", None),
+            "visit_type": getattr(plan, "visit_type", None),
+            "facility_type": getattr(plan, "facility_type", None),
+            "normalized_terms": dict(getattr(plan, "normalized_terms", {}) or {}),
+            "term_correction_candidates": list(getattr(plan, "term_correction_candidates", []) or []),
+            "ambiguous_terms": list(getattr(plan, "ambiguous_terms", []) or []),
+            "clarification_questions": list(getattr(plan, "clarification_questions", []) or []),
         },
         "facts": facts,
+        "session_assertions": session_assertions,
+        "graph_review_paths": review_paths,
+        "required_evidence": list(getattr(result, "required_evidence", []) or []),
+        "review_actions": list(getattr(result, "review_actions", []) or []),
         "source_chunk_ids": list(getattr(result, "source_chunk_ids", []) or []),
         "warnings": list(getattr(result, "warnings", []) or []),
     }

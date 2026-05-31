@@ -20,6 +20,17 @@ class NodeType(str, Enum):
     PolicyBenefitRule = "PolicyBenefitRule"
     CoverageItem = "CoverageItem"
     NonpayStandardCode = "NonpayStandardCode"
+    PolicyClause = "PolicyClause"
+    CaseExample = "CaseExample"
+    ClaimCondition = "ClaimCondition"
+    DecisionConcept = "DecisionConcept"
+    EvidenceRequirement = "EvidenceRequirement"
+    DiagnosisCode = "DiagnosisCode"
+    ComplicationConcept = "ComplicationConcept"
+    PolicyGeneration = "PolicyGeneration"
+    VisitContext = "VisitContext"
+    FacilityContext = "FacilityContext"
+    ReviewAction = "ReviewAction"
 
 
 class EdgeType(str, Enum):
@@ -35,6 +46,17 @@ class EdgeType(str, Enum):
     SAME_CATEGORY_AS = "SAME_CATEGORY_AS"
     CROSS_REFERENCES = "CROSS_REFERENCES"
     HAS_CANONICAL_SOURCE = "HAS_CANONICAL_SOURCE"
+    HAS_TOPIC = "HAS_TOPIC"
+    APPLIES_WHEN = "APPLIES_WHEN"
+    HAS_DECISION = "HAS_DECISION"
+    REQUIRES_EVIDENCE = "REQUIRES_EVIDENCE"
+    RELATES_TO_DIAGNOSIS = "RELATES_TO_DIAGNOSIS"
+    RELATES_TO_COMPLICATION = "RELATES_TO_COMPLICATION"
+    APPLIES_TO_GENERATION = "APPLIES_TO_GENERATION"
+    APPLIES_TO_VISIT = "APPLIES_TO_VISIT"
+    APPLIES_TO_FACILITY = "APPLIES_TO_FACILITY"
+    HAS_REVIEW_ACTION = "HAS_REVIEW_ACTION"
+    SIMILAR_CASE_FOR = "SIMILAR_CASE_FOR"
 
 
 @dataclass

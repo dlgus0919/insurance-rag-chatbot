@@ -17,6 +17,8 @@ from src.graph.extractors import (
     PolicyAppendixExtractor,
     HiraCodeExtractor,
     NonpayStandardExtractor,
+    PolicyReviewExtractor,
+    SilsonCoverageExtractor,
 )
 
 
@@ -142,6 +144,16 @@ def build_graph(
         n_extractor = NonpayStandardExtractor(store)
         n_extractor.extract(standard_db_path)
 
+    # Ingest 5th Generation Coverage Hierarchy
+    print("[INFO] Extracting Silson Coverage hierarchy")
+    cov_extractor = SilsonCoverageExtractor(store)
+    cov_extractor.extract()
+
+    # Ingest document-grounded policy review graph
+    print(f"[INFO] Extracting policy review graph from {chunks_path}")
+    review_extractor = PolicyReviewExtractor(store)
+    review_extractor.extract(chunks_path)
+
     # 5. Build cross-reference edges based on normalization & aliases
     print("[INFO] Building cross-reference edges...")
     _build_cross_references(store)
@@ -210,8 +222,8 @@ def _build_cross_references(store: GraphStore) -> None:
     # Gather category normalization mapping for procedures
     proc_cat_rows = store.query(
         """
-        SELECT 
-            e.source_node_id as proc_id, 
+        SELECT
+            e.source_node_id as proc_id,
             n.normalized_name as cat_norm,
             n_parent.normalized_name as parent_cat_norm
         FROM graph_edges e
@@ -269,7 +281,7 @@ def _build_cross_references(store: GraphStore) -> None:
         # Clean rule name for matching (remove hanja parens, numbers, etc.)
         rule_name_clean = re.sub(r"\([가-힣\w]+\)", "", rule["canonical_name"])
         raw_keywords = [k.strip() for k in re.split(r"[,·\/ㆍ\s]+", rule_name_clean) if k.strip()]
-        
+
         # Filter out general stop keywords like '수술'
         keywords = [kw for kw in raw_keywords if kw not in STOP_KEYWORDS]
 
@@ -386,10 +398,10 @@ def _build_cross_references(store: GraphStore) -> None:
         for cat2 in categories:
             if cat1["node_id"] == cat2["node_id"]:
                 continue
-            
+
             n1 = cat1["normalized_name"]
             n2 = cat2["normalized_name"]
-            
+
             is_match = False
             if n1 in n2 or n2 in n1:
                 is_match = True
@@ -411,5 +423,5 @@ def _build_cross_references(store: GraphStore) -> None:
                         properties={"relationship": "equivalent_category"},
                     )
                 )
-                
+
     store.commit()

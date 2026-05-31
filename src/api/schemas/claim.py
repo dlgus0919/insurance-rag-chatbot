@@ -18,7 +18,6 @@ class ClaimItemRequest(BaseModel):
     claimed_amount: str = Field(..., min_length=1)
     quantity: str = "1"
     user_category_hint: str = ""
-    is_prescription: bool = False
 
 
 class ClaimCaseContextRequest(BaseModel):
@@ -32,7 +31,11 @@ class ClaimCaseContextRequest(BaseModel):
     accident_type: str = ""
     situation_note: str = ""
     policy_generation: Literal["4th", "5th"] = "4th"
-    facility_grade: Literal["", "clinic", "hospital", "general_hospital", "tertiary_hospital"] = ""
+    complication_asserted: bool = False
+    treatment_purpose: str = ""
+    evidence_tags: list[str] = Field(default_factory=list)
+    facility_type: str = ""
+    facility_grade: str = ""
 
 
 class ClaimCalculationRequest(BaseModel):
@@ -64,7 +67,9 @@ class ClaimCalculationResponse(BaseModel):
     candidates: list[dict[str, str]]
     policy_generation: str = "4th"
     line_results: list[dict] = Field(default_factory=list)
-    applied_limits: dict[str, str] = Field(default_factory=dict)
+    calculation_status: str = "auto_calculated"
+    missing_evidence: list[str] = Field(default_factory=list)
+    review_actions: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
     @classmethod
@@ -82,6 +87,8 @@ class ClaimCalculationResponse(BaseModel):
             candidates=result.candidates,
             policy_generation=result.policy_generation,
             line_results=result.line_results,
-            applied_limits=result.applied_limits,
+            calculation_status=result.calculation_status,
+            missing_evidence=result.missing_evidence,
+            review_actions=result.review_actions,
             warnings=warnings or [],
         )

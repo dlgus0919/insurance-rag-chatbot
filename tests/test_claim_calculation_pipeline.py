@@ -131,6 +131,7 @@ def test_fifth_generation_three_nonpay_uses_nonsevere_rate():
     assert result.payable_amount == "50000"
     assert result.requires_review
     assert "5세대 3대비급여" in result.line_results[0]["rule_summary"]
+    assert "50%" in result.line_results[0]["rule_summary"]
 
 
 def test_excluded_standard_opinion_forces_zero_payable():
@@ -153,6 +154,70 @@ def test_excluded_standard_opinion_forces_zero_payable():
     assert result.requires_review
     assert "면책" in result.line_results[0]["rule_summary"]
     assert any("지급예상액을 0원" in reason for reason in result.review_reasons)
+
+
+def test_excluded_standard_opinion_blocks_llm_formula(monkeypatch):
+    """LLM 경로에서도 표준모델 면책 의견은 일반 산식보다 우선되어 0원 처리된다."""
+    items = [ClaimItemInput(line_id="line_excluded_llm", input_name="도수치료", input_code="51040", claimed_amount="100000")]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient")
+    mock_match = {
+        "std_cd": "51040",
+        "std_cd_nm": "도수치료",
+        "mid_category_cd_nm": "공상",
+        "ins_care_type_cd_nm": "급여",
+        "pay_opn_cd_nm": "면책",
+    }
+
+    class WrongLLM:
+        def generate(self, *_args, **_kwargs) -> str:
+            raise AssertionError("면책 표준모델은 LLM 계산 경로를 호출하지 않아야 한다.")
+
+    monkeypatch.setattr("src.claim_calculation.planner.build_llm", lambda *_args, **_kwargs: WrongLLM())
+
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=mock_match):
+        result = run_claim_calculation(None, items, context, use_fake_planner=False, provider="vllm", model_id="local-test")
+
+    assert result.deductible == "100000"
+    assert result.payable_amount == "0"
+    assert result.requires_review
+    assert result.line_results[0]["payable_amount"] == "0"
+
+
+def test_llm_wrong_fifth_generation_formula_is_overridden_by_deterministic_guard(monkeypatch):
+    """LLM이 5세대 비중증 비급여 공제율을 잘못 내도 결정론 기준으로 최종값을 보호한다."""
+    items = [ClaimItemInput(line_id="line_guard", input_name="비중증 비급여 주사료", claimed_amount="200000", user_category_hint="비중증비급여")]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient")
+
+    class WrongFormulaLLM:
+        def generate(self, *_args, **_kwargs) -> str:
+            formula = (
+                "from decimal import Decimal\n"
+                "claimed_amount = Decimal('200000')\n"
+                "deductible = max(Decimal('30000'), claimed_amount * Decimal('0.3'))\n"
+                "payable_amount = claimed_amount - deductible"
+            )
+            escaped = formula.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
+            return (
+                "{"
+                '"decision":"calculable",'
+                '"basis_summary":[{"source":"테스트","content":"잘못된 30% 산식"}],'
+                '"variables":{},'
+                '"calculation_steps":["잘못된 산식"],'
+                f'"formula_intent":"{escaped}",'
+                '"uncertainties":[]'
+                "}"
+            )
+
+    monkeypatch.setattr("src.claim_calculation.planner.build_llm", lambda *_args, **_kwargs: WrongFormulaLLM())
+
+    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+        result = run_claim_calculation(None, items, context, use_fake_planner=False, provider="vllm", model_id="local-test")
+
+    assert result.deductible == "100000"
+    assert result.payable_amount == "100000"
+    assert result.requires_review
+    assert any("결정론 계산값" in reason for reason in result.review_reasons)
+    assert "from decimal import Decimal" not in result.executed_code
 
 
 @pytest.mark.parametrize(
@@ -458,7 +523,7 @@ def test_pipeline_deterministic_default_prevents_over_claimed_warning():
         assert result.payable_amount == "40000"
         assert result.deductible == "10000"
         assert result.requires_review
-        assert any("급여/비급여" in reason or "불명확" in reason for reason in result.review_reasons)
+        assert any("급여/비급여 구분" in reason for reason in result.review_reasons)
 
 
 def test_pipeline_formatted_amount_parsing():
@@ -500,7 +565,7 @@ def test_pipeline_formatted_amount_parsing():
 
 
 def test_pipeline_multiple_candidates_populate():
-    """청구 항목의 표준코드 매칭 후보가 여러 개일 때, CalculationResult의 candidates 필드가 정상적으로 포퓰레이트되는지 검증한다."""
+    """복수 표준코드 후보는 후보를 노출하되 첫 번째 후보로 임의 계산하지 않는다."""
     items = [
         ClaimItemInput(
             line_id="item_multi_test",
@@ -525,9 +590,55 @@ def test_pipeline_multiple_candidates_populate():
         )
 
         assert result.requires_review
+        assert result.payable_amount == "0"
+        assert result.deductible == "0"
         assert len(result.candidates) == 2
         assert result.candidates[0]["code"] == "SC0001"
         assert result.candidates[1]["code"] == "MX122"
+        assert result.line_results[0]["rule_summary"] == "표준모델 후보 모호성으로 계산 보류"
+
+
+def test_pipeline_mri_does_not_match_unrelated_treatment_material():
+    """MRI 질의가 MRI 가능 치료재료 행에 매칭되어 3대비급여 계산으로 오분류되지 않도록 한다."""
+    items = [
+        ClaimItemInput(
+            line_id="item_mri",
+            input_name="MRI",
+            claimed_amount="100000",
+            quantity="1",
+        )
+    ]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient")
+    mock_matches = [
+        {
+            "std_cd": "TM001",
+            "std_cd_nm": "MRI SURESCAN PACEMAKER",
+            "mid_category_cd_nm": "말초신경자극술용 치료재료",
+            "ins_care_type_cd_nm": "비급여",
+            "pay_opn_cd_nm": "보상",
+        },
+        {
+            "std_cd": "HE115",
+            "std_cd_nm": "자기공명영상진단-복부",
+            "mid_category_cd_nm": "방사선특수영상진단료",
+            "ins_care_type_cd_nm": "비급여_특약3",
+            "pay_opn_cd_nm": "보상",
+        },
+    ]
+
+    with patch("src.db.standard_codes.search_by_name", return_value=mock_matches):
+        result = run_claim_calculation(
+            rag_pipeline=None,
+            items=items,
+            context=context,
+            use_fake_planner=True,
+        )
+
+    assert result.payable_amount == "50000"
+    assert result.deductible == "50000"
+    assert result.line_results[0]["category"] == "3대비급여"
+    assert "HE115" in result.applied_basis[0]["source"]
+    assert "TM001" not in result.applied_basis[0]["source"]
 
 
 def test_fake_planner_amount_formatting_variations():
@@ -562,7 +673,7 @@ def test_pipeline_confirmed_without_evidence_excluded():
 
     # Mock GraphRetrievalResult
     from src.graph.retriever import GraphRetrievalResult, GraphFact
-    
+
     mock_fact_no_ev = GraphFact(
         subject="테스트수술",
         relation="HAS_GRADE",
@@ -571,7 +682,7 @@ def test_pipeline_confirmed_without_evidence_excluded():
         confidence=1.0,
         evidence=[] # No evidence
     )
-    
+
     mock_fact_with_ev = GraphFact(
         subject="테스트수술",
         relation="POLICY_COVERS_PROCEDURE",
@@ -583,7 +694,7 @@ def test_pipeline_confirmed_without_evidence_excluded():
 
     mock_graph_result = MagicMock(spec=GraphRetrievalResult)
     mock_graph_result.facts = [mock_fact_no_ev, mock_fact_with_ev]
-    
+
     mock_rag = MagicMock()
     mock_rag.graph_enabled = True
     mock_rag.graph_retriever = MagicMock()
@@ -596,7 +707,7 @@ def test_pipeline_confirmed_without_evidence_excluded():
             context=context,
             use_fake_planner=True
         )
-        
+
         # applied_basis에 evidence가 없는 'HAS_GRADE' confirmed fact의 정보가 들어갔는지 검사
         # source 명칭 등을 통해 확인 가능
         graph_bases = [b for b in result.applied_basis if "GraphDB" in b["source"]]
@@ -615,7 +726,7 @@ def test_pipeline_candidate_pays_by_ratio_without_confirmed_forces_review():
 
     # Mock GraphRetrievalResult with candidate PAYS_BY_RATIO only
     from src.graph.retriever import GraphRetrievalResult, GraphFact
-    
+
     mock_fact_candidate = GraphFact(
         subject="테스트수술",
         relation="PAYS_BY_RATIO",
@@ -627,7 +738,7 @@ def test_pipeline_candidate_pays_by_ratio_without_confirmed_forces_review():
 
     mock_graph_result = MagicMock(spec=GraphRetrievalResult)
     mock_graph_result.facts = [mock_fact_candidate]
-    
+
     mock_rag = MagicMock()
     mock_rag.graph_enabled = True
     mock_rag.graph_retriever = MagicMock()
@@ -640,208 +751,7 @@ def test_pipeline_candidate_pays_by_ratio_without_confirmed_forces_review():
             context=context,
             use_fake_planner=True
         )
-        
+
         assert result.requires_review
         assert any("candidate PAYS_BY_RATIO" in reason for reason in result.review_reasons)
         assert result.notes == "추가 심사 검토가 필요합니다."
-
-
-# =====================================================================
-# Phase 1 추가 테스트: 의료기관 등급별 공제, 건당 한도, 처방약
-# =====================================================================
-
-def test_4th_outpatient_clinic_min_deductible():
-    """4세대 의원 급여 통원: 최소공제 10,000원 적용."""
-    items = [ClaimItemInput(line_id="fc1", input_name="진찰료", claimed_amount="30000", user_category_hint="급여")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th", facility_grade="clinic")
-    mock_match = {"std_cd": "SC001", "std_cd_nm": "진찰료", "pay_opn_cd_nm": "보상"}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    assert result.deductible == "10000"
-    assert result.payable_amount == "20000"
-
-
-def test_4th_outpatient_hospital_min_deductible():
-    """4세대 병원 급여 통원: 최소공제 15,000원 적용."""
-    items = [ClaimItemInput(line_id="fc2", input_name="진찰료", claimed_amount="30000", user_category_hint="급여")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th", facility_grade="hospital")
-    mock_match = {"std_cd": "SC001", "std_cd_nm": "진찰료", "pay_opn_cd_nm": "보상"}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    assert result.deductible == "15000"
-    assert result.payable_amount == "15000"
-
-
-def test_4th_outpatient_general_hospital_min_deductible():
-    """4세대 종합병원 급여 통원: 최소공제 20,000원 적용."""
-    items = [ClaimItemInput(line_id="fc3", input_name="진찰료", claimed_amount="30000", user_category_hint="급여")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th", facility_grade="general_hospital")
-    mock_match = {"std_cd": "SC001", "std_cd_nm": "진찰료", "pay_opn_cd_nm": "보상"}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    assert result.deductible == "20000"
-    assert result.payable_amount == "10000"
-
-
-def test_5th_outpatient_clinic_benefit():
-    """5세대 의원 급여 통원: 최소공제 10,000원 적용."""
-    items = [ClaimItemInput(line_id="fc4", input_name="진찰료", claimed_amount="30000", user_category_hint="급여")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="5th", facility_grade="clinic")
-    mock_match = {"std_cd": "SC001", "std_cd_nm": "진찰료", "pay_opn_cd_nm": "보상"}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    assert result.deductible == "10000"
-    assert result.payable_amount == "20000"
-
-
-def test_5th_outpatient_nonserious_hospital():
-    """5세대 병원 비중증비급여 통원: 50% 공제 및 최소공제 50,000원."""
-    items = [ClaimItemInput(line_id="fc5", input_name="도수치료", claimed_amount="200000", user_category_hint="비중증비급여")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="5th", facility_grade="hospital")
-    mock_match = {"std_cd": "MX122", "std_cd_nm": "도수치료", "pay_opn_cd_nm": "보상"}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    assert result.deductible == "100000"
-    assert result.payable_amount == "100000"
-
-
-def test_per_visit_limit_4th_outpatient():
-    """4세대 통원 건당 250,000원 한도 적용: 400,000원 청구 시 공제 후 남는 지급분이 한도를 초과."""
-    items = [ClaimItemInput(line_id="pvl1", input_name="진찰료", claimed_amount="400000", user_category_hint="급여")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th", facility_grade="clinic")
-    mock_match = {"std_cd": "SC001", "std_cd_nm": "진찰료", "pay_opn_cd_nm": "보상"}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    # 20% of 400000 = 80000 deductible, payable = 320000 > 250000 limit
-    assert result.payable_amount == "250000"
-    assert any("건당 한도" in r for r in result.review_reasons)
-
-
-def test_per_visit_limit_5th_outpatient():
-    """5세대 통원 건당 200,000원 한도 적용."""
-    items = [ClaimItemInput(line_id="pvl2", input_name="진찰료", claimed_amount="400000", user_category_hint="급여")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="5th", facility_grade="clinic")
-    mock_match = {"std_cd": "SC001", "std_cd_nm": "진찰료", "pay_opn_cd_nm": "보상"}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    # 20% of 400000 = 80000 deductible, payable = 320000 > 200000 limit
-    assert result.payable_amount == "200000"
-    assert any("건당 한도" in r for r in result.review_reasons)
-
-
-def test_prescription_4th_deductible():
-    """4세대 처방약: 8,000원 공제, 건당 50,000원 한도."""
-    items = [ClaimItemInput(line_id="rx1", input_name="처방약", claimed_amount="30000", user_category_hint="처방약")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th")
-    mock_match = {"std_cd": "", "std_cd_nm": "처방약", "pay_opn_cd_nm": ""}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    assert result.deductible == "8000"
-    assert result.payable_amount == "22000"
-
-
-def test_prescription_5th_deductible():
-    """5세대 처방약: 8,000원 공제."""
-    items = [ClaimItemInput(line_id="rx2", input_name="처방약", claimed_amount="30000", user_category_hint="처방약")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="5th")
-    mock_match = {"std_cd": "", "std_cd_nm": "처방약", "pay_opn_cd_nm": ""}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    assert result.deductible == "8000"
-    assert result.payable_amount == "22000"
-
-
-def test_prescription_per_visit_limit():
-    """처방약 건당 한도 50,000원 초과 시 한도 적용."""
-    items = [ClaimItemInput(line_id="rx3", input_name="처방약", claimed_amount="80000", user_category_hint="처방약")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th")
-    mock_match = {"std_cd": "", "std_cd_nm": "처방약", "pay_opn_cd_nm": ""}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    # 80000 - 8000 = 72000 > 50000, 한도 적용
-    assert result.payable_amount == "50000"
-    assert any("처방약 건당 한도" in r for r in result.review_reasons)
-
-
-def test_prescription_auto_detect_keyword():
-    """input_name에 '약제비' 키워드 → 자동 처방약 분류."""
-    items = [ClaimItemInput(line_id="rx4", input_name="약제비", claimed_amount="20000")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th")
-    mock_match = {"std_cd": "", "std_cd_nm": "약제비", "pay_opn_cd_nm": ""}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    assert result.deductible == "8000"
-    assert result.payable_amount == "12000"
-    # line_results에서 category가 처방약인지 확인
-    assert result.line_results[0]["category"] == "처방약"
-
-
-def test_prescription_is_prescription_flag():
-    """is_prescription=True 플래그 → 처방약 분류 우선."""
-    items = [ClaimItemInput(line_id="rx5", input_name="일반항목", claimed_amount="25000", is_prescription=True)]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th")
-    mock_match = {"std_cd": "", "std_cd_nm": "일반항목", "pay_opn_cd_nm": ""}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    assert result.line_results[0]["category"] == "처방약"
-    assert result.deductible == "8000"
-
-
-def test_no_facility_grade_fallback():
-    """의료기관 등급 미입력 시 의원(clinic) 기본 적용."""
-    items = [ClaimItemInput(line_id="fb1", input_name="진찰료", claimed_amount="30000", user_category_hint="급여")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th", facility_grade="")
-    mock_match = {"std_cd": "SC001", "std_cd_nm": "진찰료", "pay_opn_cd_nm": "보상"}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    # 의원 기본: 최소공제 10000, 20% of 30000 = 6000 < 10000
-    assert result.deductible == "10000"
-
-
-def test_hospitalization_ignores_facility_grade():
-    """입원은 의료기관 등급별 최소공제 없음 (0원)."""
-    items = [ClaimItemInput(line_id="hi1", input_name="수술비", claimed_amount="1000000", user_category_hint="급여")]
-    context = ClaimCaseContext(visit_type="hospitalization", policy_generation="4th", facility_grade="tertiary_hospital")
-    mock_match = {"std_cd": "SC001", "std_cd_nm": "수술비", "pay_opn_cd_nm": "보상"}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    # 20% of 1000000 = 200000, no min deductible for hospitalization
-    assert result.deductible == "200000"
-    assert result.payable_amount == "800000"
-
-
-def test_applied_limits_populated():
-    """결과에 applied_limits 정보 포함 확인."""
-    items = [ClaimItemInput(line_id="al1", input_name="진찰료", claimed_amount="50000", user_category_hint="급여")]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th")
-    mock_match = {"std_cd": "SC001", "std_cd_nm": "진찰료", "pay_opn_cd_nm": "보상"}
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    assert "per_visit_limit" in result.applied_limits
-    assert "remaining_note" in result.applied_limits
-
-
-def test_mixed_prescription_and_treatment():
-    """처방약 + 진료비 복합 항목 합산."""
-    items = [
-        ClaimItemInput(line_id="mx1", input_name="도수치료", claimed_amount="150000", user_category_hint="비급여"),
-        ClaimItemInput(line_id="mx2", input_name="처방약", claimed_amount="30000", user_category_hint="처방약"),
-    ]
-    context = ClaimCaseContext(visit_type="outpatient", policy_generation="4th", facility_grade="clinic")
-    mock_matches = [
-        {"std_cd": "MX122", "std_cd_nm": "도수치료", "pay_opn_cd_nm": "보상"},
-        {"std_cd": "", "std_cd_nm": "처방약", "pay_opn_cd_nm": ""},
-    ]
-    with patch("src.db.standard_codes.search_by_name", side_effect=[[mock_matches[0]], [mock_matches[1]]]):
-        result = run_claim_calculation(rag_pipeline=None, items=items, context=context, use_fake_planner=True)
-    # 도수치료: 30% of 150000 = 45000 deductible, payable = 105000
-    # 처방약: 8000 deductible, payable = 22000
-    assert len(result.line_results) == 2
-    assert result.line_results[0]["category"] == "3대비급여"  # 도수치료 → 3대비급여 자동 분류
-    assert result.line_results[1]["category"] == "처방약"
-    total_payable = int(result.payable_amount)
-    total_deductible = int(result.deductible)
-    # 4세대 도수치료(3대비급여=비급여 동일 30%): 150000 * 0.3 = 45000 deductible, payable = 105000
-    # 처방약: 8000 deductible, payable = 22000
-    assert total_payable == 105000 + 22000  # 127000
-    assert total_deductible == 45000 + 8000  # 53000

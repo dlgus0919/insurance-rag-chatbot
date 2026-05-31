@@ -33,6 +33,12 @@ LOCAL_LARGE_MODEL_INFO: dict[str, dict[str, str]] = {
         "status": "validated",
         "use_case": "vLLM 로컬 답변",
     },
+    "gemma-4-31b-it-nvfp4": {
+        "family": "Gemma 4",
+        "size": "31B IT NVFP4",
+        "status": "staged",
+        "use_case": "vLLM 고성능 로컬 답변",
+    },
     "nemotron-3-nano-30b-a3b-nvfp4": {
         "family": "Nemotron 3 Nano",
         "size": "30B A3B NVFP4",
@@ -59,6 +65,18 @@ SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
         "size": "30B A3B FP8",
         "status": "staged",
         "use_case": "SGLang 신규 비교 모델",
+    },
+    "qwen3-next-80b-a3b-instruct-fp8": {
+        "family": "Qwen3 Next Instruct",
+        "size": "80B A3B FP8",
+        "status": "staged",
+        "use_case": "SGLang 장문/고성능 비교 모델",
+    },
+    "qwen3-next-80b-a3b-thinking-fp8": {
+        "family": "Qwen3 Next Thinking",
+        "size": "80B A3B FP8",
+        "status": "staged",
+        "use_case": "SGLang 추론형 비교 모델",
     },
 }
 

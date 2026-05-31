@@ -86,4 +86,53 @@ def test_graph_context_category_table_keeps_multiple_fee_codes() -> None:
     assert "| 췌장 이식수술 | 신1-5종 5종 |" in context
     assert "Q8061 (췌이식술-부분)" in context
     assert "Q8062 (췌이식술-췌장 및 십이지장)" in context
-    assert "Q8061 (췌이식술-부분)<br>[CONFIRMED] Q8062" in context
+    assert "<br>" not in context
+    assert "Q8061 (췌이식술-부분) / Q8062 (췌이식술-췌장 및 십이지장)" in context
+    assert "[CANDIDATE] 100%" not in context
+    assert "확정 답변 산출에서 제외한 GraphDB 항목" in context
+    assert "췌장 이식수술 --(PAYS_BY_RATIO)--> candidate" in context
+
+
+def test_graph_context_redacts_candidate_object_values() -> None:
+    """후보 지급비율 값은 일반 컨텍스트에서도 확정 답변 재료로 노출하지 않는다."""
+
+    result = GraphRetrievalResult(
+        plan=GraphQueryPlan(intents=["policy_appendix_payment_lookup"]),
+        facts=[
+            GraphFact(
+                subject="췌장 이식수술",
+                relation="PAYS_BY_RATIO",
+                object="100%",
+                confidence=0.8,
+                status="candidate",
+                properties={"payment_ratio": "100%"},
+            ),
+        ],
+    )
+
+    context = build_graph_context(result)
+
+    assert "100%" not in context
+    assert "검토 후보(확정 대상 아님)" in context
+
+
+def test_graph_context_includes_unconfirmed_term_correction_candidates() -> None:
+    result = GraphRetrievalResult(
+        plan=GraphQueryPlan(
+            intents=["ordinary_rag"],
+            term_correction_candidates=[
+                {
+                    "raw": "엠알아이",
+                    "normalized": "MRI",
+                    "reason": "사용자 입력 표현 확인 필요",
+                }
+            ],
+            clarification_questions=["'엠알아이' 표현이 'MRI'을 의미하는지 확인해 주세요."],
+        )
+    )
+
+    context = build_graph_context(result)
+
+    assert "입력 용어 보정 후보 (미확정)" in context
+    assert "엠알아이 -> MRI" in context
+    assert "확인 전에는 보상 판단의 전제로 삼지 마십시오" in context

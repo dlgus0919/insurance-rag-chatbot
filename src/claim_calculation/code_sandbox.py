@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import ast
 import io
+import re
 from contextlib import redirect_stdout, redirect_stderr
 from decimal import Decimal
-from typing import Any, Dict
+from typing import Any
 
 
 class SecurityValidationError(Exception):
@@ -113,12 +114,31 @@ class SafeASTVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
 
+_SAFE_IMPORT_LINE_RE = re.compile(r"^\s*from\s+decimal\s+import\s+Decimal\s*(?:#.*)?$")
+
+
+def normalize_calculation_code(code_str: str) -> str:
+    """LLM이 자주 붙이는 안전한 Decimal import만 제거한다.
+
+    샌드박스 실행 환경에는 Decimal이 이미 주입되어 있으므로 `from decimal import
+    Decimal`은 의미상 불필요하다. 다른 import는 계속 AST 검증에서 차단한다.
+    """
+
+    lines = []
+    for line in (code_str or "").splitlines():
+        if _SAFE_IMPORT_LINE_RE.match(line):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
 def validate_code_safety(code_str: str) -> None:
     """코드가 안전한지 AST 검증을 수행한다."""
-    if len(code_str) > 1000:
+    normalized_code = normalize_calculation_code(code_str)
+    if len(normalized_code) > 1000:
         raise SecurityValidationError("코드 길이가 너무 깁니다. (최대 1000자)")
     try:
-        tree = ast.parse(code_str)
+        tree = ast.parse(normalized_code)
     except SyntaxError as e:
         raise SecurityValidationError(f"구문 오류가 발생했습니다: {e}")
 
@@ -133,7 +153,8 @@ def execute_calculation(code_str: str) -> dict[str, Any]:
     - builtins가 제거된 제한된 globals 사용
     - stdout/stderr 캡처
     """
-    validate_code_safety(code_str)
+    normalized_code = normalize_calculation_code(code_str)
+    validate_code_safety(normalized_code)
 
     # 제한된 globals 설정
     safe_globals: dict[str, Any] = {
@@ -152,7 +173,7 @@ def execute_calculation(code_str: str) -> dict[str, Any]:
     try:
         with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
             # exec 실행
-            exec(code_str, safe_globals, local_vars)
+            exec(normalized_code, safe_globals, local_vars)
     except Exception as e:
         raise RuntimeError(f"실행 중 런타임 에러 발생: {e}") from e
 
@@ -161,4 +182,5 @@ def execute_calculation(code_str: str) -> dict[str, Any]:
         "variables": local_vars,
         "stdout": stdout_buf.getvalue(),
         "stderr": stderr_buf.getvalue(),
+        "code": normalized_code,
     }

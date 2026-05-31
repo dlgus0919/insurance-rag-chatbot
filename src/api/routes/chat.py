@@ -25,9 +25,11 @@ from src.api.rag_service import (
     prepare_formal_context,
     prepare_quickcode_context,
     prepare_retrieved_context,
+    resolve_effective_index_mode,
 )
 from src.api.schemas.chat import ChatRequest
 from src.auth.users import User
+from src.rag.pipeline import DebugInfo
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -60,12 +62,14 @@ async def chat_stream(
         graph_payload = None
         warnings: list[dict] = []
         deterministic_answer: str | None = None
+        debug_info: DebugInfo | None = None
         tokens: list[str] = []
         selected_model = _select_model(chat_request)
+        effective_index_mode = resolve_effective_index_mode(chat_request.query, chat_request.index_mode)
         started = time.perf_counter()
         try:
             yield _sse("status", "searching")
-            pipeline = _get_pipeline(selected_model, chat_request.top_k, chat_request.index_mode)
+            pipeline = _get_pipeline(selected_model, chat_request.top_k, effective_index_mode)
             system_prompt = SYSTEM_PROMPT
             doc_filter = None
             if chat_request.mode == "quickcode":
@@ -80,7 +84,7 @@ async def chat_stream(
                     chat_request.memo,
                 )
             else:
-                chunks, sources, prompt, graph_payload, warnings, deterministic_answer = await prepare_retrieved_context(
+                chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug_info = await prepare_retrieved_context(
                     pipeline,
                     chat_request.query,
                     chat_request.top_k,
@@ -128,10 +132,22 @@ async def chat_stream(
                     "top_k": chat_request.top_k,
                     "temperature": chat_request.temperature,
                     "index_mode": chat_request.index_mode,
+                    "effective_index_mode": effective_index_mode,
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
                     "session_id": chat_session.id,
                     "source_count": len(sources),
+                    "query_preview": chat_request.query.strip()[:200],
                     "doc_filter": doc_filter,
+                    "rag_diagnostics": _build_rag_diagnostics(
+                        question=chat_request.query,
+                        model=selected_model,
+                        index_mode=chat_request.index_mode,
+                        effective_index_mode=effective_index_mode,
+                        debug=debug_info,
+                        source_count=len(sources),
+                        warnings=warnings,
+                        elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
+                    ) if chat_request.mode == "general" else None,
                     "request_id": getattr(getattr(request, "state", None), "request_id", None),
                 },
             )
@@ -202,6 +218,77 @@ def _chunk_text(text: str, size: int = 32):
 
     for start in range(0, len(text), size):
         yield text[start:start + size]
+
+
+def _build_rag_diagnostics(
+    *,
+    question: str,
+    model: str,
+    index_mode: str,
+    effective_index_mode: str,
+    debug: DebugInfo | None,
+    source_count: int,
+    warnings: list[dict],
+    elapsed_ms: float,
+) -> dict:
+    dense_hits = list(getattr(debug, "dense_hits", []) or [])
+    bm25_hits = list(getattr(debug, "bm25_hits", []) or [])
+    rrf_hits = list(getattr(debug, "rrf_hits", []) or [])
+    final_hits = list(getattr(debug, "final_hits", []) or [])
+    graph_result = getattr(debug, "graph_result", None) if debug is not None else None
+    graph_plan = getattr(graph_result, "plan", None) if graph_result is not None else None
+    return {
+        "query_preview": question.strip()[:200],
+        "model": model,
+        "index_mode": index_mode,
+        "effective_index_mode": effective_index_mode,
+        "warnings": warnings,
+        "normalized_terms": dict(getattr(graph_plan, "normalized_terms", {}) or {}),
+        "term_correction_candidates": list(getattr(graph_plan, "term_correction_candidates", []) or []),
+        "ambiguous_terms": list(getattr(graph_plan, "ambiguous_terms", []) or []),
+        "clarification_questions": list(getattr(graph_plan, "clarification_questions", []) or []),
+        "graph_review_path_count": len(getattr(graph_result, "review_paths", []) or []) if graph_result is not None else 0,
+        "steps": [
+            {
+                "key": "query_preprocess",
+                "label": "쿼리 전처리",
+                "result": question.strip()[:200],
+                "elapsed_ms": None,
+                "status": "done",
+            },
+            _build_hit_step("bm25", "BM25 키워드 검색", bm25_hits),
+            _build_hit_step("dense", "임베딩 벡터 검색", dense_hits),
+            _build_hit_step("rrf", "후보 융합", rrf_hits),
+            _build_hit_step("final", "최종 검색 후보", final_hits, source_count=source_count),
+            {
+                "key": "llm",
+                "label": "LLM 답변 생성",
+                "result": f"{model} / 출처 {source_count}건 / 경고 {len(warnings)}건",
+                "elapsed_ms": elapsed_ms,
+                "status": "done",
+            },
+        ],
+    }
+
+
+def _build_hit_step(key: str, label: str, hits: list, *, source_count: int | None = None) -> dict:
+    hit_count = len(hits)
+    top_score = getattr(hits[0], "score", None) if hits else None
+    top_doc = getattr(hits[0], "doc_short", "") if hits else ""
+    result = f"{hit_count}건"
+    if hit_count and top_score is not None:
+        result += f" (상위 스코어 {top_score})"
+    if top_doc:
+        result += f" / {top_doc}"
+    if source_count is not None:
+        result += f" / 출처 {source_count}건"
+    return {
+        "key": key,
+        "label": label,
+        "result": result if hit_count else "결과 없음",
+        "elapsed_ms": None,
+        "status": "done" if hit_count else "empty",
+    }
 
 
 async def _ensure_session(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+import re
 from src.claim_calculation.models import StandardMatch
 from src.db import standard_codes
 
@@ -33,6 +34,10 @@ def match_standard_code(input_name: str, input_code: str = "") -> list[StandardM
     if not rows:
         return []
 
+    rows = _filter_rows_for_query(input_name, rows)
+    if not rows:
+        return []
+
     matches = []
     # 2개 이상인 경우 모호성 표시 활성화
     requires_disambiguation = len(rows) > 1
@@ -44,7 +49,56 @@ def match_standard_code(input_name: str, input_code: str = "") -> list[StandardM
             match.requires_user_disambiguation = True
         matches.append(match)
 
+    # 정렬: 면책이나 추가확인(requires_review=True)인 항목은 뒤로 밀려나도록 정렬
+    matches.sort(key=lambda x: (x.requires_review, x.std_cd_nm))
     return matches
+
+
+def _normalize_text(value: str) -> str:
+    return re.sub(r"\s+", "", (value or "").strip().lower())
+
+
+def _row_text(row: dict[str, Any]) -> str:
+    return " ".join(
+        str(row.get(key) or "")
+        for key in (
+            "std_cd",
+            "std_cd_nm",
+            "mid_category_cd_nm",
+            "ins_care_type_cd_nm",
+            "medical_class_cd_nm",
+            "item_class_level1cd_nm",
+            "item_class_level2cd_nm",
+            "pay_opn_cd_nm",
+        )
+    )
+
+
+def _filter_rows_for_query(input_name: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Reduce known broad-name false positives before disambiguation.
+
+    Short words such as MRI/MRA often match unrelated treatment materials. Keep
+    rows tied to imaging fee categories when the user asks for MRI/MRA, while
+    preserving all original rows for ordinary fuzzy queries.
+    """
+
+    normalized = _normalize_text(input_name)
+    if normalized in {"mri", "mra", "mri검사", "mra검사", "자기공명영상", "자기공명영상진단"}:
+        imaging_rows = [
+            row for row in rows
+            if any(
+                keyword in _row_text(row)
+                for keyword in (
+                    "자기공명영상진단",
+                    "자기공명혈관조영술",
+                    "방사선특수영상진단료",
+                    "비급여_특약3",
+                )
+            )
+        ]
+        if imaging_rows:
+            return imaging_rows
+    return rows
 
 
 def _row_to_standard_match(row: dict[str, Any], match_confidence: str) -> StandardMatch:

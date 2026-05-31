@@ -261,6 +261,9 @@ class VectorStore:
 
         def _get_fallback_ids(chunk_id: str) -> list[str]:
             fallbacks = []
+            normalized_id = re.sub(r"_(?:v2_manual|v1_original|v1_v2_combined)(?=_ch_)", "", chunk_id)
+            if normalized_id != chunk_id:
+                fallbacks.append(normalized_id)
             if chunk_id.startswith("v1_"):
                 suffix = chunk_id[3:]
                 fallbacks.append(f"v2_{suffix}")
@@ -272,6 +275,9 @@ class VectorStore:
             else:
                 fallbacks.append(f"v1_{chunk_id}")
                 fallbacks.append(f"v2_{chunk_id}")
+            for marker in ("_v2_manual_", "_v1_original_", "_v1_v2_combined_"):
+                if marker in chunk_id:
+                    fallbacks.append(chunk_id.replace(marker, "_"))
             return fallbacks
 
         all_candidates = []
@@ -322,4 +328,48 @@ class VectorStore:
                         metadata=data["metadata"],
                     )
                 )
+        return hits
+
+    def get_by_doc_page(
+        self,
+        doc_short: str,
+        page_start: int | None,
+        page_end: int | None = None,
+        limit: int = 3,
+    ) -> list[Hit]:
+        """문서 축약명과 페이지 범위로 청크를 조회한다.
+
+        GraphDB evidence의 chunk_id가 현재 인덱스와 동기화되지 않은 경우를 위한
+        fallback이다. 같은 문서의 페이지가 겹치는 청크만 반환한다.
+        """
+
+        if not doc_short or page_start is None or limit <= 0:
+            return []
+        final_page_end = page_end if page_end is not None else page_start
+        try:
+            result = self.collection.get(where={"doc_short": doc_short}, include=["documents", "metadatas"])
+        except Exception:
+            return []
+
+        ids = result.get("ids", [])
+        documents = result.get("documents", [])
+        metadatas = result.get("metadatas", [])
+        hits: list[Hit] = []
+        for index, hit_id in enumerate(ids):
+            metadata = _decode_metadata(metadatas[index] if index < len(metadatas) else {})
+            hit_start = metadata.get("page_start")
+            hit_end = metadata.get("page_end", hit_start)
+            if hit_start is None or hit_end is None:
+                continue
+            if int(hit_start) <= int(final_page_end) and int(hit_end) >= int(page_start):
+                hits.append(
+                    Hit(
+                        id=hit_id,
+                        score=1.0,
+                        document=documents[index] if index < len(documents) else "",
+                        metadata=metadata,
+                    )
+                )
+            if len(hits) >= limit:
+                break
         return hits

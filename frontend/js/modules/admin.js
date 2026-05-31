@@ -1,5 +1,5 @@
 import { API_CONFIG } from '../config.js';
-import { fetchAPI } from '../api.js';
+import { fetchAPI } from '../api.js?v=20260528_admin_user_validation';
 
 const DEFAULT_PAGE_SIZE = 100;
 
@@ -106,6 +106,22 @@ export async function exportAuditLogs(options = {}) {
 
 export function fetchSystemStats() {
   return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_STATS);
+}
+
+export function fetchSystemSummary() {
+  return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_SYSTEM_SUMMARY);
+}
+
+export function fetchLatestRagDiagnostics() {
+  return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_RAG_DIAGNOSTICS);
+}
+
+export function fetchGraphVectorSync(options = {}) {
+  return fetchAPI(buildEndpoint(API_CONFIG.ENDPOINTS.ADMIN_GRAPH_VECTOR_SYNC, {
+    index_mode: options.indexMode || options.index_mode || 'default',
+    limit: options.limit || 300,
+    seed: options.seed,
+  }));
 }
 
 export function normalizeListResponse(response) {

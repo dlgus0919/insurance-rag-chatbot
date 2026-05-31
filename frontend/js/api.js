@@ -27,7 +27,8 @@ export async function fetchAPI(endpoint, options = {}) {
     ]);
 
     if (!response.ok) {
-      const error = new Error(`HTTP ${response.status}`);
+      const message = await readErrorMessage(response);
+      const error = new Error(message || `HTTP ${response.status}`);
       error.status = response.status;
       error.response = response;
       throw error;
@@ -43,6 +44,27 @@ export async function fetchAPI(endpoint, options = {}) {
     console.error(`API Error [${endpoint}]:`, error);
     throw error;
   }
+}
+
+async function readErrorMessage(response) {
+  try {
+    const data = await response.json();
+    if (typeof data?.error?.message === 'string') return data.error.message;
+    if (typeof data?.message === 'string') return data.message;
+    if (typeof data?.detail === 'string') return data.detail;
+    if (Array.isArray(data?.detail)) {
+      return data.detail.map(formatValidationDetail).filter(Boolean).join('\n');
+    }
+  } catch {
+    // Ignore non-JSON error responses.
+  }
+  return `HTTP ${response.status}`;
+}
+
+function formatValidationDetail(detail) {
+  const field = Array.isArray(detail?.loc) ? detail.loc.filter((part) => part !== 'body').join('.') : '';
+  const message = detail?.msg || '입력값이 올바르지 않습니다.';
+  return field ? `${field}: ${message}` : message;
 }
 
 // ===== 인증 관련 API =====

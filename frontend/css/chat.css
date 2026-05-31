@@ -228,7 +228,7 @@
   .claim-remove-line{background:#6b7280;padding-left:10px;padding-right:10px;}
   .claim-remove-line:hover{background:#4b5563;}
   .claim-note{grid-column:1 / span 3;}
-  .claim-result{min-width:min(560px,72vw);}
+  .claim-result{width:100%; max-width:100%; box-sizing:border-box;}
   .claim-status{
     display:inline-flex;align-items:center;
     padding:3px 9px;border-radius:999px;
@@ -342,19 +342,33 @@
     display:inline-block;background:var(--primary-light);color:var(--primary);
     padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;margin:2px 2px 0 0;
   }
-  .msg-warnings,.graph-facts{
+  .msg-warnings,.msg-clarifications,.graph-review-paths,.graph-facts{
     margin-top:10px;padding:9px 10px;border:1px solid var(--border);
     border-radius:8px;background:var(--soft-bg);font-size:11px;color:var(--navy);
   }
   .msg-warnings{
     border-color:#f3c56b;background:#fff8e7;color:#7a4b00;
   }
+  .msg-clarifications{
+    border-color:#8cb5ff;background:#f3f7ff;color:#17336b;
+  }
+  .graph-review-paths{
+    border-color:#aac7a6;background:#f6fbf4;color:#173b22;
+  }
   .evidence-title{
     font-size:11px;font-weight:800;margin-bottom:6px;color:var(--navy);
   }
   .msg-warnings .evidence-title{color:#7a4b00;}
-  .msg-warnings ul,.graph-facts ul{margin:0;padding-left:15px;}
-  .msg-warnings li,.graph-facts li{margin:3px 0;line-height:1.5;}
+  .msg-clarifications .evidence-title{color:#0d43a1;}
+  .graph-review-paths .evidence-title{color:#0a6a35;}
+  .msg-warnings ul,.msg-clarifications ul,.graph-review-paths ul,.graph-facts ul{margin:0;padding-left:15px;}
+  .msg-warnings li,.msg-clarifications li,.graph-review-paths li,.graph-facts li{margin:3px 0;line-height:1.5;}
+  .clarify-subtitle{font-size:10px;font-weight:800;margin:6px 0 3px 0;color:#1e4c9d;}
+  .clarify-tags{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:5px;}
+  .clarify-tags span{display:inline-block;border:1px solid #b8ccff;background:#fff;color:#1d4ed8;border-radius:999px;padding:1px 6px;font-size:10px;font-weight:700;}
+  .review-status{display:inline-block;margin-left:4px;color:#0a6a35;font-size:10px;font-weight:800;}
+  .review-summary{margin-top:2px;color:#35513b;}
+  .review-line{margin-top:3px;color:#244b2d;}
   .graph-section{margin-top:7px;}
   .graph-section-title{font-size:10px;font-weight:800;margin-bottom:3px;}
   .graph-confirmed .graph-section-title{color:#0a7c45;}

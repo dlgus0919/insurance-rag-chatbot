@@ -8,6 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from src.claim_calculation.models import ClaimItemInput, ClaimCaseContext, CalculationPlan
+from src.claim_calculation.code_sandbox import normalize_calculation_code
 from src.llm.factory import build_llm
 
 logger = logging.getLogger(__name__)
@@ -84,6 +85,7 @@ class LLMPlanner:
 	2. 'formula_intent' 필드에는 보안 Python AST 샌드박스에서 Decimal 연산으로 바로 실행될 수 있는 유효한 Python 코드 조각을 작성해야 합니다.
 	   - 반드시 'claimed_amount', 'deductible', 'payable_amount' 변수가 최종적으로 할당되도록 하세요.
 	   - 내장 함수는 max, min, abs만 사용할 수 있고, 수치는 Decimal('값')으로 감싸야 합니다. (예: Decimal('150000') * Decimal('0.2'))
+	   - import 문은 작성하지 마세요. Decimal, max, min, abs는 샌드박스 실행 환경에 이미 제공됩니다.
 	   - 사용자가 입력한 청구액은 이 MVP 계산에서 해당 항목의 보장대상/청구 의료비로 사용합니다. 약관에 "보장대상 의료비", "청구금액", "비급여 의료비" 같은 표현이 나오면 별도 금액이 명시되지 않는 한 입력 청구액(`claimed_amount`)에 대응시켜 계산하세요.
 	   - 수량/횟수가 1보다 크면 항목별 청구액과 수량을 곱한 총액을 `claimed_amount`로 사용하세요.
 	   - 예시:
@@ -175,6 +177,8 @@ JSON Schema:
 
             # formula_intent가 있을 경우, 'claimed_amount', 'deductible', 'payable_amount' 변수가 할당되는지 AST 분석
             import ast
+            formula_intent = normalize_calculation_code(formula_intent)
+            data["formula_intent"] = formula_intent
             try:
                 tree = ast.parse(formula_intent)
             except SyntaxError as e:
