@@ -10,9 +10,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
+
+project_root = Path(__file__).resolve().parent.parent
+sys.path.append(str(project_root))
 
 from src import config
 from src.graph.retriever import GraphRetriever, GraphRetrievalResult

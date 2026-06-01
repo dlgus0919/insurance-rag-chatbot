@@ -56,7 +56,7 @@ class GraphRetrievalResult:
 
 @dataclass
 class SessionAssertion:
-    kind: Literal["diagnosis", "procedure", "fee_code", "coverage_topic", "condition", "complication"]
+    kind: Literal["diagnosis", "procedure", "fee_code", "coverage_topic", "condition", "complication", "claim_unit", "disease_grouping"]
     value: str
     source: Literal["question", "claim_form", "receipt_parser", "detail_statement_parser"] = "question"
     confidence: float = 1.0
@@ -85,6 +85,11 @@ class GraphReviewPath:
         "claim_calculation_review",
         "coordination_review",
         "generation_rule_review",
+        "one_disease_review",
+        "disease_grouping_review",
+        "claim_unit_limit_review",
+        "same_disease_surgery_review",
+        "recurrent_treatment_review",
     ]
     steps: List[GraphPathStep] = field(default_factory=list)
     status: Literal["missing", "candidate", "review_required", "confirmed"] = "missing"
@@ -468,6 +473,14 @@ class GraphRetriever:
                     matched_concept = keyword
                     break
             assertions.append(SessionAssertion(kind="complication", value=matched_concept))
+        for claim_unit in getattr(plan, "claim_unit_terms", []) or []:
+            assertions.append(SessionAssertion(kind="claim_unit", value=claim_unit))
+        if getattr(plan, "same_disease_claimed", False):
+            assertions.append(SessionAssertion(kind="disease_grouping", value="동일 질병 주장", notes="질문에서 동일 질병 또는 하나의 질병 여부가 주장됨"))
+        if getattr(plan, "same_treatment_purpose_claimed", False):
+            assertions.append(SessionAssertion(kind="disease_grouping", value="같은 치료 목적 주장", notes="질문에서 같은 치료 목적 여부가 주장됨"))
+        if getattr(plan, "newly_found_disease_claimed", False):
+            assertions.append(SessionAssertion(kind="disease_grouping", value="새로 발견된 질병 병행 주장", notes="질문에서 새로 발견된 질병 또는 병행 치료가 주장됨"))
         return assertions
 
     def _matches_context(self, plan: GraphQueryPlan, node_id: str, store: GraphStore) -> bool:
@@ -569,6 +582,12 @@ class GraphRetriever:
             for evidence in evidences:
                 if evidence.chunk_id:
                     source_chunk_ids.add(evidence.chunk_id)
+
+        one_disease_path = self._collect_one_disease_review_path(store, plan, question, session_assertions)
+        if one_disease_path:
+            review_paths.append(one_disease_path)
+            for step in one_disease_path.steps:
+                append_source_chunks(step.evidence)
 
         # complication review
         if plan.complication_asserted:
@@ -937,7 +956,11 @@ class GraphRetriever:
             )
 
         # generation-specific review path
-        if plan.policy_generation or any(name in {"실손", "3대비급여", "도수치료", "MRI", "MRA", "자기공명영상진단"} for name in condition_names):
+        if (
+            plan.policy_generation
+            or getattr(plan, "recurrent_or_continuing_treatment", False)
+            or any(name in {"실손", "3대비급여", "도수치료", "MRI", "MRA", "자기공명영상진단"} for name in condition_names)
+        ):
             generation_rules = sorted({rule for path in review_paths for rule in path.generation_rules})
             deductible_rules = sorted({rule for path in review_paths for rule in path.deductible_rules})
             benefit_limits = sorted({rule for path in review_paths for rule in path.benefit_limits})
@@ -965,6 +988,160 @@ class GraphRetriever:
             )
 
         return session_assertions, review_paths, source_chunk_ids
+
+    def _collect_one_disease_review_path(
+        self,
+        store: GraphStore,
+        plan: GraphQueryPlan,
+        question: str,
+        session_assertions: list[SessionAssertion],
+    ) -> GraphReviewPath | None:
+        requested_units = list(dict.fromkeys(getattr(plan, "claim_unit_terms", []) or []))
+        if not requested_units and not getattr(plan, "disease_grouping_requested", False):
+            return None
+        if not requested_units:
+            requested_units = ["하나의 질병"]
+
+        steps: list[GraphPathStep] = [
+            GraphPathStep(
+                source="session",
+                subject="질문/입력",
+                relation="ASSERTS",
+                object=assertion.value,
+                status="asserted",
+                notes=assertion.notes,
+            )
+            for assertion in session_assertions
+            if assertion.kind in {"claim_unit", "disease_grouping", "complication", "diagnosis", "procedure"}
+        ]
+        required_documents: list[str] = []
+        review_actions: list[str] = []
+        benefit_limits: list[str] = []
+        deductible_rules: list[str] = []
+        generation_rules: list[str] = []
+        matched_any = False
+        seen_steps: set[tuple[str, str, str | None]] = set()
+
+        def append_step(step: GraphPathStep) -> None:
+            key = (step.subject, step.relation, step.object)
+            if key not in seen_steps:
+                seen_steps.add(key)
+                steps.append(step)
+
+        for unit in requested_units:
+            unit_nodes = self._query_nodes_by_type(store, NodeType.ClaimUnitConcept, [unit])
+            for unit_node in unit_nodes:
+                unit_name = unit_node["canonical_name"]
+                for clause in self._find_linked_sources(store, unit_node["node_id"], EdgeType.DEFINES_CLAIM_UNIT):
+                    if not self._matches_context(plan, clause["node_id"], store):
+                        continue
+                    matched_any = True
+                    clause_evidences = self._get_node_evidences(store, clause["node_id"])
+                    append_step(
+                        GraphPathStep(
+                            source="graphdb",
+                            subject=clause["canonical_name"],
+                            relation=EdgeType.DEFINES_CLAIM_UNIT.value,
+                            object=unit_name,
+                            status="candidate",
+                            evidence=clause_evidences,
+                            notes="약관 원문에서 확인된 claim unit 후보",
+                        )
+                    )
+                    rule_steps, categories = self._collect_rule_links_for_clause(
+                        store,
+                        clause["node_id"],
+                        strong_match=False,
+                        evidences=clause_evidences,
+                    )
+                    for rule_step in rule_steps:
+                        append_step(rule_step)
+                    benefit_limits.extend(categories.get("benefit_limits", []))
+                    deductible_rules.extend(categories.get("deductible_rules", []))
+                    generation_rules.extend(categories.get("generation_rules", []))
+                    for action in self._find_linked_targets(store, clause["node_id"], EdgeType.REQUIRES_GROUPING_REVIEW):
+                        review_actions.append(action["canonical_name"])
+                        append_step(
+                            GraphPathStep(
+                                source="graphdb",
+                                subject=clause["canonical_name"],
+                                relation=EdgeType.REQUIRES_GROUPING_REVIEW.value,
+                                object=action["canonical_name"],
+                                status="candidate",
+                                evidence=clause_evidences,
+                            )
+                        )
+                    for rule in self._find_linked_targets(store, clause["node_id"], EdgeType.HAS_GROUPING_RULE):
+                        rule_name = rule["canonical_name"]
+                        append_step(
+                            GraphPathStep(
+                                source="graphdb",
+                                subject=clause["canonical_name"],
+                                relation=EdgeType.HAS_GROUPING_RULE.value,
+                                object=rule_name,
+                                status="candidate",
+                                evidence=clause_evidences,
+                                notes="하나의 질병 판단 기준 후보",
+                            )
+                        )
+                        for criterion in self._find_linked_targets(store, rule["node_id"], EdgeType.HAS_RELATION_CRITERION):
+                            append_step(
+                                GraphPathStep(
+                                    source="graphdb",
+                                    subject=rule_name,
+                                    relation=EdgeType.HAS_RELATION_CRITERION.value,
+                                    object=criterion["canonical_name"],
+                                    status="candidate",
+                                    evidence=clause_evidences,
+                                )
+                            )
+                        for context in self._find_linked_targets(store, rule["node_id"], EdgeType.APPLIES_TO_TREATMENT_CONTEXT):
+                            append_step(
+                                GraphPathStep(
+                                    source="graphdb",
+                                    subject=rule_name,
+                                    relation=EdgeType.APPLIES_TO_TREATMENT_CONTEXT.value,
+                                    object=context["canonical_name"],
+                                    status="candidate",
+                                    evidence=clause_evidences,
+                                )
+                            )
+                        for doc in self._find_linked_targets(store, rule["node_id"], EdgeType.REQUIRES_GROUPING_EVIDENCE):
+                            required_documents.append(doc["canonical_name"])
+                            append_step(
+                                GraphPathStep(
+                                    source="graphdb",
+                                    subject=rule_name,
+                                    relation=EdgeType.REQUIRES_GROUPING_EVIDENCE.value,
+                                    object=doc["canonical_name"],
+                                    status="candidate",
+                                    evidence=clause_evidences,
+                                )
+                            )
+
+        if not matched_any:
+            return GraphReviewPath(
+                path_id=f"one_disease::{normalize_name(question)[:40]}",
+                path_type="one_disease_review",
+                steps=steps,
+                status="missing",
+                summary="하나의 질병 관련 구조화 조항을 GraphDB에서 확인하지 못했습니다.",
+                review_actions=["인간 심사 필요"],
+            )
+
+        return GraphReviewPath(
+            path_id=f"one_disease::{normalize_name(question)[:40]}",
+            path_type="one_disease_review",
+            steps=steps[: _REVIEW_GRAPH_STEP_LIMIT + len(requested_units) + 3],
+            status="review_required",
+            summary="하나의 질병 여부는 문서 기준과 청구 증빙을 함께 확인해야 하므로 자동 확정하지 않고 검토 경로로 제시합니다.",
+            required_evidence=sorted(set(required_documents)),
+            review_actions=sorted(set(review_actions or ["인간 심사 필요"])),
+            benefit_limits=sorted(set(benefit_limits)),
+            deductible_rules=sorted(set(deductible_rules)),
+            required_documents=sorted(set(required_documents)),
+            generation_rules=sorted(set(generation_rules)),
+        )
 
     def retrieve(self, question: str) -> GraphRetrievalResult:
         plan = self.planner.plan(question)

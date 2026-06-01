@@ -27,6 +27,13 @@ class GraphQueryPlan:
     policy_generation: Optional[str] = None
     visit_type: Optional[str] = None
     facility_type: Optional[str] = None
+    one_disease_terms: List[str] = field(default_factory=list)
+    claim_unit_terms: List[str] = field(default_factory=list)
+    disease_grouping_requested: bool = False
+    same_disease_claimed: bool = False
+    same_treatment_purpose_claimed: bool = False
+    recurrent_or_continuing_treatment: bool = False
+    newly_found_disease_claimed: bool = False
     normalized_terms: dict[str, str] = field(default_factory=dict)
     term_correction_candidates: list[dict[str, Any]] = field(default_factory=list)
     ambiguous_terms: List[str] = field(default_factory=list)
@@ -93,6 +100,14 @@ class GraphQueryPlanner:
             "특약 가입 여부 확인": ("특약 확인", "특약 여부", "가입특약"),
         }
         self.facility_types = ["상급종합병원", "종합병원", "병원", "의원", "약국"]
+        self.claim_unit_aliases = {
+            "하나의 질병": ("하나의 질병", "같은 질병", "동일 질병", "동일한 질병"),
+            "하나의 상해": ("하나의 상해", "같은 상해", "동일 상해", "동일한 상해"),
+            "하나의 통원": ("하나의 통원", "통원 1회", "하루에 같은 치료"),
+            "하나의 입원": ("하나의 입원", "1회 입원", "계속 입원"),
+            "하나의 질병수술": ("하나의 질병수술", "질병수술비 한 번", "질병수술비만"),
+            "하나의 후유장해 지급한도": ("후유장해보험금 한도", "후유장해보험가입금액을 한도"),
+        }
         # 별표 조항/항목 번호 정규식
         self.appendix_number_rx = re.compile(r"(?<!별표\s)(?<!별표)(\d{1,3})\s*(?:번\s*)?(?:항목|조항|항)\b|(\d{1,3})\s*번\b")
         self.diagnosis_code_rx = re.compile(r"\b([A-Z][0-9]{2}(?:\.[0-9]+)?)\b")
@@ -345,6 +360,22 @@ class GraphQueryPlanner:
             if facility in query:
                 plan.facility_type = facility
                 break
+        for canonical, aliases in self.claim_unit_aliases.items():
+            if any(alias in query for alias in aliases):
+                self._append_unique(plan.claim_unit_terms, canonical)
+                self._append_unique(plan.one_disease_terms, canonical)
+                plan.disease_grouping_requested = True
+                if canonical == "하나의 질병":
+                    plan.same_disease_claimed = True
+        if any(token in query for token in ("같은 치료 목적", "동일한 치료 목적", "같은 치료를 목적")):
+            plan.same_treatment_purpose_claimed = True
+            plan.disease_grouping_requested = True
+        if any(token in query for token in ("2회 이상", "반복 치료", "재입원", "계속 입원", "계속 치료", "90회", "90건", "180일")):
+            plan.recurrent_or_continuing_treatment = True
+            plan.disease_grouping_requested = True
+        if any(token in query for token in ("새로 발견된 질병", "새로 발견", "병행 치료")):
+            plan.newly_found_disease_claimed = True
+            plan.disease_grouping_requested = True
 
         if "입원" in query:
             plan.visit_type = "hospitalization"
@@ -402,6 +433,13 @@ class GraphQueryPlanner:
 
         if plan.complication_asserted:
             intents.append("complication_policy_lookup")
+        if plan.disease_grouping_requested or plan.claim_unit_terms:
+            intents.append("one_disease_policy_lookup")
+            intents.append("disease_grouping_review")
+        if plan.recurrent_or_continuing_treatment:
+            intents.append("recurrent_treatment_review")
+        if any(term in plan.claim_unit_terms for term in ("하나의 질병수술", "하나의 후유장해 지급한도")):
+            intents.append("claim_unit_limit_review")
         if plan.diagnosis_codes:
             intents.append("diagnosis_policy_lookup")
         if plan.conditions:

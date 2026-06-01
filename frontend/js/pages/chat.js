@@ -592,6 +592,7 @@ async function sendClaim() {
   const visitType = document.getElementById('claim-visit-type')?.value || '';
   const note = document.getElementById('claim-note')?.value.trim() || '';
   const policyGeneration = document.querySelector('input[name="claim-policy-generation"]:checked')?.value || '4th';
+  const groupingText = `${coverageTopic} ${note} ${items.map((item) => `${item.input_name} ${item.user_category_hint}`).join(' ')}`;
 
   const itemSummary = items.map((item) => `${item.input_name} ${item.claimed_amount}원 x ${item.quantity}`).join(', ');
   appendMsg('user', `[보험금 계산/${policyGeneration === '5th' ? '5세대' : '4세대'}] ${itemSummary}`);
@@ -603,6 +604,11 @@ async function sendClaim() {
       diagnosis_code: diagnosisCode,
       situation_note: note,
       policy_generation: policyGeneration,
+      complication_asserted: /(합병증|부작용|후유증|수술 후|시술 후)/.test(groupingText),
+      same_disease_claimed: /(하나의 질병|같은 질병|동일 질병|동일한 질병)/.test(groupingText),
+      same_treatment_purpose_claimed: /(같은 치료 목적|동일한 치료 목적|같은 치료를 목적)/.test(groupingText),
+      recurrent_or_continuing_treatment: /(2회 이상|반복 치료|재입원|계속 입원|계속 치료|90회|90건|180일)/.test(groupingText),
+      newly_found_disease_claimed: /(새로 발견된 질병|새로 발견|병행 치료)/.test(groupingText),
     },
     model: getSelectedModel(),
     top_k: getTopK(),
@@ -823,6 +829,7 @@ function renderClaimResultHtml(result) {
   const lineResults = result.line_results?.length
     ? `<div class="claim-section"><div class="evidence-title">항목별 계산</div><ul>${result.line_results.map((line) => `<li><strong>${escapeHTML(line.input_name || '')}</strong> (${escapeHTML(line.category || '미분류')}): 청구 ${formatMoney(line.claimed_amount)}원 / 공제 ${formatMoney(line.deductible)}원 / 지급 ${formatMoney(line.payable_amount)}원</li>`).join('')}</ul></div>`
     : '';
+  const graphReviewPaths = renderGraphReviewPathsHtml({ graph_review_paths: result.graph_review_paths || [] });
 
   return `
     <div class="claim-result">
@@ -838,6 +845,7 @@ function renderClaimResultHtml(result) {
       ${warnings}
       ${reasons}
       ${candidates}
+      ${graphReviewPaths}
       ${basis}
     </div>`;
 }
@@ -855,6 +863,9 @@ function claimResultToText(result) {
   ];
   if (result.review_reasons?.length) {
     lines.push(`검토 사유: ${result.review_reasons.join(' / ')}`);
+  }
+  if (result.graph_review_paths?.length) {
+    lines.push(`구조화 검토 경로: ${result.graph_review_paths.map((path) => path.path_type_label || path.path_type || '검토').join(' / ')}`);
   }
   return lines.join('\n');
 }

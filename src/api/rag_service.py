@@ -244,6 +244,11 @@ def graph_review_path_type_label(path_type: str) -> str:
         "claim_calculation_review": "보험금 계산 검토",
         "coordination_review": "중복 보상 조정 검토",
         "generation_rule_review": "세대/갱신 기준 검토",
+        "one_disease_review": "하나의 질병 검토",
+        "disease_grouping_review": "질병 묶음 기준 검토",
+        "claim_unit_limit_review": "보상 단위/한도 검토",
+        "same_disease_surgery_review": "동일 질병 수술비 검토",
+        "recurrent_treatment_review": "반복/계속 치료 검토",
     }.get(path_type or "", path_type or "구조화 검토")
 
 
@@ -359,6 +364,13 @@ def graph_result_to_payload(result: Any) -> dict | None:
             "policy_generation": getattr(plan, "policy_generation", None),
             "visit_type": getattr(plan, "visit_type", None),
             "facility_type": getattr(plan, "facility_type", None),
+            "one_disease_terms": list(getattr(plan, "one_disease_terms", []) or []),
+            "claim_unit_terms": list(getattr(plan, "claim_unit_terms", []) or []),
+            "disease_grouping_requested": getattr(plan, "disease_grouping_requested", False),
+            "same_disease_claimed": getattr(plan, "same_disease_claimed", False),
+            "same_treatment_purpose_claimed": getattr(plan, "same_treatment_purpose_claimed", False),
+            "recurrent_or_continuing_treatment": getattr(plan, "recurrent_or_continuing_treatment", False),
+            "newly_found_disease_claimed": getattr(plan, "newly_found_disease_claimed", False),
             "normalized_terms": dict(getattr(plan, "normalized_terms", {}) or {}),
             "term_correction_candidates": list(getattr(plan, "term_correction_candidates", []) or []),
             "ambiguous_terms": list(getattr(plan, "ambiguous_terms", []) or []),

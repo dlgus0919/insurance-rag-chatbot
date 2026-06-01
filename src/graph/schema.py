@@ -37,6 +37,10 @@ class NodeType(str, Enum):
     RequiredDocument = "RequiredDocument"
     CoordinationRule = "CoordinationRule"
     RenewalOrGenerationRule = "RenewalOrGenerationRule"
+    ClaimUnitConcept = "ClaimUnitConcept"
+    DiseaseGroupingRule = "DiseaseGroupingRule"
+    DiseaseRelationCriterion = "DiseaseRelationCriterion"
+    TreatmentEpisodeContext = "TreatmentEpisodeContext"
 
 
 class EdgeType(str, Enum):
@@ -71,6 +75,14 @@ class EdgeType(str, Enum):
     HAS_GENERATION_RULE = "HAS_GENERATION_RULE"
     TRIGGERS_EXCLUSION_REASON = "TRIGGERS_EXCLUSION_REASON"
     REQUESTS_DOCUMENT = "REQUESTS_DOCUMENT"
+    DEFINES_CLAIM_UNIT = "DEFINES_CLAIM_UNIT"
+    HAS_GROUPING_RULE = "HAS_GROUPING_RULE"
+    HAS_RELATION_CRITERION = "HAS_RELATION_CRITERION"
+    APPLIES_TO_CLAIM_UNIT = "APPLIES_TO_CLAIM_UNIT"
+    APPLIES_TO_TREATMENT_CONTEXT = "APPLIES_TO_TREATMENT_CONTEXT"
+    LIMITS_BY_CLAIM_UNIT = "LIMITS_BY_CLAIM_UNIT"
+    REQUIRES_GROUPING_REVIEW = "REQUIRES_GROUPING_REVIEW"
+    REQUIRES_GROUPING_EVIDENCE = "REQUIRES_GROUPING_EVIDENCE"
 
 
 @dataclass

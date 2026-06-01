@@ -85,3 +85,31 @@ async def test_claim_calculation_route_accepts_generation_and_multiple_items(mon
     assert response.deductible == "120000"
     assert response.payable_amount == "180000"
     assert len(response.line_results) == 2
+
+
+@pytest.mark.anyio
+async def test_claim_calculation_route_accepts_one_disease_context_flags(monkeypatch) -> None:
+    monkeypatch.setattr("src.api.routes.claim.get_rag_pipeline", lambda *_args, **_kwargs: None)
+
+    response = await claim.calculate_claim(
+        ClaimCalculationRequest(
+            items=[
+                ClaimItemRequest(input_name="급여 진료비", claimed_amount="100000", user_category_hint="급여"),
+            ],
+            context={
+                "policy_generation": "5th",
+                "visit_type": "outpatient",
+                "coverage_topic": "실손",
+                "same_disease_claimed": True,
+                "same_treatment_purpose_claimed": True,
+                "recurrent_or_continuing_treatment": True,
+                "newly_found_disease_claimed": True,
+            },
+        ),
+        request=None,
+        user=_employee(),
+        db=None,
+    )
+
+    assert response.policy_generation == "5th"
+    assert response.claimed_amount == "100000"

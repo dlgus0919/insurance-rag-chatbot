@@ -307,6 +307,104 @@ RENEWAL_OR_GENERATION_RULES = {
     },
 }
 
+CLAIM_UNIT_CONCEPTS = {
+    "하나의 질병": ["하나의 질병", "동일한 질병", "같은 질병"],
+    "하나의 상해": ["하나의 상해", "같은 상해"],
+    "하나의 통원": ["하나의 통원", "통원 1회", "하루에 같은 치료"],
+    "하나의 입원": ["하나의 입원", "1회 입원", "계속 입원"],
+    "하나의 질병수술": ["하나의 질병수술", "질병수술비만 지급"],
+    "하나의 후유장해 지급한도": ["후유장해보험금은", "후유장해보험가입금액을 한도"],
+}
+
+DISEASE_RELATION_CRITERIA = {
+    "발생 원인 동일": ["발생 원인이 동일"],
+    "의학상 중요한 관련": ["의학상 중요한 관련"],
+    "2회 이상 치료": ["2회 이상 치료"],
+    "치료 중 발생한 합병증": ["치료 중에 발생된 합병증", "치료 중 발생한 합병증"],
+    "새로 발견된 질병": ["새로 발견된 질병"],
+    "의학상 관련 없는 여러 질병": ["의학상 관련이 없는 여러 종류의 질병"],
+    "같은 치료 목적": ["같은 치료를 목적", "같은 치료 목적"],
+    "동일 질병 다중 수술": ["동일한 질병으로 두 종류 이상의 질병수술"],
+    "같은 종류 수술 반복": ["같은 종류의 수술을 2회 이상"],
+}
+
+TREATMENT_EPISODE_CONTEXTS = {
+    "동일일자 통원": ["하루에 같은 치료", "통원 1회"],
+    "반복 통원": ["2회 이상 치료", "90회", "90건"],
+    "계속 입원": ["계속 중인 입원", "계속 입원", "1회 입원"],
+    "재입원": ["재입원"],
+    "전환/재개 전후 계속 치료": ["전환전", "재개전", "전환∙재개", "전환·재개"],
+    "질병수술 반복": ["질병수술비만 지급", "같은 종류의 수술을 2회 이상"],
+    "합병증 병행 치료": ["치료 중에 발생된 합병증", "합병증"],
+}
+
+DISEASE_GROUPING_RULES = {
+    "동일 발생 원인 기준": {
+        "keywords": ["발생 원인이 동일"],
+        "criteria": ["발생 원인 동일"],
+        "claim_units": ["하나의 질병"],
+        "review_actions": ["질병/상해 구분 확인"],
+    },
+    "의학상 중요한 관련 기준": {
+        "keywords": ["의학상 중요한 관련"],
+        "criteria": ["의학상 중요한 관련"],
+        "claim_units": ["하나의 질병"],
+        "review_actions": ["인간 심사 필요", "진단서 요청"],
+        "required_documents": ["진단서", "진료비 세부내역서"],
+    },
+    "동일 질병 2회 이상 치료 기준": {
+        "keywords": ["2회 이상 치료"],
+        "criteria": ["2회 이상 치료"],
+        "claim_units": ["하나의 질병"],
+        "treatment_contexts": ["반복 통원"],
+        "review_actions": ["질병/상해 구분 확인"],
+    },
+    "질병 치료 중 발생한 합병증 병행 기준": {
+        "keywords": ["치료 중에 발생된 합병증", "치료 중 발생한 합병증"],
+        "criteria": ["치료 중 발생한 합병증"],
+        "claim_units": ["하나의 질병"],
+        "treatment_contexts": ["합병증 병행 치료"],
+        "review_actions": ["인간 심사 필요", "진단서 요청"],
+        "required_documents": ["진단서", "진료비 세부내역서"],
+    },
+    "새로 발견된 질병 병행 치료 기준": {
+        "keywords": ["새로 발견된 질병"],
+        "criteria": ["새로 발견된 질병"],
+        "claim_units": ["하나의 질병"],
+        "review_actions": ["인간 심사 필요", "진단서 요청"],
+        "required_documents": ["진단서", "진료비 세부내역서"],
+    },
+    "관련 없는 여러 질병의 같은 통원 처리 기준": {
+        "keywords": ["의학상 관련이 없는 여러 종류의 질병"],
+        "criteria": ["의학상 관련 없는 여러 질병"],
+        "claim_units": ["하나의 질병", "하나의 통원"],
+        "treatment_contexts": ["동일일자 통원"],
+        "review_actions": ["질병/상해 구분 확인"],
+    },
+    "같은 치료 목적 통원 기준": {
+        "keywords": ["같은 치료를 목적", "같은 치료 목적"],
+        "criteria": ["같은 치료 목적"],
+        "claim_units": ["하나의 통원"],
+        "treatment_contexts": ["동일일자 통원"],
+        "review_actions": ["질병/상해 구분 확인"],
+    },
+    "동일 질병 다중 수술 지급 제한 기준": {
+        "keywords": ["동일한 질병으로 두 종류 이상의 질병수술"],
+        "criteria": ["동일 질병 다중 수술", "같은 종류 수술 반복"],
+        "claim_units": ["하나의 질병", "하나의 질병수술"],
+        "treatment_contexts": ["질병수술 반복"],
+        "review_actions": ["질병/상해 구분 확인", "수술확인서 요청"],
+        "required_documents": ["수술확인서", "진단서"],
+    },
+    "전환/재개 전후 계속 치료 기준": {
+        "keywords": ["전환전", "재개전", "전환∙재개", "전환·재개"],
+        "criteria": ["2회 이상 치료"],
+        "claim_units": ["하나의 질병", "하나의 입원", "하나의 통원"],
+        "treatment_contexts": ["전환/재개 전후 계속 치료", "계속 입원", "반복 통원"],
+        "review_actions": ["인간 심사 필요"],
+    },
+}
+
 POLICY_REVIEW_TOPICS = {
     "실손": ["실손"],
     "3대비급여": ["3대비급여", "도수치료", "주사료", "mri", "mra", "체외충격파", "증식치료"],
@@ -326,6 +424,14 @@ STRICT_ALL_KEY_MATCHES = {
     "미용 목적 시술 후 합병증",
     "상급병실료 차액",
 }
+
+
+def _dedupe_list(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result
 
 
 def _chunk_lookup_payload(meta: dict[str, Any], chunk_id: str) -> tuple[str, dict[str, Any]]:
@@ -1032,6 +1138,10 @@ class PolicyReviewExtractor:
         self._seed_required_document_nodes()
         self._seed_rule_nodes(NodeType.CoordinationRule, COORDINATION_RULES, "coordination_rule")
         self._seed_rule_nodes(NodeType.RenewalOrGenerationRule, RENEWAL_OR_GENERATION_RULES, "generation_rule")
+        self._seed_nodes(NodeType.ClaimUnitConcept, CLAIM_UNIT_CONCEPTS.keys(), "claim_unit")
+        self._seed_rule_nodes(NodeType.DiseaseGroupingRule, DISEASE_GROUPING_RULES, "disease_grouping_rule")
+        self._seed_nodes(NodeType.DiseaseRelationCriterion, DISEASE_RELATION_CRITERIA.keys(), "disease_relation_criterion")
+        self._seed_nodes(NodeType.TreatmentEpisodeContext, TREATMENT_EPISODE_CONTEXTS.keys(), "treatment_episode_context")
 
     def _seed_nodes(self, node_type: NodeType, names: Any, prefix: str) -> None:
         for name in names:
@@ -1310,6 +1420,45 @@ class PolicyReviewExtractor:
 
         for rule in self._matched_spec_keys(text, RENEWAL_OR_GENERATION_RULES):
             self._link(source_node_id, f"generation_rule_{normalize_name(rule)}", EdgeType.HAS_GENERATION_RULE, evidence_id)
+
+        self._link_one_disease_rule_nodes(source_node_id, text, evidence_id)
+
+    def _link_one_disease_rule_nodes(self, source_node_id: str, text: str, evidence_id: str) -> None:
+        claim_units = self._matched_keys(text, CLAIM_UNIT_CONCEPTS)
+        grouping_rules = self._matched_spec_keys(text, DISEASE_GROUPING_RULES)
+        criteria = self._matched_keys(text, DISEASE_RELATION_CRITERIA)
+        contexts = self._matched_keys(text, TREATMENT_EPISODE_CONTEXTS)
+
+        for unit in claim_units:
+            unit_id = f"claim_unit_{normalize_name(unit)}"
+            self._link(source_node_id, unit_id, EdgeType.DEFINES_CLAIM_UNIT, evidence_id)
+
+        for rule in grouping_rules:
+            rule_id = f"disease_grouping_rule_{normalize_name(rule)}"
+            self._link(source_node_id, rule_id, EdgeType.HAS_GROUPING_RULE, evidence_id)
+            spec = DISEASE_GROUPING_RULES[rule]
+            for criterion in _dedupe_list([*criteria, *spec.get("criteria", [])]):
+                criterion_id = f"disease_relation_criterion_{normalize_name(criterion)}"
+                self._link(rule_id, criterion_id, EdgeType.HAS_RELATION_CRITERION, evidence_id)
+            for unit in _dedupe_list([*claim_units, *spec.get("claim_units", [])]):
+                unit_id = f"claim_unit_{normalize_name(unit)}"
+                self._link(rule_id, unit_id, EdgeType.APPLIES_TO_CLAIM_UNIT, evidence_id)
+            for context in _dedupe_list([*contexts, *spec.get("treatment_contexts", [])]):
+                context_id = f"treatment_episode_context_{normalize_name(context)}"
+                self._link(rule_id, context_id, EdgeType.APPLIES_TO_TREATMENT_CONTEXT, evidence_id)
+            for doc in spec.get("required_documents", []):
+                doc_id = f"required_doc_{normalize_name(doc)}"
+                self._link(rule_id, doc_id, EdgeType.REQUIRES_GROUPING_EVIDENCE, evidence_id)
+            for action in spec.get("review_actions", []):
+                action_id = f"review_action_{normalize_name(action)}"
+                self._link(source_node_id, action_id, EdgeType.REQUIRES_GROUPING_REVIEW, evidence_id)
+
+        for unit in claim_units:
+            unit_id = f"claim_unit_{normalize_name(unit)}"
+            for limit in self._matched_spec_keys(text, BENEFIT_LIMITS):
+                self._link(f"benefit_limit_{normalize_name(limit)}", unit_id, EdgeType.LIMITS_BY_CLAIM_UNIT, evidence_id)
+            for deductible in self._matched_spec_keys(text, DEDUCTIBLE_RULES):
+                self._link(f"deductible_rule_{normalize_name(deductible)}", unit_id, EdgeType.LIMITS_BY_CLAIM_UNIT, evidence_id)
 
     def _link(self, source_node_id: str, target_node_id: str, edge_type: EdgeType, evidence_id: str) -> None:
         edge_id = f"edge_{edge_type.value.lower()}_{source_node_id}_{target_node_id}"

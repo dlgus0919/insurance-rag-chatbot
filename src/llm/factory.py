@@ -194,6 +194,8 @@ def _available_sglang_models() -> list[str]:
     """Return SGLang models that should be exposed in the UI."""
 
     candidates = _configured_sglang_models()
+    if config.OFFLINE_MODE and not config.SGLANG_STRICT_AVAILABLE_MODELS:
+        return candidates
     endpoints = [config.SGLANG_BASE_URL, *config.SGLANG_MODEL_ENDPOINTS.values(), *[config.sglang_base_url_for_model(model) for model in candidates]]
     served_by_endpoint = _served_models_by_endpoint(endpoints, api_key=config.SGLANG_API_KEY)
     served_models = _ordered_unique(

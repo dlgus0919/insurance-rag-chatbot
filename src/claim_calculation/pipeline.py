@@ -410,6 +410,14 @@ def run_claim_calculation(
                 query_parts.append(context.coverage_topic)
             if context.complication_asserted:
                 query_parts.append("합병증")
+            if context.same_disease_claimed:
+                query_parts.append("하나의 질병 동일 질병")
+            if context.same_treatment_purpose_claimed:
+                query_parts.append("같은 치료 목적")
+            if context.recurrent_or_continuing_treatment:
+                query_parts.append("2회 이상 반복 치료 계속 입원")
+            if context.newly_found_disease_claimed:
+                query_parts.append("새로 발견된 질병 병행 치료")
             if context.treatment_purpose:
                 query_parts.append(context.treatment_purpose)
             if context.policy_generation:
@@ -581,6 +589,8 @@ def run_claim_calculation(
     coordination_rules: list[str] = []
     generation_rules: list[str] = []
     confirmed_exclusion_path_found = False
+    graph_review_paths_payload: list[dict[str, Any]] = []
+    session_assertions_payload: list[dict[str, Any]] = []
 
     if deterministic_review_reasons:
         review_required = True
@@ -617,6 +627,14 @@ def run_claim_calculation(
 
     # Graph candidate rule 검토 플래그 강제 적용
     if graph_result:
+        try:
+            from src.api.rag_service import graph_result_to_payload
+
+            graph_payload = graph_result_to_payload(graph_result) or {}
+            graph_review_paths_payload = list(graph_payload.get("graph_review_paths") or [])
+            session_assertions_payload = list(graph_payload.get("session_assertions") or [])
+        except Exception as exc:
+            logger.warning("Graph review path payload serialization failed: %s", exc)
         review_paths = getattr(graph_result, "review_paths", []) or []
         if context.complication_asserted and review_paths:
             review_required = True
@@ -791,4 +809,6 @@ def run_claim_calculation(
         required_documents=required_documents,
         coordination_rules=coordination_rules,
         generation_rules=generation_rules,
+        graph_review_paths=graph_review_paths_payload,
+        session_assertions=session_assertions_payload,
     )

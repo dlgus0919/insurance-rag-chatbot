@@ -32,6 +32,10 @@ class ClaimCaseContext:
     situation_note: str = ""  # 상황 메모
     policy_generation: str = "4th"  # "4th" 또는 "5th"
     complication_asserted: bool = False
+    same_disease_claimed: bool = False
+    same_treatment_purpose_claimed: bool = False
+    recurrent_or_continuing_treatment: bool = False
+    newly_found_disease_claimed: bool = False
     treatment_purpose: str = ""
     evidence_tags: list[str] = field(default_factory=list)
     facility_type: str = ""
@@ -102,6 +106,8 @@ class CalculationResult:
     required_documents: list[str] = field(default_factory=list)
     coordination_rules: list[str] = field(default_factory=list)
     generation_rules: list[str] = field(default_factory=list)
+    graph_review_paths: list[dict[str, Any]] = field(default_factory=list)
+    session_assertions: list[dict[str, Any]] = field(default_factory=list)
 
 
 from decimal import Decimal, InvalidOperation
