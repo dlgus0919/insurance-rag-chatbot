@@ -13,6 +13,102 @@ let currentMode = 'general';
 let currentSession = null;
 let activeAbort = null;
 
+// ===== CLARIFICATION UX GLOBAL CONTEXT =====
+const clarificationPayloads = new Map();
+let nextClarificationId = 1;
+
+const CLARIFICATION_GROUPS = {
+  '실손 세대': {
+    group: 'policy_generation',
+    buttons: [
+      { value: '4세대', display: '4세대 실손' },
+      { value: '5세대', display: '5세대 실손' }
+    ]
+  },
+  '방문 구분': {
+    group: 'visit_type',
+    buttons: [
+      { value: '입원', display: '입원' },
+      { value: '통원', display: '통원' },
+      { value: '처방조제', display: '처방조제' }
+    ]
+  },
+  '상품/특약': {
+    group: 'policy_product',
+    buttons: [
+      { value: 'SOL건강', display: 'SOL건강' },
+      { value: '실손의료보험', display: '실손의료보험' },
+      { value: '운전자보험', display: '운전자보험' }
+    ]
+  },
+  '치료 목적': {
+    group: 'treatment_purpose',
+    buttons: [
+      { value: '치료 목적', display: '치료 목적' },
+      { value: '미용 목적', display: '미용 목적' },
+      { value: '예방/검진 목적', display: '예방/검진 목적' },
+      { value: '합병증 치료', display: '합병증 치료' }
+    ]
+  },
+  '증빙 서류': {
+    group: 'evidence_tags',
+    buttons: [
+      { value: '영수증', display: '영수증' },
+      { value: '세부내역서', display: '세부내역서' },
+      { value: '진단서', display: '진단서' },
+      { value: '수술확인서', display: '수술확인서' },
+      { value: '검사결과지', display: '검사결과지' }
+    ]
+  }
+};
+
+const CLARIFICATION_PRESETS = {
+  'fifth-outpatient': {
+    label: '5세대 + 통원',
+    selections: [
+      { group: 'policy_generation', label: '실손 세대', value: '5세대', display: '5세대 실손' },
+      { group: 'visit_type', label: '방문 구분', value: '통원', display: '통원' },
+    ],
+  },
+  'fourth-outpatient': {
+    label: '4세대 + 통원',
+    selections: [
+      { group: 'policy_generation', label: '실손 세대', value: '4세대', display: '4세대 실손' },
+      { group: 'visit_type', label: '방문 구분', value: '통원', display: '통원' },
+    ],
+  },
+  'fifth-inpatient': {
+    label: '5세대 + 입원',
+    selections: [
+      { group: 'policy_generation', label: '실손 세대', value: '5세대', display: '5세대 실손' },
+      { group: 'visit_type', label: '방문 구분', value: '입원', display: '입원' },
+    ],
+  },
+  'fourth-inpatient': {
+    label: '4세대 + 입원',
+    selections: [
+      { group: 'policy_generation', label: '실손 세대', value: '4세대', display: '4세대 실손' },
+      { group: 'visit_type', label: '방문 구분', value: '입원', display: '입원' },
+    ],
+  },
+  'mri-fifth-outpatient': {
+    label: 'MRI + 5세대 + 통원',
+    selections: [
+      { group: 'term_correction', label: '용어 확인', value: 'MRI', display: 'MRI' },
+      { group: 'policy_generation', label: '실손 세대', value: '5세대', display: '5세대 실손' },
+      { group: 'visit_type', label: '방문 구분', value: '통원', display: '통원' },
+    ],
+  },
+  'manual-shockwave-fifth-outpatient': {
+    label: '도수/충격파 + 5세대 + 통원',
+    selections: [
+      { group: 'coverage_topic', label: '보장 항목', value: '도수치료 또는 체외충격파치료', display: '도수/충격파' },
+      { group: 'policy_generation', label: '실손 세대', value: '5세대', display: '5세대 실손' },
+      { group: 'visit_type', label: '방문 구분', value: '통원', display: '통원' },
+    ],
+  },
+};
+
 export async function initChatPage({ currentUser, onGoAdmin, onLogout } = {}) {
   me = currentUser || null;
 
@@ -147,6 +243,82 @@ function setupChatDelegatedHandlers() {
 
       // 자동 재계산 트리거
       await sendClaim();
+      return;
+    }
+
+    // Clarification option selection
+    const clarifyOption = target.closest('[data-action="select-clarification"]');
+    if (clarifyOption) {
+      const container = clarifyOption.closest('[data-clarification-id]');
+      const group = clarifyOption.dataset.clarifyGroup;
+      if (container && group) {
+        if (!isMultiSelectClarificationGroup(group)) {
+          container.querySelectorAll(`.clarify-option[data-clarify-group="${group}"]`).forEach((btn) => {
+            btn.classList.remove('selected');
+            btn.removeAttribute('aria-pressed');
+          });
+        }
+
+        const isSelected = clarifyOption.classList.contains('selected');
+        if (isMultiSelectClarificationGroup(group)) {
+          if (isSelected) {
+            clarifyOption.classList.remove('selected');
+            clarifyOption.removeAttribute('aria-pressed');
+          } else {
+            clarifyOption.classList.add('selected');
+            clarifyOption.setAttribute('aria-pressed', 'true');
+          }
+        } else {
+          // Single select: force select
+          clarifyOption.classList.add('selected');
+          clarifyOption.setAttribute('aria-pressed', 'true');
+        }
+
+        updateClarificationSummary(container);
+        updateClarificationApplyState(container);
+      }
+      return;
+    }
+
+    // Clarification Preset Apply
+    const presetBtn = target.closest('[data-action="apply-clarification-preset"]');
+    if (presetBtn) {
+      const container = presetBtn.closest('[data-clarification-id]');
+      const presetId = presetBtn.dataset.presetId;
+      const preset = CLARIFICATION_PRESETS[presetId];
+      if (container && preset) {
+        applyClarificationPreset(container, preset);
+      }
+      return;
+    }
+
+    // Clarification Reset
+    const resetBtn = target.closest('[data-action="reset-clarification"]');
+    if (resetBtn) {
+      const container = resetBtn.closest('[data-clarification-id]');
+      if (container) {
+        resetClarificationSelections(container);
+      }
+      return;
+    }
+
+    // Clarification Apply Search (Re-search)
+    const applyBtn = target.closest('[data-action="apply-clarification"]');
+    if (applyBtn) {
+      const container = applyBtn.closest('[data-clarification-id]');
+      const id = container?.dataset.clarificationId;
+      const payload = clarificationPayloads.get(id);
+      if (container && payload) {
+        const selections = collectClarificationSelections(container);
+        const rewrittenQuery = buildClarifiedQuery(payload.query, selections);
+        const clarificationPayload = buildClarificationPayload(selections);
+
+        // Show selection in user bubble
+        appendMsg('user', `[명확화 선택] ${selections.map(s => s.display).join(', ')}`);
+
+        // Trigger re-search with same session, mode, filters, memo, and clarification
+        await streamChat(rewrittenQuery, payload.mode, payload.filters, payload.memo, clarificationPayload);
+      }
       return;
     }
 
@@ -507,7 +679,7 @@ async function calculateClaim(payload) {
   }
 }
 
-async function streamChat(query, mode = 'general', filters = {}, memo = '') {
+async function streamChat(query, mode = 'general', filters = {}, memo = '', clarification = {}) {
   abortActiveChat();
   activeAbort = new AbortController();
   const chatInput = document.getElementById('chat-input');
@@ -533,6 +705,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
       temperature: getTemperature(),
       filters,
       index_mode: getIndexMode(),
+      clarification,
     };
     if (memo) payload.memo = memo;
     const response = await apiFetch('/chat/stream', {
@@ -565,7 +738,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
     });
     if (!answer) answer = '응답이 비어 있습니다.';
     bubble.innerHTML = renderAssistantContent(answer)
-      + renderClarificationHtml(graphResult)
+      + renderClarificationHtml(graphResult, query, mode, filters, memo)
       + renderWarningHtml(warnings)
       + renderGraphReviewPathsHtml(graphResult)
       + renderGraphFactsHtml(graphResult)
@@ -692,28 +865,257 @@ function formatMoney(value) {
   return numeric.toLocaleString('ko-KR');
 }
 
-function renderClarificationHtml(graphResult) {
+function renderClarificationHtml(graphResult, query, mode, filters, memo) {
   const plan = graphResult?.plan || {};
   const questions = Array.isArray(plan.clarification_questions) ? plan.clarification_questions : [];
   const terms = plan.normalized_terms && typeof plan.normalized_terms === 'object' ? plan.normalized_terms : {};
   const candidates = Array.isArray(plan.term_correction_candidates) ? plan.term_correction_candidates : [];
   const ambiguous = Array.isArray(plan.ambiguous_terms) ? plan.ambiguous_terms : [];
+
   if (!questions.length && !Object.keys(terms).length && !candidates.length && !ambiguous.length) return '';
 
-  const questionHtml = questions.length
-    ? `<div class="clarify-subtitle">추가 확인 질문</div><ul>${questions.map((question) => `<li>${escapeHTML(question)}</li>`).join('')}</ul>`
-    : '';
-  const termHtml = Object.keys(terms).length
-    ? `<div class="clarify-subtitle">입력 용어 정규화</div><ul>${Object.entries(terms).map(([raw, normalized]) => `<li>${escapeHTML(raw)} → ${escapeHTML(normalized)}</li>`).join('')}</ul>`
-    : '';
-  const candidateHtml = candidates.length
-    ? `<div class="clarify-subtitle">입력 용어 보정 후보</div><ul>${candidates.map((item) => `<li>${escapeHTML(item.raw || '')} → ${escapeHTML(item.normalized || '')} <span class="muted">(확인 필요)</span></li>`).join('')}</ul>`
-    : '';
-  const ambiguousHtml = ambiguous.length
-    ? `<div class="clarify-tags">${ambiguous.map((term) => `<span>${escapeHTML(term)}</span>`).join('')}</div>`
-    : '';
+  const id = `clarify-${nextClarificationId++}`;
+  clarificationPayloads.set(id, { query, mode, filters, memo, graphResult });
 
-  return `<div class="msg-clarifications"><div class="evidence-title">추가 확인 필요</div>${ambiguousHtml}${questionHtml}${termHtml}${candidateHtml}</div>`;
+  // 1. Title
+  let html = `<div class="msg-clarifications" data-clarification-id="${id}">
+    <div class="evidence-title">추가 확인 필요</div>`;
+
+  // 2. Selected chips summary
+  html += `
+    <div class="clarify-selected-summary" data-clarify-summary>
+      <div class="clarify-subtitle">선택된 조건</div>
+      <div class="clarify-selected-chips" data-clarify-selected-chips>
+        <span class="clarify-empty">아직 선택된 조건이 없습니다.</span>
+      </div>
+    </div>`;
+
+  // 3. Preset Section (if conditions met)
+  const coverageTopics = Array.isArray(plan.coverage_topics) ? plan.coverage_topics : [];
+  const hasPresetCondition = ambiguous.includes('실손 세대') ||
+                             ambiguous.includes('방문 구분') ||
+                             coverageTopics.some(t => ['실손', 'MRI', 'MRA', '자기공명영상진단', '도수치료', '체외충격파치료', '3대비급여'].includes(t)) ||
+                             candidates.some(c => c.normalized === 'MRI' || c.normalized === 'MRA');
+
+  if (hasPresetCondition) {
+    html += `
+    <div class="clarify-preset-section">
+      <div class="clarify-subtitle">자주 쓰는 조건</div>
+      <div class="clarify-preset-row">
+        ${Object.entries(CLARIFICATION_PRESETS).map(([presetId, preset]) => `
+          <button type="button" class="clarify-preset" data-action="apply-clarification-preset" data-preset-id="${escapeHTML(presetId)}">
+            ${escapeHTML(preset.label)}
+          </button>
+        `).join('')}
+      </div>
+    </div>`;
+  }
+
+  // 4. Input correction candidates (Term Correction)
+  if (candidates.length) {
+    html += `
+    <div class="clarify-section">
+      <div class="clarify-subtitle">용어 확인</div>
+      <div class="clarify-option-row">
+        ${candidates.map((item) => `
+          <button type="button" class="clarify-option" data-action="select-clarification"
+            data-clarify-group="term_correction"
+            data-clarify-label="용어 확인"
+            data-clarify-value="${escapeHTML(item.normalized)}"
+            data-clarify-raw="${escapeHTML(item.raw)}"
+            data-clarify-display="${escapeHTML(item.normalized)}">
+            ${escapeHTML(item.normalized)} 맞음
+          </button>
+        `).join('')}
+      </div>
+    </div>`;
+  }
+
+  // 5. Ambiguous Terms
+  const unmappedAmbiguous = [];
+  ambiguous.forEach((term) => {
+    const groupInfo = CLARIFICATION_GROUPS[term];
+    if (groupInfo) {
+      html += `
+      <div class="clarify-section">
+        <div class="clarify-subtitle">${escapeHTML(term)}</div>
+        <div class="clarify-option-row">
+          ${groupInfo.buttons.map((btn) => `
+            <button type="button" class="clarify-option" data-action="select-clarification"
+              data-clarify-group="${escapeHTML(groupInfo.group)}"
+              data-clarify-label="${escapeHTML(term)}"
+              data-clarify-value="${escapeHTML(btn.value)}"
+              data-clarify-display="${escapeHTML(btn.display)}">
+              ${escapeHTML(btn.display)}
+            </button>
+          `).join('')}
+        </div>
+      </div>`;
+    } else {
+      unmappedAmbiguous.push(term);
+    }
+  });
+
+  if (unmappedAmbiguous.length) {
+    html += `
+    <div class="clarify-tags">
+      ${unmappedAmbiguous.map((term) => `<span>${escapeHTML(term)}</span>`).join('')}
+    </div>`;
+  }
+
+  // 6. Questions (Keep as text)
+  if (questions.length) {
+    html += `
+    <div class="clarify-subtitle">추가 확인 질문</div>
+    <ul>
+      ${questions.map((question) => `<li>${escapeHTML(question)}</li>`).join('')}
+    </ul>`;
+  }
+
+  // 7. Terms normalization (Keep as text/info)
+  if (Object.keys(terms).length) {
+    html += `
+    <div class="clarify-subtitle">입력 용어 정규화</div>
+    <ul>
+      ${Object.entries(terms).map(([raw, normalized]) => `<li>${escapeHTML(raw)} → ${escapeHTML(normalized)}</li>`).join('')}
+    </ul>`;
+  }
+
+  // 8. Action buttons (Apply and Reset)
+  html += `
+    <div class="clarify-actions">
+      <button type="button" class="clarify-apply" data-action="apply-clarification" disabled>선택값으로 다시 검색</button>
+      <button type="button" class="clarify-reset" data-action="reset-clarification" disabled>선택 초기화</button>
+    </div>
+  </div>`;
+
+  return html;
+}
+
+// ===== CLARIFICATION UX HELPERS =====
+function isMultiSelectClarificationGroup(group) {
+  return group === 'evidence_tags' || group === 'conditions';
+}
+
+function updateClarificationSummary(container) {
+  const chipsContainer = container.querySelector('[data-clarify-selected-chips]');
+  if (!chipsContainer) return;
+
+  const selections = collectClarificationSelections(container);
+  if (!selections.length) {
+    chipsContainer.innerHTML = '<span class="clarify-empty">아직 선택된 조건이 없습니다.</span>';
+    return;
+  }
+
+  chipsContainer.innerHTML = selections
+    .map((item) => `<span class="clarify-selected-chip" data-group="${escapeHTML(item.group)}">${escapeHTML(item.display)}</span>`)
+    .join('');
+}
+
+function updateClarificationApplyState(container) {
+  const applyBtn = container.querySelector('[data-action="apply-clarification"]');
+  const resetBtn = container.querySelector('[data-action="reset-clarification"]');
+  const selections = collectClarificationSelections(container);
+  const hasSelections = selections.length > 0;
+
+  if (applyBtn) applyBtn.disabled = !hasSelections;
+  if (resetBtn) resetBtn.disabled = !hasSelections;
+}
+
+function collectClarificationSelections(container) {
+  const selections = [];
+  const selectedButtons = container.querySelectorAll('.clarify-option.selected');
+
+  selectedButtons.forEach((btn) => {
+    const group = btn.dataset.clarifyGroup || '';
+    const label = btn.dataset.clarifyLabel || '';
+    const value = btn.dataset.clarifyValue || '';
+    const display = btn.dataset.clarifyDisplay || btn.textContent.trim();
+    const raw = btn.dataset.clarifyRaw || '';
+
+    // Check for duplicate group+value
+    const exists = selections.some(s => s.group === group && s.value === value);
+    if (!exists) {
+      selections.push({ group, label, value, display, raw });
+    }
+  });
+
+  return selections;
+}
+
+function buildClarifiedQuery(originalQuery, selections) {
+  let cleanedQuery = originalQuery.trim();
+  const clarifyIdx = cleanedQuery.indexOf('[사용자 명확화]');
+  if (clarifyIdx !== -1) {
+    cleanedQuery = cleanedQuery.substring(0, clarifyIdx).trim();
+  }
+
+  const lines = [cleanedQuery, '', '[사용자 명확화]'];
+  selections.forEach((selection) => {
+    if (selection.group === 'term_correction' && selection.raw) {
+      lines.push(`- 용어 확인: ${selection.raw} = ${selection.value}`);
+    } else {
+      lines.push(`- ${selection.label}: ${selection.value}`);
+    }
+  });
+  return lines.join('\n');
+}
+
+function buildClarificationPayload(selections) {
+  return {
+    selections: selections.map((selection) => ({
+      group: selection.group,
+      label: selection.label,
+      value: selection.value,
+      display: selection.display,
+      raw: selection.raw || '',
+    })),
+  };
+}
+
+function resetClarificationSelections(container) {
+  container.querySelectorAll('.clarify-option.selected').forEach((button) => {
+    button.classList.remove('selected');
+    button.removeAttribute('aria-pressed');
+  });
+  container.querySelectorAll('.clarify-option.synthetic').forEach((el) => {
+    el.remove();
+  });
+  updateClarificationSummary(container);
+  updateClarificationApplyState(container);
+}
+
+function applyClarificationPreset(container, preset) {
+  resetClarificationSelections(container);
+
+  preset.selections.forEach((selection) => {
+    const matchingButton = [...container.querySelectorAll('.clarify-option')]
+      .find((button) =>
+        button.dataset.clarifyGroup === selection.group
+        && button.dataset.clarifyValue === selection.value
+      );
+
+    if (matchingButton) {
+      matchingButton.classList.add('selected');
+      matchingButton.setAttribute('aria-pressed', 'true');
+    } else {
+      addSyntheticClarificationSelection(container, selection);
+    }
+  });
+
+  updateClarificationSummary(container);
+  updateClarificationApplyState(container);
+}
+
+function addSyntheticClarificationSelection(container, selection) {
+  const span = document.createElement('span');
+  span.className = 'clarify-option selected synthetic';
+  span.dataset.clarifyGroup = selection.group;
+  span.dataset.clarifyLabel = selection.label;
+  span.dataset.clarifyValue = selection.value;
+  span.dataset.clarifyDisplay = selection.display;
+  span.setAttribute('hidden', 'true');
+  container.appendChild(span);
 }
 
 function renderWarningHtml(warnings) {

@@ -112,6 +112,26 @@ export function fetchSystemSummary() {
   return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_SYSTEM_SUMMARY);
 }
 
+export function fetchGraphSyncStatus() {
+  return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_GRAPH_SYNC_STATUS);
+}
+
+export async function exportGraphSyncStatus(options = {}) {
+  const data = await fetchGraphSyncStatus();
+  const payload = {
+    exported_at: new Date().toISOString(),
+    export_type: 'graph_sync_status',
+    ...data,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' });
+
+  return {
+    blob,
+    filename: options.filename || `graph_sync_status_${new Date().toISOString().slice(0, 10)}.json`,
+    data: payload,
+  };
+}
+
 export function fetchLatestRagDiagnostics() {
   return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_RAG_DIAGNOSTICS);
 }

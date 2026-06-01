@@ -30,6 +30,7 @@ export const API_CONFIG = {
     ADMIN_LOGS: '/admin/logs',
     ADMIN_STATS: '/admin/stats',
     ADMIN_SYSTEM_SUMMARY: '/admin/system-summary',
+    ADMIN_GRAPH_SYNC_STATUS: '/admin/graph-sync-status',
     ADMIN_RAG_DIAGNOSTICS: '/admin/rag-diagnostics/latest',
     ADMIN_GRAPH_VECTOR_SYNC: '/admin/graph-vector-sync',
     ADMIN_SESSIONS: '/admin/sessions',

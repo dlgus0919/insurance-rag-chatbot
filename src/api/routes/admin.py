@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections import Counter
+from pathlib import Path
 from statistics import mean
 
 from fastapi import APIRouter, Depends, Query, Request, Response, status
@@ -32,6 +35,107 @@ from src.retrieval.index_mode import INDEX_MODES, resolve_index_paths
 from src.retrieval.vector_store import VectorStore
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+GRAPH_TABLES = (
+    "graph_nodes",
+    "graph_edges",
+    "graph_evidence",
+    "graph_aliases",
+    "graph_node_evidence",
+    "graph_edge_evidence",
+)
+
+
+def _as_list(value) -> list:
+    return value if isinstance(value, list) else []
+
+
+def _warning_code(warning) -> str:
+    if isinstance(warning, dict):
+        return str(warning.get("code") or warning.get("message") or "UNKNOWN_WARNING")
+    return str(warning or "UNKNOWN_WARNING")
+
+
+def _query_issue_item(item: AuditLog, detail: dict, **extra) -> dict:
+    payload = {
+        "created_at": item.created_at.isoformat(),
+        "user_id": item.user_id,
+        "query_preview": detail.get("query_preview") or detail.get("question") or "",
+        "model": detail.get("model") or "-",
+        "mode": detail.get("mode") or "unknown",
+        "session_id": detail.get("session_id"),
+    }
+    payload.update(extra)
+    return payload
+
+
+def _build_model_quality_stats(rows: dict[str, dict]) -> list[dict]:
+    stats = []
+    for row in rows.values():
+        total_attempts = int(row["total_attempts"] or 0)
+        success_count = int(row["success_count"] or 0)
+        failure_count = int(row["failure_count"] or 0)
+        elapsed_values = row["elapsed_values_ms"]
+        citation_checked = int(row["citation_checked_count"] or 0)
+        citation_missing = int(row["citation_missing_count"] or 0)
+        stats.append({
+            "model": row["model"],
+            "total_attempts": total_attempts,
+            "success_count": success_count,
+            "failure_count": failure_count,
+            "error_rate": round(failure_count / total_attempts, 4) if total_attempts else 0.0,
+            "avg_elapsed_sec": round(mean(elapsed_values) / 1000, 2) if elapsed_values else None,
+            "citation_checked_count": citation_checked,
+            "citation_missing_count": citation_missing,
+            "citation_missing_rate": round(citation_missing / citation_checked, 4) if citation_checked else None,
+        })
+    return sorted(stats, key=lambda item: (-item["total_attempts"], item["model"]))
+
+
+def _graph_manifest_path() -> Path:
+    graph_path = config.GRAPH_INDEX_PATH
+    return graph_path.with_name(f"{graph_path.stem}_manifest.json")
+
+
+def _read_graph_manifest_file() -> dict:
+    manifest_path = _graph_manifest_path()
+    if not manifest_path.exists():
+        return {}
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"manifest_read_error": str(exc)}
+
+
+def _read_graph_db_status() -> dict:
+    graph_path = config.GRAPH_INDEX_PATH
+    if not graph_path.exists():
+        return {}
+
+    table_counts = {}
+    manifest_rows = {}
+    try:
+        with sqlite3.connect(f"file:{graph_path}?mode=ro", uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            for table in GRAPH_TABLES:
+                try:
+                    row = conn.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()
+                    table_counts[table] = int(row["count"] if row else 0)
+                except sqlite3.Error:
+                    table_counts[table] = None
+            try:
+                rows = conn.execute("SELECT key, value FROM graph_build_manifest").fetchall()
+                manifest_rows = {str(row["key"]): row["value"] for row in rows}
+            except sqlite3.Error:
+                manifest_rows = {}
+    except sqlite3.Error as exc:
+        return {"db_read_error": str(exc)}
+
+    return {
+        "table_counts": table_counts,
+        "db_manifest": manifest_rows,
+    }
 
 
 @router.get("/logs")
@@ -79,11 +183,12 @@ async def stats(
 
     query_rows = await db.execute(
         select(AuditLog)
-        .where(AuditLog.event_type == "CHAT_QUERY")
+        .where(AuditLog.event_type.in_(["CHAT_QUERY", "CHAT_QUERY_FAILED"]))
         .order_by(AuditLog.created_at.asc(), AuditLog.id.asc())
     )
     query_logs = list(query_rows.scalars())
-    total_queries = len(query_logs)
+    successful_query_logs = [item for item in query_logs if item.event_type == "CHAT_QUERY"]
+    total_queries = len(successful_query_logs)
     total_answers = int(
         await db.scalar(select(func.count(ChatMessage.id)).where(ChatMessage.role == "assistant"))
         or 0
@@ -94,18 +199,96 @@ async def stats(
     elapsed_values_ms: list[float] = []
     source_counts: list[int] = []
     daily_distribution = Counter()
+    warning_code_distribution = Counter()
+    ambiguous_term_distribution = Counter()
+    failed_queries = []
+    warning_queries = []
+    ambiguous_queries = []
+    total_warning_count = 0
+    warning_query_count = 0
+    ambiguity_query_count = 0
+    clarification_question_count = 0
+    model_quality: dict[str, dict] = {}
 
     for item in query_logs:
         detail = item.detail or {}
+        model = str(detail.get("model") or "?")
+        model_row = model_quality.setdefault(
+            model,
+            {
+                "model": model,
+                "total_attempts": 0,
+                "success_count": 0,
+                "failure_count": 0,
+                "elapsed_values_ms": [],
+                "citation_checked_count": 0,
+                "citation_missing_count": 0,
+            },
+        )
+        model_row["total_attempts"] += 1
+        diagnostic = detail.get("rag_diagnostics") or {}
+        warnings = _as_list(detail.get("warnings")) or _as_list(diagnostic.get("warnings"))
+        ambiguous_terms = _as_list(detail.get("ambiguous_terms")) or _as_list(diagnostic.get("ambiguous_terms"))
+        clarification_questions = (
+            _as_list(detail.get("clarification_questions"))
+            or _as_list(diagnostic.get("clarification_questions"))
+        )
+
+        if item.event_type == "CHAT_QUERY_FAILED" or detail.get("status") == "failed" or detail.get("error_code"):
+            model_row["failure_count"] += 1
+            failed_queries.append(
+                _query_issue_item(
+                    item,
+                    detail,
+                    error_code=detail.get("error_code") or "CHAT_QUERY_FAILED",
+                    error_message=detail.get("error_message") or detail.get("message") or "",
+                )
+            )
+
+        if warnings:
+            warning_query_count += 1
+            total_warning_count += len(warnings)
+            for warning in warnings:
+                warning_code_distribution[_warning_code(warning)] += 1
+            warning_queries.append(
+                _query_issue_item(
+                    item,
+                    detail,
+                    warnings=warnings[:3],
+                    warning_count=len(warnings),
+                )
+            )
+
+        if ambiguous_terms or clarification_questions:
+            ambiguity_query_count += 1
+            clarification_question_count += len(clarification_questions)
+            for term in ambiguous_terms:
+                ambiguous_term_distribution[str(term)] += 1
+            ambiguous_queries.append(
+                _query_issue_item(
+                    item,
+                    detail,
+                    ambiguous_terms=ambiguous_terms,
+                    clarification_questions=clarification_questions[:3],
+                )
+            )
+
+        if item.event_type != "CHAT_QUERY":
+            continue
+        model_row["success_count"] += 1
         mode_distribution[str(detail.get("mode") or "unknown")] += 1
         user_distribution[str(item.user_id or "(unknown)")] += 1
-        model_distribution[str(detail.get("model") or "?")] += 1
+        model_distribution[model] += 1
         elapsed = detail.get("elapsed_ms")
         if isinstance(elapsed, (int, float)):
             elapsed_values_ms.append(float(elapsed))
+            model_row["elapsed_values_ms"].append(float(elapsed))
         source_count = detail.get("source_count")
         if isinstance(source_count, int):
             source_counts.append(source_count)
+            model_row["citation_checked_count"] += 1
+            if source_count <= 0:
+                model_row["citation_missing_count"] += 1
         daily_distribution[str(item.created_at.date())] += 1
 
     for mode in ("general", "quickcode", "formal"):
@@ -119,10 +302,23 @@ async def stats(
         "mode_distribution": dict(mode_distribution),
         "user_distribution": dict(user_distribution),
         "model_distribution": dict(model_distribution),
+        "model_quality_stats": _build_model_quality_stats(model_quality),
         "daily_usage": [
             {"date": date, "count": int(count)}
             for date, count in sorted(daily_distribution.items(), key=lambda item: item[0])
         ],
+        "issue_stats": {
+            "failed_query_count": len(failed_queries),
+            "warning_query_count": warning_query_count,
+            "total_warning_count": total_warning_count,
+            "ambiguity_query_count": ambiguity_query_count,
+            "clarification_question_count": clarification_question_count,
+            "warning_code_distribution": dict(warning_code_distribution),
+            "ambiguous_term_distribution": dict(ambiguous_term_distribution),
+            "recent_failures": list(reversed(failed_queries))[:5],
+            "recent_warnings": list(reversed(warning_queries))[:5],
+            "recent_ambiguities": list(reversed(ambiguous_queries))[:5],
+        },
     }
 
 
@@ -173,6 +369,87 @@ async def system_summary(
             "hf_model_download": config.HF_MODEL_DOWNLOAD,
             "cloud_deploy": config.CLOUD_DEPLOY,
         },
+    }
+
+
+@router.get("/graph-sync-status")
+async def graph_sync_status(
+    _: User = Depends(require_permission("admin.stats")),
+) -> dict:
+    """Return the latest GraphDB build/sync execution status."""
+
+    graph_path = config.GRAPH_INDEX_PATH
+    manifest_path = _graph_manifest_path()
+    manifest_file = _read_graph_manifest_file()
+    db_status = _read_graph_db_status()
+    db_manifest = db_status.get("db_manifest") or {}
+    effective_manifest = {**db_manifest, **manifest_file}
+    read_error = db_status.get("db_read_error") or manifest_file.get("manifest_read_error")
+    available = graph_path.exists() and not read_error
+    table_counts = db_status.get("table_counts") or {}
+    loaded_rows = {
+        "nodes": table_counts.get("graph_nodes"),
+        "edges": table_counts.get("graph_edges"),
+        "evidence": table_counts.get("graph_evidence"),
+        "aliases": table_counts.get("graph_aliases"),
+        "node_evidence_links": table_counts.get("graph_node_evidence"),
+        "edge_evidence_links": table_counts.get("graph_edge_evidence"),
+    }
+    manifest_counts = {
+        "nodes": effective_manifest.get("node_count"),
+        "edges": effective_manifest.get("edge_count"),
+        "evidence": effective_manifest.get("evidence_count"),
+        "aliases": effective_manifest.get("alias_count"),
+    }
+
+    status_label = "success" if available and (manifest_file or db_manifest) else "unknown"
+    if read_error:
+        status_label = "error"
+    elif not graph_path.exists():
+        status_label = "missing"
+    technical_errors = [read_error] if read_error else []
+    pipeline_success = status_label == "success"
+
+    return {
+        "available": available,
+        "status": status_label,
+        "pipeline_success": pipeline_success,
+        "message": (
+            "GraphDB build manifest and table counts loaded."
+            if status_label == "success"
+            else "GraphDB sync/build status is not available."
+        ),
+        "sync_target": "sqlite_property_graph",
+        "operation_summary": {
+            "nodes_loaded": loaded_rows["nodes"],
+            "edges_loaded": loaded_rows["edges"],
+            "evidence_loaded": loaded_rows["evidence"],
+            "aliases_loaded": loaded_rows["aliases"],
+            "node_evidence_links_loaded": loaded_rows["node_evidence_links"],
+            "edge_evidence_links_loaded": loaded_rows["edge_evidence_links"],
+            "technical_error_count": len(technical_errors),
+            "technical_errors": technical_errors,
+            "network_error_count": None,
+            "network_error_applicable": False,
+        },
+        "metric_note": (
+            "현재 GraphDB 빌드 파이프라인은 마지막 실행의 최종 적재 카운트를 manifest/DB에서 제공합니다. "
+            "증분 created/updated 카운트와 네트워크 에러 카운트는 별도 run log가 추가되어야 정확히 집계됩니다."
+        ),
+        "graph_path": str(graph_path),
+        "graph_exists": graph_path.exists(),
+        "graph_size_bytes": graph_path.stat().st_size if graph_path.exists() else 0,
+        "manifest_path": str(manifest_path),
+        "manifest_exists": manifest_path.exists(),
+        "build_date": effective_manifest.get("build_date"),
+        "source_mode": effective_manifest.get("source_mode"),
+        "chunks_path": effective_manifest.get("chunks_path"),
+        "standard_code_db": effective_manifest.get("standard_code_db"),
+        "manifest": effective_manifest,
+        "manifest_counts": manifest_counts,
+        "loaded_rows": loaded_rows,
+        "table_counts": table_counts,
+        "read_error": read_error,
     }
 
 

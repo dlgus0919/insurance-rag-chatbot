@@ -416,3 +416,145 @@
     .claim-note{grid-column:1 / -1;}
     .claim-summary-grid{grid-template-columns:1fr;}
   }
+
+  /* ===== CLARIFICATION UX ===== */
+  .clarify-selected-summary {
+    margin: 8px 0 10px 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: rgba(29, 78, 216, 0.05);
+    border: 1px dashed rgba(29, 78, 216, 0.2);
+  }
+
+  .clarify-selected-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 5px;
+  }
+
+  .clarify-empty {
+    font-size: 11px;
+    color: var(--gray);
+    font-style: italic;
+  }
+
+  .clarify-selected-chip {
+    display: inline-flex;
+    align-items: center;
+    background: #1d4ed8;
+    color: #fff;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 700;
+  }
+
+  .clarify-preset-section {
+    margin: 10px 0;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
+
+  .clarify-preset-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 5px;
+  }
+
+  .clarify-preset {
+    border: 1px solid #d1d5db;
+    background: #fff;
+    color: #374151;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .clarify-preset:hover {
+    border-color: #9ca3af;
+    background: #f9fafb;
+  }
+
+  .clarify-option-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 5px 0 8px;
+  }
+
+  .clarify-option {
+    border: 1px solid #b8ccff;
+    background: #fff;
+    color: #1d4ed8;
+    border-radius: 999px;
+    padding: 4px 9px;
+    font-size: 11px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .clarify-option:hover {
+    background: #f3f7ff;
+  }
+
+  .clarify-option.selected {
+    background: #1d4ed8;
+    color: #fff;
+    border-color: #1d4ed8;
+  }
+
+  .clarify-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+  }
+
+  .clarify-apply {
+    border: 0;
+    background: var(--primary);
+    color: #fff;
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .clarify-apply:hover:not(:disabled) {
+    background: var(--primary-hover);
+  }
+
+  .clarify-apply:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .clarify-reset {
+    border: 1px solid var(--border);
+    background: #fff;
+    color: var(--gray);
+    border-radius: 8px;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 800;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  .clarify-reset:hover:not(:disabled) {
+    background: var(--soft-bg);
+    color: var(--navy);
+  }
+
+  .clarify-reset:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }

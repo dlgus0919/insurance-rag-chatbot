@@ -20,3 +20,4 @@ class ChatRequest(BaseModel):
     filters: dict = Field(default_factory=dict)
     memo: str | None = None
     index_mode: IndexMode = "default"
+    clarification: dict = Field(default_factory=dict)

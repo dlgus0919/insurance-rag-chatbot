@@ -114,6 +114,7 @@ async def chat_stream(
                     "code": "EMPTY_LLM_OUTPUT",
                     "message": "모델 응답 본문이 비어 있어 답변을 생성하지 못했습니다.",
                 }
+                warnings.append(empty_warning)
                 yield _sse("warning", empty_warning)
                 answer = "모델 응답 본문이 비어 있어 답변을 생성하지 못했습니다. 검색 근거를 다시 확인해 주세요."
             else:
@@ -133,6 +134,7 @@ async def chat_stream(
                     "temperature": chat_request.temperature,
                     "index_mode": chat_request.index_mode,
                     "effective_index_mode": effective_index_mode,
+                    "clarification": chat_request.clarification,
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
                     "session_id": chat_session.id,
                     "source_count": len(sources),
@@ -156,6 +158,26 @@ async def chat_stream(
             raise
         except Exception as exc:
             await _close_stream(llm_stream)
+            await log_audit_event(
+                db,
+                "CHAT_QUERY_FAILED",
+                user_id=user.username,
+                ip_address=_client_ip(request),
+                detail={
+                    "model": selected_model,
+                    "mode": chat_request.mode,
+                    "top_k": chat_request.top_k,
+                    "temperature": chat_request.temperature,
+                    "index_mode": chat_request.index_mode,
+                    "effective_index_mode": effective_index_mode,
+                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "session_id": chat_session.id,
+                    "query_preview": chat_request.query.strip()[:200],
+                    "error_code": "CHAT_STREAM_FAILED",
+                    "error_message": str(exc),
+                    "request_id": getattr(getattr(request, "state", None), "request_id", None),
+                },
+            )
             yield _sse("error", {"code": "CHAT_STREAM_FAILED", "message": str(exc)})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")

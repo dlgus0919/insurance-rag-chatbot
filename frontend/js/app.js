@@ -3,8 +3,8 @@ import { isAuthenticated } from './modules/auth.js';
 import { toast } from './modules/ui.js';
 import { apiFetch } from './utils.js';
 import { initLoginCanvas, initLoginPage } from './pages/login.js?v=20260527_model_discovery2';
-import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260527_markdown_render';
-import { initAdminPage } from './pages/admin.js?v=20260601_graph_sync_keys';
+import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260601_workspace_merge';
+import { initAdminPage } from './pages/admin.js?v=20260601_workspace_merge';
 
 const PAGES = {
   LOGIN: '/html/login.html',
