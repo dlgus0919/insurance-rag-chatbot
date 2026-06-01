@@ -16,6 +16,7 @@ from src.rag.evidence import append_evidence_validation_warning
 from src.rag.pipeline import RagPipeline, _deterministic_guard_answer, _hit_to_chunk
 from src.rag.table_store import TableStore
 from src.retrieval.bm25 import BM25Index
+from src.retrieval.chunk_lookup import ChunkLookupRef
 from src.retrieval.embedder import Embedder
 from src.retrieval.index_mode import INDEX_MODES, resolve_effective_index_mode, resolve_index_paths
 from src.retrieval.reranker import build_reranker
@@ -159,15 +160,18 @@ async def prepare_retrieved_context(
                     "message": "질문에 빠진 조건이 있어 확인 질문이 권장됩니다: " + " / ".join(clarification_questions[:3]),
                 })
             source_chunk_ids = getattr(graph_result, "source_chunk_ids", []) or []
-            if source_chunk_ids:
+            source_chunk_refs = getattr(graph_result, "source_chunk_refs", []) or []
+            if source_chunk_refs:
+                graph_hits = pipeline.vector_store.get_by_refs(source_chunk_refs)
+            elif source_chunk_ids:
                 graph_hits = pipeline.vector_store.get_by_ids(source_chunk_ids)
-                found_ids = {hit.id for hit in graph_hits}
-                missing_ids = [chunk_id for chunk_id in source_chunk_ids if chunk_id not in found_ids]
-                if missing_ids:
-                    logger.info(
-                        "GraphDB source chunks are not present in current VectorStore: %s",
-                        ", ".join(missing_ids[:5]),
-                    )
+            found_ids = {hit.id for hit in graph_hits}
+            missing_ids = [chunk_id for chunk_id in source_chunk_ids if chunk_id not in found_ids]
+            if missing_ids:
+                logger.info(
+                    "GraphDB source chunks are not present in current VectorStore: %s",
+                    ", ".join(missing_ids[:5]),
+                )
         except Exception as exc:  # pragma: no cover - runtime fallback
             logger.warning("Graph retrieval failed in API path: %s", exc, exc_info=True)
             warnings.append({
@@ -247,6 +251,9 @@ def graph_result_to_payload(result: Any) -> dict | None:
     if result is None:
         return None
     plan = getattr(result, "plan", None)
+    source_chunk_refs = list(getattr(result, "source_chunk_refs", []) or [])
+    if not source_chunk_refs:
+        source_chunk_refs = _collect_payload_source_chunk_refs(result)
     facts = []
     review_paths = []
     session_assertions = []
@@ -260,6 +267,8 @@ def graph_result_to_payload(result: Any) -> dict | None:
                 "page_start": getattr(evidence, "page_start", None),
                 "page_end": getattr(evidence, "page_end", None),
                 "chunk_id": getattr(evidence, "chunk_id", None),
+                "canonical_chunk_id": getattr(evidence, "canonical_chunk_id", None),
+                "source_chunk_id": getattr(evidence, "source_chunk_id", None),
                 "source_version": getattr(evidence, "source_version", None),
                 "confidence": getattr(evidence, "confidence", None),
             })
@@ -292,6 +301,8 @@ def graph_result_to_payload(result: Any) -> dict | None:
                     "page_start": getattr(evidence, "page_start", None),
                     "page_end": getattr(evidence, "page_end", None),
                     "chunk_id": getattr(evidence, "chunk_id", None),
+                    "canonical_chunk_id": getattr(evidence, "canonical_chunk_id", None),
+                    "source_chunk_id": getattr(evidence, "source_chunk_id", None),
                 })
             steps.append({
                 "source": getattr(step, "source", ""),
@@ -342,8 +353,58 @@ def graph_result_to_payload(result: Any) -> dict | None:
         "required_evidence": list(getattr(result, "required_evidence", []) or []),
         "review_actions": list(getattr(result, "review_actions", []) or []),
         "source_chunk_ids": list(getattr(result, "source_chunk_ids", []) or []),
+        "source_chunk_refs": [
+            {
+                "requested_id": getattr(ref, "requested_id", ""),
+                "canonical_chunk_id": getattr(ref, "canonical_chunk_id", None),
+                "source_chunk_id": getattr(ref, "source_chunk_id", None),
+                "doc_short": getattr(ref, "doc_short", None),
+                "page_start": getattr(ref, "page_start", None),
+                "page_end": getattr(ref, "page_end", None),
+            }
+            for ref in source_chunk_refs
+        ],
         "warnings": list(getattr(result, "warnings", []) or []),
     }
+
+
+def _collect_payload_source_chunk_refs(result: Any) -> list[ChunkLookupRef]:
+    refs: list[ChunkLookupRef] = []
+    seen: set[tuple[str, str | None, str | None, str | None, int | None, int | None]] = set()
+
+    def _append(evidence: Any) -> None:
+        requested_id = getattr(evidence, "chunk_id", None)
+        if not requested_id:
+            return
+        ref = ChunkLookupRef(
+            requested_id=requested_id,
+            canonical_chunk_id=getattr(evidence, "canonical_chunk_id", None),
+            source_chunk_id=getattr(evidence, "source_chunk_id", None),
+            doc_short=getattr(evidence, "doc_short", None),
+            page_start=getattr(evidence, "page_start", None),
+            page_end=getattr(evidence, "page_end", None),
+        )
+        key = (
+            ref.requested_id,
+            ref.canonical_chunk_id,
+            ref.source_chunk_id,
+            ref.doc_short,
+            ref.page_start,
+            ref.page_end,
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        refs.append(ref)
+
+    for fact in getattr(result, "facts", []) or []:
+        for evidence in getattr(fact, "evidence", []) or []:
+            _append(evidence)
+    for path in getattr(result, "review_paths", []) or []:
+        for step in getattr(path, "steps", []) or []:
+            for evidence in getattr(step, "evidence", []) or []:
+                _append(evidence)
+    return refs
 
 
 async def prepare_quickcode_context(query: str):

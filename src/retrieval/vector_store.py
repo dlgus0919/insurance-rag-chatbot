@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 
 from src.retrieval import Hit
+from src.retrieval.chunk_lookup import ChunkLookupRef, build_chunk_lookup_metadata, graph_chunk_fallback_ids
 
 DEFAULT_UPSERT_BATCH_SIZE = 1000
 
@@ -128,7 +129,8 @@ class VectorStore:
         if batch_size <= 0:
             raise ValueError("upsert_batch_size must be positive")
 
-        encoded_metadatas = [_encode_metadata(metadata) for metadata in metadatas]
+        enriched_metadatas = [build_chunk_lookup_metadata(chunk_id, metadata) for chunk_id, metadata in zip(ids, metadatas)]
+        encoded_metadatas = [_encode_metadata(metadata) for metadata in enriched_metadatas]
         for start in range(0, len(ids), batch_size):
             end = min(start + batch_size, len(ids))
             self.collection.upsert(
@@ -256,79 +258,114 @@ class VectorStore:
 
     def get_by_ids(self, ids: list[str]) -> list[Hit]:
         """주어진 chunk ID 목록으로 문서를 조회하여 Hit 목록으로 반환한다."""
-        if not ids:
+        refs = [ChunkLookupRef(requested_id=chunk_id) for chunk_id in ids]
+        return self.get_by_refs(refs)
+
+    def get_by_refs(self, refs: list[ChunkLookupRef]) -> list[Hit]:
+        """요청 id와 canonical/source stable key를 함께 사용해 청크를 조회한다."""
+
+        if not refs:
             return []
 
-        def _get_fallback_ids(chunk_id: str) -> list[str]:
-            fallbacks = []
-            normalized_id = re.sub(r"_(?:v2_manual|v1_original|v1_v2_combined)(?=_ch_)", "", chunk_id)
-            if normalized_id != chunk_id:
-                fallbacks.append(normalized_id)
-            if chunk_id.startswith("v1_"):
-                suffix = chunk_id[3:]
-                fallbacks.append(f"v2_{suffix}")
-                fallbacks.append(suffix)
-            elif chunk_id.startswith("v2_"):
-                suffix = chunk_id[3:]
-                fallbacks.append(f"v1_{suffix}")
-                fallbacks.append(suffix)
-            else:
-                fallbacks.append(f"v1_{chunk_id}")
-                fallbacks.append(f"v2_{chunk_id}")
-            for marker in ("_v2_manual_", "_v1_original_", "_v1_v2_combined_"):
-                if marker in chunk_id:
-                    fallbacks.append(chunk_id.replace(marker, "_"))
-            return fallbacks
-
-        all_candidates = []
-        id_to_fallbacks = {}
-        for chunk_id in ids:
-            fallbacks = _get_fallback_ids(chunk_id)
-            id_to_fallbacks[chunk_id] = fallbacks
-            all_candidates.append(chunk_id)
+        all_candidates: list[str] = []
+        id_to_fallbacks: dict[str, list[str]] = {}
+        for ref in refs:
+            fallbacks = graph_chunk_fallback_ids(ref.requested_id)
+            id_to_fallbacks[ref.requested_id] = fallbacks
+            all_candidates.append(ref.requested_id)
             all_candidates.extend(fallbacks)
 
-        seen = set()
-        unique_candidates = []
-        for cid in all_candidates:
-            if cid not in seen:
-                seen.add(cid)
-                unique_candidates.append(cid)
-
+        unique_candidates = list(dict.fromkeys(all_candidates))
         result = self.collection.get(ids=unique_candidates, include=["documents", "metadatas"])
         r_ids = result.get("ids", [])
         r_documents = result.get("documents", [])
         r_metadatas = result.get("metadatas", [])
 
-        db_map = {}
+        db_map: dict[str, dict[str, Any]] = {}
         for index, hit_id in enumerate(r_ids):
             db_map[hit_id] = {
                 "document": r_documents[index] if index < len(r_documents) else "",
-                "metadata": _decode_metadata(r_metadatas[index] if index < len(r_metadatas) else {})
+                "metadata": _decode_metadata(r_metadatas[index] if index < len(r_metadatas) else {}),
             }
 
-        hits: list[Hit] = []
-        for chunk_id in ids:
-            target_id = None
-            if chunk_id in db_map:
-                target_id = chunk_id
-            else:
-                for fb in id_to_fallbacks.get(chunk_id, []):
-                    if fb in db_map:
-                        target_id = fb
-                        break
+        canonical_chunk_map = self._collection_get_by_metadata_key(
+            "canonical_chunk_id",
+            [ref.canonical_chunk_id for ref in refs if ref.canonical_chunk_id],
+        )
+        source_chunk_map = self._collection_get_by_metadata_key(
+            "source_chunk_id",
+            [ref.source_chunk_id for ref in refs if ref.source_chunk_id]
+        )
 
-            if target_id is not None:
-                data = db_map[target_id]
-                hits.append(
-                    Hit(
-                        id=chunk_id,
-                        score=1.0,
-                        document=data["document"],
-                        metadata=data["metadata"],
-                    )
+        hits: list[Hit] = []
+        for ref in refs:
+            data = self._resolve_lookup_target(ref, db_map, id_to_fallbacks, canonical_chunk_map, source_chunk_map)
+            if data is None:
+                continue
+            hits.append(
+                Hit(
+                    id=ref.requested_id,
+                    score=1.0,
+                    document=data["document"],
+                    metadata=data["metadata"],
                 )
+            )
         return hits
+
+    def _collection_get_by_metadata_key(self, key: str, values: list[str]) -> dict[str, dict[str, Any]]:
+        unique_ids = list(dict.fromkeys(values))
+        if not unique_ids:
+            return {}
+        try:
+            result = self.collection.get(
+                where={key: {"$in": unique_ids}},
+                include=["documents", "metadatas"],
+            )
+        except Exception:
+            return {}
+
+        source_map: dict[str, dict[str, Any]] = {}
+        ids = result.get("ids", [])
+        documents = result.get("documents", [])
+        metadatas = result.get("metadatas", [])
+        for index, hit_id in enumerate(ids):
+            metadata = _decode_metadata(metadatas[index] if index < len(metadatas) else {})
+            source_chunk_id = str(metadata.get(key) or "")
+            if not source_chunk_id or source_chunk_id in source_map:
+                continue
+            source_map[source_chunk_id] = {
+                "matched_id": hit_id,
+                "document": documents[index] if index < len(documents) else "",
+                "metadata": metadata,
+            }
+        return source_map
+
+    def _resolve_lookup_target(
+        self,
+        ref: ChunkLookupRef,
+        db_map: dict[str, dict[str, Any]],
+        id_to_fallbacks: dict[str, list[str]],
+        canonical_chunk_map: dict[str, dict[str, Any]],
+        source_chunk_map: dict[str, dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if ref.requested_id in db_map:
+            return db_map[ref.requested_id]
+        for fallback_id in id_to_fallbacks.get(ref.requested_id, []):
+            if fallback_id in db_map:
+                return db_map[fallback_id]
+        if ref.canonical_chunk_id and ref.canonical_chunk_id in canonical_chunk_map:
+            matched = canonical_chunk_map[ref.canonical_chunk_id]
+            return {
+                "document": matched["document"],
+                "metadata": matched["metadata"],
+            }
+        if ref.source_chunk_id and ref.source_chunk_id in source_chunk_map:
+            matched = source_chunk_map[ref.source_chunk_id]
+            return {
+                "document": matched["document"],
+                "metadata": matched["metadata"],
+            }
+        return None
 
     def get_by_doc_page(
         self,

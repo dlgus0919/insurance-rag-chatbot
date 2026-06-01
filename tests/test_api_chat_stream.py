@@ -104,6 +104,7 @@ class FakeGraphRetriever:
                         GraphEvidence(
                             evidence_id="ev-1",
                             chunk_id="missing-graph-chunk",
+                            source_chunk_id="legacy-source-001",
                             doc_short="실무가이드",
                             page_start=80,
                         )
@@ -115,6 +116,9 @@ class FakeGraphRetriever:
 
 
 class FakeVectorStore:
+    def get_by_refs(self, refs):
+        return []
+
     def get_by_ids(self, ids):
         return []
 
@@ -212,6 +216,7 @@ async def test_prepare_retrieved_context_hides_missing_graph_chunk_warning() -> 
     )
 
     assert graph_payload["source_chunk_ids"] == ["missing-graph-chunk"]
+    assert graph_payload["source_chunk_refs"][0]["source_chunk_id"] == "legacy-source-001"
     assert warnings == []
     assert debug is not None
 

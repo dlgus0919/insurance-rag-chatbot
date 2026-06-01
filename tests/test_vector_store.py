@@ -1,5 +1,6 @@
 import numpy as np
 
+from src.retrieval.chunk_lookup import ChunkLookupRef
 from src.retrieval.vector_store import VectorStore
 
 
@@ -55,6 +56,7 @@ def test_vector_store_upsert_splits_batches() -> None:
     assert [call["ids"] for call in store.collection.calls] == [["a", "b"], ["c", "d"], ["e"]]
     assert [len(call["embeddings"]) for call in store.collection.calls] == [2, 2, 1]
     assert store.collection.calls[0]["metadatas"][0]["codes"] == "A"
+    assert store.collection.calls[0]["metadatas"][0]["source_chunk_id"] == "a"
     assert store._all_entries_cache is None
 
 
@@ -193,6 +195,46 @@ def test_get_by_ids_falls_back_from_graph_v2_manual_chunk_id(tmp_path) -> None:
     assert len(hits) == 1
     assert hits[0].id == "자사_SOL건강_v2_manual_ch_011755"
     assert hits[0].metadata["page_start"] == 384
+
+
+def test_upsert_normalizes_source_chunk_id_for_combined_ids() -> None:
+    store = VectorStore.__new__(VectorStore)
+    store.collection = _FakeCollection()
+    store._all_entries_cache = {"stale": True}
+    store.upsert_batch_size = 10
+
+    store.upsert(
+        ids=["심평원_v2_manual_ch_007841"],
+        embeddings=np.asarray([[1.0, 0.0]], dtype=np.float32),
+        metadatas=[{"doc_short": "심평원", "page_start": 638}],
+        documents=["췌이식술"],
+    )
+
+    assert store.collection.calls[0]["metadatas"][0]["source_chunk_id"] == "심평원_ch_007841"
+
+
+def test_get_by_refs_matches_source_chunk_id_when_collection_id_differs(tmp_path) -> None:
+    store = VectorStore(tmp_path / "chroma")
+    store.upsert(
+        ids=["combined_v2_001"],
+        embeddings=np.asarray([[1.0, 0.0]], dtype=np.float32),
+        metadatas=[{"doc_short": "실무가이드", "page_start": 80, "source_chunk_id": "실무가이드_ch_000111"}],
+        documents=["신1-5종 수술분류표 근거"],
+    )
+
+    hits = store.get_by_refs([
+        ChunkLookupRef(
+            requested_id="실무가이드_v2_manual_ch_009999",
+            source_chunk_id="실무가이드_ch_000111",
+            doc_short="실무가이드",
+            page_start=80,
+            page_end=80,
+        )
+    ])
+
+    assert len(hits) == 1
+    assert hits[0].id == "실무가이드_v2_manual_ch_009999"
+    assert hits[0].metadata["source_chunk_id"] == "실무가이드_ch_000111"
 
 
 def test_get_by_doc_page_finds_overlapping_page_range(tmp_path) -> None:

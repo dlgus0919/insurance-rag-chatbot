@@ -995,8 +995,11 @@ class RagPipeline:
             try:
                 graph_result = self.graph_retriever.retrieve(question)
                 graph_context = build_graph_context(graph_result)
-                if graph_result.source_chunk_ids:
+                if graph_result.source_chunk_refs:
+                    graph_hits = self.vector_store.get_by_refs(graph_result.source_chunk_refs)
+                elif graph_result.source_chunk_ids:
                     graph_hits = self.vector_store.get_by_ids(graph_result.source_chunk_ids)
+                if graph_result.source_chunk_ids:
                     retrieved_ids = {hit.id for hit in graph_hits}
                     missing_ids = [cid for cid in graph_result.source_chunk_ids if cid not in retrieved_ids]
                     if missing_ids:

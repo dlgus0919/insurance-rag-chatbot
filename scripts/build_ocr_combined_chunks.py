@@ -19,6 +19,8 @@ def _with_version(chunks: list[Chunk], version: str) -> list[Chunk]:
     for chunk in chunks:
         metadata = dict(chunk.metadata)
         metadata["ocr_version"] = version
+        metadata["canonical_chunk_id"] = metadata.get("canonical_chunk_id") or metadata.get("source_chunk_id") or chunk.id
+        metadata["source_chunk_id"] = metadata.get("source_chunk_id") or chunk.id
         tagged.append(Chunk(id=chunk.id, text=chunk.text, metadata=metadata))
     return tagged
 

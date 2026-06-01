@@ -133,6 +133,7 @@ class Edge:
 class Evidence:
     evidence_id: str
     chunk_id: str | None = None
+    canonical_chunk_id: str | None = None
     doc_short: str = ""
     doc_name: str | None = None
     pdf_filename: str | None = None
@@ -150,6 +151,7 @@ class Evidence:
         return (
             self.evidence_id,
             self.chunk_id,
+            self.canonical_chunk_id,
             self.doc_short,
             self.doc_name,
             self.pdf_filename,

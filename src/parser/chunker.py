@@ -180,6 +180,8 @@ def _make_chunk(
     codes = _extract_codes(text)
     metadata = {
         **EXTENDED_META_DEFAULTS,
+        "canonical_chunk_id": chunk_id,
+        "source_chunk_id": chunk_id,
         "page_start": page_start,
         "page_end": page_end,
         "volume": context.get("volume"),

@@ -22,6 +22,8 @@ def print_summary(report: dict) -> None:
     print(f"- sampled: {report['sampled_evidence_rows']}")
     print(f"- hit_rate: {summary['hit_rate']:.2%}")
     print(f"- direct_hit: {counts.get('direct_hit', 0)}")
+    print(f"- canonical_chunk_hit: {counts.get('canonical_chunk_hit', 0)}")
+    print(f"- source_chunk_hit: {counts.get('source_chunk_hit', 0)}")
     print(f"- fallback_hit: {counts.get('fallback_hit', 0)}")
     print(f"- doc_page_hit: {counts.get('doc_page_hit', 0)}")
     print(f"- missing: {counts.get('missing', 0)}")

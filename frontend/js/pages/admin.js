@@ -274,12 +274,13 @@ function renderGraphVectorSyncPanel(data) {
         ${renderMetricCard('샘플 근거', formatNumber(total))}
         ${renderMetricCard('회수율', formatPercent(summary.hit_rate))}
         ${renderMetricCard('직접 일치', formatNumber(counts.direct_hit || 0))}
+        ${renderMetricCard('stable key 회수', formatNumber((counts.canonical_chunk_hit || 0) + (counts.source_chunk_hit || 0)))}
         ${renderMetricCard('문서/페이지 회수', formatNumber(counts.doc_page_hit || 0))}
       </div>
       <div style="padding:8px 18px 16px 18px;font-size:12px;color:var(--gray);">
         <div><strong>인덱스</strong>: ${escapeHTML(data.index_mode || '-')}</div>
         <div><strong>Chroma</strong>: ${escapeHTML(data.chroma_dir || '-')}</div>
-        <div><strong>누락</strong>: ${formatNumber(missing)}건 / fallback ID 회수 ${formatNumber(counts.fallback_hit || 0)}건</div>
+        <div><strong>누락</strong>: ${formatNumber(missing)}건 / canonical ${formatNumber(counts.canonical_chunk_hit || 0)}건 / source ${formatNumber(counts.source_chunk_hit || 0)}건 / fallback ID ${formatNumber(counts.fallback_hit || 0)}건</div>
         ${docs.length ? `
           <div style="margin-top:8px;"><strong>문서별 누락 상위</strong></div>
           <ul style="margin:4px 0 0 16px;">

@@ -1,6 +1,7 @@
 from src.api.rag_service import graph_result_to_payload
 from src.graph.query_planner import GraphQueryPlan
 from src.graph.retriever import GraphPathStep, GraphRetrievalResult, GraphReviewPath
+from src.retrieval.chunk_lookup import ChunkLookupRef
 
 
 def test_graph_result_to_payload_adds_review_display_labels() -> None:
@@ -44,7 +45,16 @@ def test_graph_result_to_payload_includes_clarification_and_normalized_terms() -
             term_correction_candidates=[{'raw': '엠알아이', 'normalized': 'MRI', 'confidence': 0.72}],
             ambiguous_terms=['실손 세대'],
             clarification_questions=['어느 실손 세대 기준인지 확인해 주세요.'],
-        )
+        ),
+        source_chunk_refs=[
+            ChunkLookupRef(
+                requested_id='실무가이드_v2_manual_ch_009999',
+                source_chunk_id='실무가이드_ch_000111',
+                doc_short='실무가이드',
+                page_start=80,
+                page_end=80,
+            )
+        ],
     )
 
     payload = graph_result_to_payload(result)
@@ -54,3 +64,4 @@ def test_graph_result_to_payload_includes_clarification_and_normalized_terms() -
     assert payload['plan']['term_correction_candidates'][0]['raw'] == '엠알아이'
     assert payload['plan']['ambiguous_terms'] == ['실손 세대']
     assert payload['plan']['clarification_questions'] == ['어느 실손 세대 기준인지 확인해 주세요.']
+    assert payload['source_chunk_refs'][0]['source_chunk_id'] == '실무가이드_ch_000111'

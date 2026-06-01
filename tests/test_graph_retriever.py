@@ -248,6 +248,7 @@ def test_retriever_hard_query_1(populated_db: str) -> None:
     assert len(grade_facts[0].evidence) == 1
     assert grade_facts[0].evidence[0].chunk_id == "chk_001"
     assert "chk_001" in result.source_chunk_ids
+    assert result.source_chunk_refs[0].requested_id == "chk_001"
 
     # 2. Check Peer Fact
     peer_facts = [f for f in result.facts if f.relation == "SAME_GRADE_PEER"]

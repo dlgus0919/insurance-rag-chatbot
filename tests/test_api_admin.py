@@ -142,6 +142,7 @@ async def test_graph_vector_sync_returns_sampled_summary(tmp_path, monkeypatch) 
             CREATE TABLE graph_evidence (
               evidence_id TEXT PRIMARY KEY,
               chunk_id TEXT,
+              canonical_chunk_id TEXT,
               doc_short TEXT NOT NULL,
               doc_name TEXT,
               pdf_filename TEXT,
@@ -158,11 +159,12 @@ async def test_graph_vector_sync_returns_sampled_summary(tmp_path, monkeypatch) 
             """
         )
         conn.executemany(
-            "INSERT INTO graph_evidence (evidence_id, chunk_id, doc_short, page_start, page_end) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO graph_evidence (evidence_id, chunk_id, canonical_chunk_id, doc_short, page_start, page_end, metadata_json) VALUES (?, ?, ?, ?, ?, ?, ?)",
             [
-                ("ev_direct", "direct_ch_001", "약관", 1, 1),
-                ("ev_page", "약관_missing_ch_999999", "약관", 10, 10),
-                ("ev_missing", "missing_ch_001", "없는문서", 1, 1),
+                ("ev_direct", "direct_ch_001", None, "약관", 1, 1, "{}"),
+                ("ev_source", "graph_only_001", None, "약관", 5, 5, '{"source_chunk_id":"legacy_source_001"}'),
+                ("ev_page", "약관_missing_ch_999999", None, "약관", 10, 10, "{}"),
+                ("ev_missing", "missing_ch_001", None, "없는문서", 1, 1, "{}"),
             ],
         )
 
@@ -178,7 +180,8 @@ async def test_graph_vector_sync_returns_sampled_summary(tmp_path, monkeypatch) 
 
     assert payload["available"] is True
     assert payload["index_mode"] == "default"
-    assert payload["sampled_evidence_rows"] == 3
+    assert payload["sampled_evidence_rows"] == 4
     assert payload["summary"]["status_counts"]["direct_hit"] == 1
+    assert payload["summary"]["status_counts"]["source_chunk_hit"] == 1
     assert payload["summary"]["status_counts"]["doc_page_hit"] == 1
     assert payload["summary"]["status_counts"]["missing"] == 1

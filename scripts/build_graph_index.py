@@ -18,6 +18,12 @@ def main() -> None:
         help="Path to combined chunks jsonl file."
     )
     parser.add_argument(
+        "--canonical-manifest",
+        type=str,
+        default="data/processed/chunks_canonical_manifest.jsonl",
+        help="Optional canonical manifest path. Used first for v2_only/v1_v2_combined when present.",
+    )
+    parser.add_argument(
         "--standard-code-db",
         type=str,
         default="data/index/relational/standard_codes.sqlite",
@@ -82,6 +88,7 @@ def main() -> None:
         output_db_path=args.output,
         manifest_path=args.manifest,
         low_confidence_report_path=args.low_confidence_report,
+        canonical_manifest_path=args.canonical_manifest,
         source_mode=args.source_mode,
         rebuild=args.rebuild,
         skip_standard_codes=args.skip_standard_codes,

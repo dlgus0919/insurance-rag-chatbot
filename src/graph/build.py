@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
 import sqlite3
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,6 +14,7 @@ import re
 from src.graph.store import GraphStore
 from src.graph.schema import Edge, EdgeType, Node, NodeType
 from src.graph.normalizer import normalize_name, normalize_code
+from src.parser.chunker import save_chunks
 from src.graph.extractors import (
     SurgeryGradeExtractor,
     PolicyAppendixExtractor,
@@ -20,6 +23,7 @@ from src.graph.extractors import (
     PolicyReviewExtractor,
     SilsonCoverageExtractor,
 )
+from src.retrieval.canonical_manifest import iter_chunks_for_index_mode, load_canonical_manifest
 
 
 FEE_NAME_SPLIT_RE = re.compile(r"[-–—\[]")
@@ -87,6 +91,7 @@ def build_graph(
     output_db_path: str | Path,
     manifest_path: str | Path,
     low_confidence_report_path: str | Path,
+    canonical_manifest_path: str | Path | None = None,
     source_mode: str = "v1_v2_combined",
     rebuild: bool = False,
     skip_standard_codes: bool = False,
@@ -94,6 +99,7 @@ def build_graph(
     skip_hira_codes: bool = False,
 ) -> None:
     chunks_path = Path(chunks_path)
+    canonical_manifest_path = Path(canonical_manifest_path) if canonical_manifest_path else None
     standard_db_path = Path(standard_db_path)
     output_db_path = Path(output_db_path)
     manifest_path = Path(manifest_path)
@@ -110,7 +116,18 @@ def build_graph(
     # 2. Initialize Store
     store = GraphStore(output_db_path, build_mode=True)
 
-    # 3. Read input datasets and determine source paths
+    # 3. Resolve canonical-manifest derived chunks when available
+    resolved_chunks_path = chunks_path
+    temp_chunk_file: tempfile.NamedTemporaryFile[str] | None = None
+    if canonical_manifest_path and canonical_manifest_path.exists() and source_mode in {"v2_only", "v1_v2_combined"}:
+        rows = load_canonical_manifest(canonical_manifest_path)
+        chunks = iter_chunks_for_index_mode(rows, source_mode)
+        temp_chunk_file = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8")
+        temp_chunk_file.close()
+        resolved_chunks_path = Path(temp_chunk_file.name)
+        save_chunks(chunks, resolved_chunks_path)
+
+    # 4. Read input datasets and determine source paths
     # (In DGX server, chunks and parquet are in the standard data directory)
     project_root = Path(__file__).resolve().parents[2]
     parquet_path = project_root / "data" / "index" / "surgery_grades.parquet"
@@ -122,21 +139,21 @@ def build_graph(
     if parquet_path.exists():
         print(f"[INFO] Extracting surgery grades from {parquet_path}")
         s_extractor = SurgeryGradeExtractor(store)
-        s_extractor.extract(chunks_path, parquet_path)
+        s_extractor.extract(resolved_chunks_path, parquet_path)
     else:
         print(f"[WARNING] Surgery grades parquet not found at {parquet_path}. Skipping.")
 
     # Ingest Policy Appendix
     if not skip_policy_appendix:
-        print(f"[INFO] Extracting policy appendix rules from {chunks_path}")
+        print(f"[INFO] Extracting policy appendix rules from {resolved_chunks_path}")
         p_extractor = PolicyAppendixExtractor(store)
-        p_extractor.extract(chunks_path)
+        p_extractor.extract(resolved_chunks_path)
 
     # Ingest HIRA Codes
     if not skip_hira_codes:
-        print(f"[INFO] Extracting HIRA codes from {chunks_path}")
+        print(f"[INFO] Extracting HIRA codes from {resolved_chunks_path}")
         h_extractor = HiraCodeExtractor(store)
-        h_extractor.extract(chunks_path)
+        h_extractor.extract(resolved_chunks_path)
 
     # Ingest Nonpay Standard Codes
     if not skip_standard_codes:
@@ -150,9 +167,9 @@ def build_graph(
     cov_extractor.extract()
 
     # Ingest document-grounded policy review graph
-    print(f"[INFO] Extracting policy review graph from {chunks_path}")
+    print(f"[INFO] Extracting policy review graph from {resolved_chunks_path}")
     review_extractor = PolicyReviewExtractor(store)
-    review_extractor.extract(chunks_path)
+    review_extractor.extract(resolved_chunks_path)
 
     # 5. Build cross-reference edges based on normalization & aliases
     print("[INFO] Building cross-reference edges...")
@@ -169,7 +186,8 @@ def build_graph(
     manifest_data = {
         "build_date": datetime.now().isoformat(),
         "source_mode": source_mode,
-        "chunks_path": str(chunks_path),
+        "chunks_path": str(resolved_chunks_path),
+        "canonical_manifest_path": str(canonical_manifest_path) if canonical_manifest_path else "",
         "standard_code_db": str(standard_db_path),
         "node_count": store.query("SELECT COUNT(*) as count FROM graph_nodes")[0]["count"],
         "edge_count": store.query("SELECT COUNT(*) as count FROM graph_edges")[0]["count"],
@@ -185,6 +203,9 @@ def build_graph(
     store.commit()
 
     store.close()
+    if temp_chunk_file is not None:
+        with contextlib.suppress(FileNotFoundError):
+            Path(temp_chunk_file.name).unlink()
     print("[INFO] GraphDB build finished successfully.")
 
 

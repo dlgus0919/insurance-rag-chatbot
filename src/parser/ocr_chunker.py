@@ -48,6 +48,8 @@ def _base_meta(
     codes = _extract_codes(text)
     metadata = {
         **EXTENDED_META_DEFAULTS,
+        "canonical_chunk_id": None,
+        "source_chunk_id": None,
         "doc_short": doc_source.doc_short,
         "doc_name": doc_source.doc_name,
         "doc_type": doc_source.doc_type,
@@ -126,6 +128,8 @@ def chunk_from_extracted(
                 if not text:
                     continue
                 metadata = _base_meta(doc_source, page_no, engine, "table", block_info, text, page_context)
+                metadata["canonical_chunk_id"] = f"{doc_short}_ch_{next_index:06d}"
+                metadata["source_chunk_id"] = f"{doc_short}_ch_{next_index:06d}"
                 json_path = _table_json_path(file_path)
                 metadata["table_json"] = json_path.read_text(encoding="utf-8") if json_path.exists() else "{}"
                 chunks.append(Chunk(id=f"{doc_short}_ch_{next_index:06d}", text=text, metadata=metadata))
@@ -139,6 +143,8 @@ def chunk_from_extracted(
                 if not caption:
                     continue
                 metadata = _base_meta(doc_source, page_no, engine, "figure", block_info, caption, page_context)
+                metadata["canonical_chunk_id"] = f"{doc_short}_ch_{next_index:06d}"
+                metadata["source_chunk_id"] = f"{doc_short}_ch_{next_index:06d}"
                 metadata["image_path"] = str(file_path)
                 chunks.append(Chunk(id=f"{doc_short}_ch_{next_index:06d}", text=caption, metadata=metadata))
                 next_index += 1
@@ -150,6 +156,8 @@ def chunk_from_extracted(
             page_context = _context_from_text(text, doc_source.doc_type, page_context)
             for piece in _split_text(text, target_chars=800, overlap_chars=100):
                 metadata = _base_meta(doc_source, page_no, engine, "text", block_info, piece, page_context)
+                metadata["canonical_chunk_id"] = f"{doc_short}_ch_{next_index:06d}"
+                metadata["source_chunk_id"] = f"{doc_short}_ch_{next_index:06d}"
                 chunks.append(Chunk(id=f"{doc_short}_ch_{next_index:06d}", text=piece, metadata=metadata))
                 next_index += 1
         document_context = page_context

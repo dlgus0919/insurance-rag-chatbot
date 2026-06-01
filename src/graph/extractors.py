@@ -119,6 +119,15 @@ STRICT_ALL_KEY_MATCHES = {
 }
 
 
+def _chunk_lookup_payload(meta: dict[str, Any], chunk_id: str) -> tuple[str, dict[str, Any]]:
+    canonical_chunk_id = str(meta.get("canonical_chunk_id") or meta.get("source_chunk_id") or chunk_id)
+    payload = {
+        "canonical_chunk_id": canonical_chunk_id,
+        "source_chunk_id": str(meta.get("source_chunk_id") or canonical_chunk_id),
+    }
+    return canonical_chunk_id, payload
+
+
 class SurgeryGradeExtractor:
     """Reads surgery_grades.parquet and extracts SurgeryProcedure, SurgeryGrade, SurgeryCategory nodes and edges."""
 
@@ -451,6 +460,7 @@ class PolicyAppendixExtractor:
                     text = re.sub(r"\s+", " ", text)
                     chunk_id = c["id"]
                     page = meta["page_start"]
+                    canonical_chunk_id, lookup_metadata = _chunk_lookup_payload(meta, chunk_id)
 
                     # Find all category positions in clean text
                     cat_positions: list[tuple[int, str]] = []
@@ -511,6 +521,7 @@ class PolicyAppendixExtractor:
                         evidence = Evidence(
                             evidence_id=ev_id,
                             chunk_id=chunk_id,
+                            canonical_chunk_id=canonical_chunk_id,
                             doc_short="자사_SOL건강",
                             doc_name="신한 SOL 처음건강보험 약관",
                             pdf_filename="2.약관_신한 SOL 처음건강보험(무배당)(자동갱신형)_20260101.pdf",
@@ -519,6 +530,7 @@ class PolicyAppendixExtractor:
                             source_version="v2_manual",
                             source_method="regex_appendix_extractor",
                             row_text=f"[{current_large}] {num}. {name} {grade}",
+                            metadata_json=lookup_metadata,
                         )
                         self.store.upsert_evidence(evidence)
                         self.store.link_node_evidence(rule_node_id, ev_id, role="source")
@@ -590,6 +602,7 @@ class HiraCodeExtractor:
                     text = c["text"]
                     chunk_id = c["id"]
                     page = meta["page_start"]
+                    canonical_chunk_id, lookup_metadata = _chunk_lookup_payload(meta, chunk_id)
 
                     for code in meta["codes"]:
                         for l in text.split("\n"):
@@ -638,6 +651,7 @@ class HiraCodeExtractor:
                                     evidence = Evidence(
                                         evidence_id=ev_id,
                                         chunk_id=chunk_id,
+                                        canonical_chunk_id=canonical_chunk_id,
                                         doc_short="심평원",
                                         doc_name="건강보험 행위 급여·비급여 목록표",
                                         pdf_filename="BZ202603053039374.pdf",
@@ -646,6 +660,7 @@ class HiraCodeExtractor:
                                         source_version="v1",
                                         source_method="regex_hira_extractor",
                                         row_text=l.strip(),
+                                        metadata_json=lookup_metadata,
                                     )
                                     self.store.upsert_evidence(evidence)
                                     self.store.link_node_evidence(code_node_id, ev_id, role="source")
@@ -875,9 +890,11 @@ class PolicyReviewExtractor:
         self.store.upsert_node(clause_node)
 
         evidence_id = f"ev_{node_id}"
+        canonical_chunk_id, lookup_metadata = _chunk_lookup_payload(meta, chunk_id)
         evidence = Evidence(
             evidence_id=evidence_id,
             chunk_id=chunk_id,
+            canonical_chunk_id=canonical_chunk_id,
             doc_short=doc_short,
             doc_name=meta.get("doc_name"),
             pdf_filename=meta.get("pdf_filename"),
@@ -886,7 +903,10 @@ class PolicyReviewExtractor:
             source_version=meta.get("source_version") or meta.get("version"),
             source_method="policy_review_chunk_extractor",
             row_text=text[:800],
-            metadata_json={"section_path": self._section_path(meta)},
+            metadata_json={
+                "section_path": self._section_path(meta),
+                **lookup_metadata,
+            },
         )
         self.store.upsert_evidence(evidence)
         self.store.link_node_evidence(node_id, evidence_id, role="source")
@@ -925,9 +945,11 @@ class PolicyReviewExtractor:
         self.store.upsert_node(case_node)
 
         evidence_id = f"ev_{node_id}"
+        canonical_chunk_id, lookup_metadata = _chunk_lookup_payload(meta, chunk_id)
         evidence = Evidence(
             evidence_id=evidence_id,
             chunk_id=chunk_id,
+            canonical_chunk_id=canonical_chunk_id,
             doc_short="상담사례집",
             doc_name=meta.get("doc_name"),
             pdf_filename=meta.get("pdf_filename"),
@@ -936,6 +958,7 @@ class PolicyReviewExtractor:
             source_version=meta.get("source_version") or meta.get("version"),
             source_method="case_example_chunk_extractor",
             row_text=text[:800],
+            metadata_json=lookup_metadata,
         )
         self.store.upsert_evidence(evidence)
         self.store.link_node_evidence(node_id, evidence_id, role="source")

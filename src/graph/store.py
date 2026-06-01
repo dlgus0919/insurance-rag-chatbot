@@ -95,6 +95,7 @@ class GraphStore:
         CREATE TABLE IF NOT EXISTS graph_evidence (
           evidence_id TEXT PRIMARY KEY,
           chunk_id TEXT,
+          canonical_chunk_id TEXT,
           doc_short TEXT NOT NULL,
           doc_name TEXT,
           pdf_filename TEXT,
@@ -144,7 +145,12 @@ class GraphStore:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_aliases_norm ON graph_aliases(normalized_alias);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_edges_type_src ON graph_edges(edge_type, source_node_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_edges_type_dst ON graph_edges(edge_type, target_node_id);")
+        existing_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(graph_evidence)")}
+        if "canonical_chunk_id" not in existing_columns:
+            cursor.execute("ALTER TABLE graph_evidence ADD COLUMN canonical_chunk_id TEXT;")
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_evidence_chunk ON graph_evidence(chunk_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_evidence_canonical_chunk ON graph_evidence(canonical_chunk_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_evidence_doc_page ON graph_evidence(doc_short, page_start);")
 
         self.conn.commit()
@@ -200,10 +206,11 @@ class GraphStore:
         cursor = self.conn.cursor()
         cursor.execute(
             """
-            INSERT INTO graph_evidence (evidence_id, chunk_id, doc_short, doc_name, pdf_filename, page_start, page_end, source_version, source_method, table_id, row_index, row_text, metadata_json, confidence)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO graph_evidence (evidence_id, chunk_id, canonical_chunk_id, doc_short, doc_name, pdf_filename, page_start, page_end, source_version, source_method, table_id, row_index, row_text, metadata_json, confidence)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(evidence_id) DO UPDATE SET
                 chunk_id = excluded.chunk_id,
+                canonical_chunk_id = excluded.canonical_chunk_id,
                 doc_short = excluded.doc_short,
                 doc_name = excluded.doc_name,
                 pdf_filename = excluded.pdf_filename,
@@ -388,10 +395,11 @@ class GraphStore:
         rows = [evidence.to_db_row() for evidence in evidences]
         cursor.executemany(
             """
-            INSERT INTO graph_evidence (evidence_id, chunk_id, doc_short, doc_name, pdf_filename, page_start, page_end, source_version, source_method, table_id, row_index, row_text, metadata_json, confidence)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO graph_evidence (evidence_id, chunk_id, canonical_chunk_id, doc_short, doc_name, pdf_filename, page_start, page_end, source_version, source_method, table_id, row_index, row_text, metadata_json, confidence)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(evidence_id) DO UPDATE SET
                 chunk_id = excluded.chunk_id,
+                canonical_chunk_id = excluded.canonical_chunk_id,
                 doc_short = excluded.doc_short,
                 doc_name = excluded.doc_name,
                 pdf_filename = excluded.pdf_filename,

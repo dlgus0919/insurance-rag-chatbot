@@ -10,12 +10,15 @@ from src.graph.query_planner import GraphQueryPlan, GraphQueryPlanner
 from src.graph.schema import EdgeType, NodeType
 from src.graph.store import GraphStore
 from src.graph.normalizer import normalize_code, normalize_name
+from src.retrieval.chunk_lookup import ChunkLookupRef
 
 
 @dataclass
 class GraphEvidence:
     evidence_id: str
     chunk_id: Optional[str] = None
+    canonical_chunk_id: Optional[str] = None
+    source_chunk_id: Optional[str] = None
     doc_short: str = ""
     doc_name: Optional[str] = None
     pdf_filename: Optional[str] = None
@@ -42,6 +45,7 @@ class GraphRetrievalResult:
     plan: GraphQueryPlan
     facts: List[GraphFact] = field(default_factory=list)
     source_chunk_ids: List[str] = field(default_factory=list)
+    source_chunk_refs: List[ChunkLookupRef] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     debug: dict[str, Any] = field(default_factory=dict)
     session_assertions: List["SessionAssertion"] = field(default_factory=list)
@@ -174,9 +178,12 @@ class GraphRetriever:
         if not rows:
             return None
         row = rows[0]
+        metadata = _load_json_object(row["metadata_json"])
         return GraphEvidence(
             evidence_id=row["evidence_id"],
             chunk_id=row["chunk_id"],
+            canonical_chunk_id=row["canonical_chunk_id"],
+            source_chunk_id=metadata.get("source_chunk_id"),
             doc_short=row["doc_short"],
             doc_name=row["doc_name"],
             pdf_filename=row["pdf_filename"],
@@ -199,9 +206,12 @@ class GraphRetriever:
             (node_id,)
         )
         for r in rows:
+            metadata = _load_json_object(r["metadata_json"])
             evidences.append(GraphEvidence(
                 evidence_id=r["evidence_id"],
                 chunk_id=r["chunk_id"],
+                canonical_chunk_id=r["canonical_chunk_id"],
+                source_chunk_id=metadata.get("source_chunk_id"),
                 doc_short=r["doc_short"],
                 doc_name=r["doc_name"],
                 pdf_filename=r["pdf_filename"],
@@ -225,9 +235,12 @@ class GraphRetriever:
             (edge_id,)
         )
         for r in rows:
+            metadata = _load_json_object(r["metadata_json"])
             evidences.append(GraphEvidence(
                 evidence_id=r["evidence_id"],
                 chunk_id=r["chunk_id"],
+                canonical_chunk_id=r["canonical_chunk_id"],
+                source_chunk_id=metadata.get("source_chunk_id"),
                 doc_short=r["doc_short"],
                 doc_name=r["doc_name"],
                 pdf_filename=r["pdf_filename"],
@@ -1185,7 +1198,14 @@ class GraphRetriever:
                 warnings.append("알림: 문서 기반 검토 경로(graph review path)가 추가되어 자동 확정 대신 검토 중심으로 응답해야 할 수 있습니다.")
 
             result.facts = facts
-            result.source_chunk_ids = sorted(list(source_chunk_ids))
+            source_chunk_refs = _collect_source_chunk_refs(facts, review_paths)
+            if source_chunk_ids:
+                known_ids = {ref.requested_id for ref in source_chunk_refs}
+                for chunk_id in sorted(source_chunk_ids):
+                    if chunk_id not in known_ids:
+                        source_chunk_refs.append(ChunkLookupRef(requested_id=chunk_id))
+            result.source_chunk_ids = [ref.requested_id for ref in source_chunk_refs]
+            result.source_chunk_refs = source_chunk_refs
             result.warnings = warnings
             result.debug = debug_info
 
@@ -1195,3 +1215,45 @@ class GraphRetriever:
             store.close()
 
         return result
+
+
+def _collect_source_chunk_refs(
+    facts: list[GraphFact],
+    review_paths: list[GraphReviewPath],
+) -> list[ChunkLookupRef]:
+    refs: list[ChunkLookupRef] = []
+    seen: set[tuple[str, str | None, str | None, str, int | None, int | None]] = set()
+
+    def append_evidence(evidence: GraphEvidence) -> None:
+        if not evidence.chunk_id:
+            return
+        key = (
+            evidence.chunk_id,
+            evidence.canonical_chunk_id,
+            evidence.source_chunk_id,
+            evidence.doc_short,
+            evidence.page_start,
+            evidence.page_end,
+        )
+        if key in seen:
+            return
+        seen.add(key)
+        refs.append(
+            ChunkLookupRef(
+                requested_id=evidence.chunk_id,
+                canonical_chunk_id=evidence.canonical_chunk_id,
+                source_chunk_id=evidence.source_chunk_id,
+                doc_short=evidence.doc_short or None,
+                page_start=evidence.page_start,
+                page_end=evidence.page_end,
+            )
+        )
+
+    for fact in facts:
+        for evidence in fact.evidence:
+            append_evidence(evidence)
+    for path in review_paths:
+        for step in path.steps:
+            for evidence in step.evidence:
+                append_evidence(evidence)
+    return refs

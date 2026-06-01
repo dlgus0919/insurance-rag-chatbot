@@ -873,7 +873,10 @@ def _stream_answer(
         try:
             graph_result = pipeline.graph_retriever.retrieve(question)
             graph_context = build_graph_context(graph_result)
-            if graph_result.source_chunk_ids:
+            source_chunk_refs = getattr(graph_result, "source_chunk_refs", []) or []
+            if source_chunk_refs:
+                graph_hits = pipeline.vector_store.get_by_refs(source_chunk_refs)
+            elif graph_result.source_chunk_ids:
                 graph_hits = pipeline.vector_store.get_by_ids(graph_result.source_chunk_ids)
         except Exception:
             pass
@@ -1874,7 +1877,21 @@ def main() -> None:
                     st.caption("조회된 그래프 사실이 없습니다.")
 
                 st.markdown("#### 📂 연동된 소스 청크 ID 목록 (Source Chunk IDs)")
-                if graph_res.source_chunk_ids:
+                source_chunk_refs = getattr(graph_res, "source_chunk_refs", []) or []
+                if source_chunk_refs:
+                    st.write(
+                        [
+                            {
+                                "requested_id": ref.requested_id,
+                                "source_chunk_id": ref.source_chunk_id,
+                                "doc_short": ref.doc_short,
+                                "page_start": ref.page_start,
+                                "page_end": ref.page_end,
+                            }
+                            for ref in source_chunk_refs
+                        ]
+                    )
+                elif graph_res.source_chunk_ids:
                     st.write(graph_res.source_chunk_ids)
                 else:
                     st.caption("연동된 청크 ID가 없습니다.")

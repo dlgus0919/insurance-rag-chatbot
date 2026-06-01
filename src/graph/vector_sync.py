@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
+import json
 from pathlib import Path
 import random
-import re
 import sqlite3
 from typing import Any, Iterable
 
+from src.retrieval.chunk_lookup import graph_chunk_fallback_ids
 from src.retrieval.vector_store import _decode_metadata
 
 
@@ -17,6 +18,8 @@ from src.retrieval.vector_store import _decode_metadata
 class EvidenceRow:
     evidence_id: str
     chunk_id: str
+    canonical_chunk_id: str | None
+    source_chunk_id: str | None
     doc_short: str
     page_start: int | None
     page_end: int | None
@@ -33,37 +36,6 @@ class SyncCheckResult:
     status: str
     matched_id: str | None = None
     matched_by: str | None = None
-
-
-def graph_chunk_fallback_ids(chunk_id: str) -> list[str]:
-    """VectorStore.get_by_ids와 같은 Graph chunk id fallback 후보를 만든다."""
-
-    fallbacks: list[str] = []
-    normalized_id = re.sub(r"_(?:v2_manual|v1_original|v1_v2_combined)(?=_ch_)", "", chunk_id)
-    if normalized_id != chunk_id:
-        fallbacks.append(normalized_id)
-    if chunk_id.startswith("v1_"):
-        suffix = chunk_id[3:]
-        fallbacks.append(f"v2_{suffix}")
-        fallbacks.append(suffix)
-    elif chunk_id.startswith("v2_"):
-        suffix = chunk_id[3:]
-        fallbacks.append(f"v1_{suffix}")
-        fallbacks.append(suffix)
-    else:
-        fallbacks.append(f"v1_{chunk_id}")
-        fallbacks.append(f"v2_{chunk_id}")
-    for marker in ("_v2_manual_", "_v1_original_", "_v1_v2_combined_"):
-        if marker in chunk_id:
-            fallbacks.append(chunk_id.replace(marker, "_"))
-
-    unique: list[str] = []
-    seen: set[str] = set()
-    for fallback in fallbacks:
-        if fallback != chunk_id and fallback not in seen:
-            seen.add(fallback)
-            unique.append(fallback)
-    return unique
 
 
 def load_evidence_rows(
@@ -86,7 +58,7 @@ def load_evidence_rows(
         params.append(source_method)
 
     query = (
-        "SELECT evidence_id, chunk_id, doc_short, page_start, page_end, source_method "
+        "SELECT evidence_id, chunk_id, canonical_chunk_id, doc_short, page_start, page_end, source_method, metadata_json "
         "FROM graph_evidence WHERE "
         + " AND ".join(conditions)
         + " ORDER BY evidence_id"
@@ -96,10 +68,12 @@ def load_evidence_rows(
             EvidenceRow(
                 evidence_id=str(row[0]),
                 chunk_id=str(row[1]),
-                doc_short=str(row[2]),
-                page_start=row[3],
-                page_end=row[4],
-                source_method=row[5],
+                canonical_chunk_id=str(row[2]) if row[2] else _load_json_object(row[7]).get("canonical_chunk_id"),
+                source_chunk_id=_load_json_object(row[7]).get("source_chunk_id"),
+                doc_short=str(row[3]),
+                page_start=row[4],
+                page_end=row[5],
+                source_method=row[6],
             )
             for row in conn.execute(query, params)
         ]
@@ -112,7 +86,7 @@ def load_evidence_rows(
 
 
 def check_evidence_sync(rows: list[EvidenceRow], collection: Any) -> list[SyncCheckResult]:
-    """Evidence row 목록을 direct/fallback/doc_page/missing으로 분류한다."""
+    """Evidence row 목록을 direct/source/fallback/doc_page/missing으로 분류한다."""
 
     candidate_ids: list[str] = []
     fallback_map: dict[str, list[str]] = {}
@@ -124,6 +98,16 @@ def check_evidence_sync(rows: list[EvidenceRow], collection: Any) -> list[SyncCh
 
     unique_candidates = list(dict.fromkeys(candidate_ids))
     found_ids = _collection_get_ids(collection, unique_candidates)
+    canonical_chunk_hits = _collection_get_by_metadata_key(
+        collection,
+        "canonical_chunk_id",
+        [row.canonical_chunk_id for row in rows if row.canonical_chunk_id],
+    )
+    source_chunk_hits = _collection_get_by_metadata_key(
+        collection,
+        "source_chunk_id",
+        [row.source_chunk_id for row in rows if row.source_chunk_id],
+    )
 
     doc_page_cache: dict[str, list[tuple[str, int, int]]] = {}
     results: list[SyncCheckResult] = []
@@ -139,6 +123,36 @@ def check_evidence_sync(rows: list[EvidenceRow], collection: Any) -> list[SyncCh
                     status="direct_hit",
                     matched_id=row.chunk_id,
                     matched_by="chunk_id",
+                )
+            )
+            continue
+
+        if row.canonical_chunk_id and row.canonical_chunk_id in canonical_chunk_hits:
+            results.append(
+                SyncCheckResult(
+                    evidence_id=row.evidence_id,
+                    chunk_id=row.chunk_id,
+                    doc_short=row.doc_short,
+                    page_start=row.page_start,
+                    page_end=row.page_end,
+                    status="canonical_chunk_hit",
+                    matched_id=canonical_chunk_hits[row.canonical_chunk_id],
+                    matched_by="canonical_chunk_id",
+                )
+            )
+            continue
+
+        if row.source_chunk_id and row.source_chunk_id in source_chunk_hits:
+            results.append(
+                SyncCheckResult(
+                    evidence_id=row.evidence_id,
+                    chunk_id=row.chunk_id,
+                    doc_short=row.doc_short,
+                    page_start=row.page_start,
+                    page_end=row.page_end,
+                    status="source_chunk_hit",
+                    matched_id=source_chunk_hits[row.source_chunk_id],
+                    matched_by="source_chunk_id",
                 )
             )
             continue
@@ -204,7 +218,10 @@ def summarize_results(results: Iterable[SyncCheckResult]) -> dict[str, Any]:
         "hit_rate": _ratio(total - status_counts.get("missing", 0), total),
         "direct_hit_rate": _ratio(status_counts.get("direct_hit", 0), total),
         "fallback_recovery_rate": _ratio(
-            status_counts.get("fallback_hit", 0) + status_counts.get("doc_page_hit", 0),
+            status_counts.get("canonical_chunk_hit", 0)
+            + status_counts.get("source_chunk_hit", 0)
+            + status_counts.get("fallback_hit", 0)
+            + status_counts.get("doc_page_hit", 0),
             total,
         ),
         "by_doc_short": {
@@ -230,6 +247,8 @@ def build_report(
         "sampled_evidence_rows": len(rows),
         "summary": summarize_results(results),
         "examples": {
+            "canonical_chunk_hit": _examples(results, "canonical_chunk_hit", example_limit),
+            "source_chunk_hit": _examples(results, "source_chunk_hit", example_limit),
             "fallback_hit": _examples(results, "fallback_hit", example_limit),
             "doc_page_hit": _examples(results, "doc_page_hit", example_limit),
             "missing": _examples(results, "missing", example_limit),
@@ -242,6 +261,29 @@ def _collection_get_ids(collection: Any, ids: list[str]) -> set[str]:
         return set()
     result = collection.get(ids=ids, include=["metadatas"])
     return set(result.get("ids", []) or [])
+
+
+def _collection_get_by_metadata_key(collection: Any, key: str, values: list[str]) -> dict[str, str]:
+    unique_ids = list(dict.fromkeys(values))
+    if not unique_ids:
+        return {}
+    try:
+        result = collection.get(
+            where={key: {"$in": unique_ids}},
+            include=["metadatas"],
+        )
+    except Exception:
+        return {}
+
+    ids = result.get("ids", []) or []
+    metadatas = result.get("metadatas", []) or []
+    matches: dict[str, str] = {}
+    for index, hit_id in enumerate(ids):
+        metadata = _decode_metadata(metadatas[index] if index < len(metadatas) else {})
+        metadata_value = str(metadata.get(key) or "")
+        if metadata_value and metadata_value not in matches:
+            matches[metadata_value] = str(hit_id)
+    return matches
 
 
 def _load_doc_page_cache(collection: Any, doc_short: str) -> list[tuple[str, int, int]]:
@@ -288,3 +330,15 @@ def _ratio(numerator: int, denominator: int) -> float:
 
 def _examples(results: list[SyncCheckResult], status: str, limit: int) -> list[dict[str, Any]]:
     return [asdict(row) for row in results if row.status == status][:limit]
+
+
+def _load_json_object(raw: Any) -> dict[str, Any]:
+    if not raw:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    try:
+        loaded = json.loads(raw)
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
