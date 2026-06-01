@@ -70,6 +70,12 @@ class ClaimCalculationResponse(BaseModel):
     calculation_status: str = "auto_calculated"
     missing_evidence: list[str] = Field(default_factory=list)
     review_actions: list[str] = Field(default_factory=list)
+    exclusion_reasons: list[str] = Field(default_factory=list)
+    benefit_limits: list[str] = Field(default_factory=list)
+    deductible_rules: list[str] = Field(default_factory=list)
+    required_documents: list[str] = Field(default_factory=list)
+    coordination_rules: list[str] = Field(default_factory=list)
+    generation_rules: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
     @classmethod
@@ -90,5 +96,11 @@ class ClaimCalculationResponse(BaseModel):
             calculation_status=result.calculation_status,
             missing_evidence=result.missing_evidence,
             review_actions=result.review_actions,
+            exclusion_reasons=result.exclusion_reasons,
+            benefit_limits=result.benefit_limits,
+            deductible_rules=result.deductible_rules,
+            required_documents=result.required_documents,
+            coordination_rules=result.coordination_rules,
+            generation_rules=result.generation_rules,
             warnings=warnings or [],
         )

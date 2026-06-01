@@ -54,6 +54,9 @@ CLAIM_CONDITIONS = {
     "진단서 확인 필요": ["진단서"],
     "진단코드 일치 확인": ["진단코드"],
     "치료 목적 확인": ["치료 목적", "목적"],
+    "타 보험 보상": ["자동차보험", "산재보험", "이미 보상", "타 보험", "다른 보험"],
+    "자동차보험": ["자동차보험", "자동차 보험", "교통사고"],
+    "산재보험": ["산재보험", "산재", "산업재해"],
 }
 
 DECISION_CONCEPTS = {
@@ -101,6 +104,209 @@ REVIEW_ACTIONS = {
     "질병/상해 구분 확인": ["상해", "질병"],
 }
 
+EXCLUSION_REASONS = {
+    "미용 목적": {
+        "keywords": ["미용 목적", "미용", "성형 목적"],
+        "reason_code": "cosmetic",
+        "reason_category": "treatment_purpose",
+        "source_priority": "high",
+        "requires_human_review": True,
+    },
+    "예방 목적": {
+        "keywords": ["예방 목적", "검진 목적", "건강검진", "질병 치료를 직접 목적으로 하지"],
+        "reason_code": "preventive",
+        "reason_category": "treatment_purpose",
+        "source_priority": "high",
+        "requires_human_review": True,
+    },
+    "건강검진": {
+        "keywords": ["건강검진", "검진"],
+        "reason_code": "screening",
+        "reason_category": "screening",
+        "source_priority": "high",
+        "requires_human_review": True,
+    },
+    "약관상 보상제외 치료": {
+        "keywords": ["보상하지", "지급하지", "보상 제외", "면책"],
+        "reason_code": "policy_exclusion",
+        "reason_category": "policy",
+        "source_priority": "high",
+        "requires_human_review": True,
+    },
+    "고의 또는 중대한 과실": {
+        "keywords": ["고의", "중대한 과실"],
+        "reason_code": "intentional_or_gross_negligence",
+        "reason_category": "general_exclusion",
+        "source_priority": "medium",
+        "requires_human_review": True,
+    },
+    "전쟁/폭동 등 일반 면책": {
+        "keywords": ["전쟁", "폭동", "소요", "사변"],
+        "reason_code": "war_or_riot",
+        "reason_category": "general_exclusion",
+        "source_priority": "medium",
+        "requires_human_review": True,
+    },
+    "타 보험 선보상": {
+        "keywords": ["타 보험", "다른 보험", "이미 보상", "먼저 보상"],
+        "reason_code": "other_insurance_primary",
+        "reason_category": "coordination",
+        "source_priority": "medium",
+        "requires_human_review": True,
+    },
+    "자동차보험 처리 대상": {
+        "keywords": ["자동차보험", "자동차 보험", "교통사고"],
+        "reason_code": "auto_insurance",
+        "reason_category": "coordination",
+        "source_priority": "medium",
+        "requires_human_review": True,
+    },
+    "산재보험 처리 대상": {
+        "keywords": ["산재보험", "산업재해", "산재"],
+        "reason_code": "workers_compensation",
+        "reason_category": "coordination",
+        "source_priority": "medium",
+        "requires_human_review": True,
+    },
+}
+
+BENEFIT_LIMITS = {
+    "3대비급여 연간 한도": {
+        "keywords": ["3대비급여", "도수치료", "체외충격파", "증식치료", "50회", "350만원", "연간"],
+        "limit_scope": "annual",
+        "limit_amount": "3500000",
+        "limit_count": "50",
+        "limit_period": "1년",
+        "applies_to_topic": "3대비급여",
+        "unit_text": "연간 350만원/50회 등 문서 기준 확인",
+    },
+    "도수치료 횟수 한도": {
+        "keywords": ["도수치료", "50회", "10회"],
+        "limit_scope": "count",
+        "limit_count": "50",
+        "limit_period": "1년",
+        "applies_to_topic": "도수치료",
+        "unit_text": "문서상 회차 조건 확인",
+    },
+    "MRI/MRA 한도": {
+        "keywords": ["MRI", "MRA", "자기공명영상", "한도"],
+        "limit_scope": "topic",
+        "applies_to_topic": "MRI/MRA",
+        "unit_text": "자기공명영상진단 한도",
+    },
+    "상급병실료 차액 한도": {
+        "keywords": ["상급병실", "병실료 차액", "10만원", "50%"],
+        "limit_scope": "daily",
+        "limit_amount": "100000",
+        "applies_to_topic": "상급병실료 차액",
+        "unit_text": "1일 평균 10만원 한도 내 비급여 병실료의 50%",
+    },
+    "통원 1회 한도": {
+        "keywords": ["통원", "1회", "한도"],
+        "limit_scope": "per_visit",
+        "applies_to_visit": "통원",
+        "unit_text": "통원 1회 한도",
+    },
+}
+
+DEDUCTIBLE_RULES = {
+    "4세대 실손 공제": {
+        "keywords": ["4세대", "공제", "자기부담", "본인 부담"],
+        "deductible_type": "generation",
+        "generation_scope": "4th",
+        "basis_text": "4세대 실손 공제 규칙",
+    },
+    "5세대 실손 공제": {
+        "keywords": ["5세대", "공제", "자기부담", "본인 부담"],
+        "deductible_type": "generation",
+        "generation_scope": "5th",
+        "basis_text": "5세대 실손 공제 규칙",
+    },
+    "3대비급여 공제": {
+        "keywords": ["3대비급여", "도수치료", "주사료", "MRI", "MRA", "공제"],
+        "deductible_type": "topic",
+        "basis_text": "3대비급여 공제 규칙",
+    },
+    "통원 공제": {
+        "keywords": ["통원", "공제", "자기부담"],
+        "deductible_type": "visit",
+        "visit_scope": "outpatient",
+        "basis_text": "통원 공제 규칙",
+    },
+    "입원 공제": {
+        "keywords": ["입원", "공제", "자기부담"],
+        "deductible_type": "visit",
+        "visit_scope": "hospitalization",
+        "basis_text": "입원 공제 규칙",
+    },
+}
+
+REQUIRED_DOCUMENTS = {
+    "진료비 영수증": ["진료비 영수증", "영수증"],
+    "진료비 세부내역서": ["진료비 세부내역서", "세부내역서"],
+    "진단서": ["진단서"],
+    "수술확인서": ["수술확인서", "수술 확인서"],
+    "입퇴원확인서": ["입퇴원확인서", "입원확인서", "퇴원확인서"],
+    "처방전": ["처방전"],
+    "검사결과지": ["검사결과지", "검사 결과지"],
+    "판독결과지": ["판독결과지", "판독 결과지"],
+    "진료확인서": ["진료확인서", "진료 확인서"],
+}
+
+COORDINATION_RULES = {
+    "자동차보험 처리 후 실손 청구": {
+        "keywords": ["자동차보험", "자동차 보험", "교통사고"],
+        "coordination_type": "auto_insurance",
+        "primary_payer": "자동차보험",
+        "secondary_review_required": True,
+        "deduct_prior_payment": True,
+        "required_evidence": ["자동차보험 지급내역", "진료비 영수증", "진료비 세부내역서"],
+    },
+    "산재보험 처리 후 실손 청구": {
+        "keywords": ["산재보험", "산재", "산업재해"],
+        "coordination_type": "workers_compensation",
+        "primary_payer": "산재보험",
+        "secondary_review_required": True,
+        "deduct_prior_payment": True,
+        "required_evidence": ["산재보험 지급내역", "진료비 영수증", "진료비 세부내역서"],
+    },
+    "타보험 중복 보상 조정": {
+        "keywords": ["타 보험", "다른 보험", "중복 보상", "이미 보상"],
+        "coordination_type": "other_insurance",
+        "primary_payer": "타보험",
+        "secondary_review_required": True,
+        "deduct_prior_payment": True,
+        "required_evidence": ["타보험 지급내역"],
+    },
+}
+
+RENEWAL_OR_GENERATION_RULES = {
+    "4세대 실손 적용 규칙": {
+        "keywords": ["4세대", "4th"],
+        "generation": "4th",
+        "rule_subject": "실손 세대별 적용",
+        "requires_generation_confirmation": True,
+    },
+    "5세대 실손 적용 규칙": {
+        "keywords": ["5세대", "5th"],
+        "generation": "5th",
+        "rule_subject": "실손 세대별 적용",
+        "requires_generation_confirmation": True,
+    },
+    "공통 실손 적용 규칙": {
+        "keywords": ["실손", "실손의료보험"],
+        "generation": "common",
+        "rule_subject": "공통 실손 적용",
+        "requires_generation_confirmation": False,
+    },
+    "갱신/개정 전후 적용 규칙": {
+        "keywords": ["갱신", "개정", "변경", "적용 시점"],
+        "generation": "unknown",
+        "rule_subject": "갱신 또는 개정 전후",
+        "requires_generation_confirmation": True,
+    },
+}
+
 POLICY_REVIEW_TOPICS = {
     "실손": ["실손"],
     "3대비급여": ["3대비급여", "도수치료", "주사료", "mri", "mra", "체외충격파", "증식치료"],
@@ -108,6 +314,9 @@ POLICY_REVIEW_TOPICS = {
     "건강보험 미적용 특례": ["건강보험 미적용", "요양급여 미적용"],
     "합병증 치료": ["합병증 치료", "합병증"],
     "미용 목적 치료": ["미용 목적", "미용"],
+    "자동차보험": ["자동차보험", "자동차 보험", "교통사고"],
+    "산재보험": ["산재보험", "산재", "산업재해"],
+    "타보험 중복 보상": ["타 보험", "다른 보험", "중복 보상", "이미 보상"],
 }
 
 DIAGNOSIS_CODE_RX = re.compile(r"\b([A-Z][0-9]{2}(?:\.[0-9]+)?(?:~[A-Z]?[0-9]{2}(?:\.[0-9]+)?)?)\b")
@@ -817,6 +1026,12 @@ class PolicyReviewExtractor:
         self._seed_nodes(NodeType.FacilityContext, FACILITY_CONTEXTS.keys(), "facility")
         self._seed_nodes(NodeType.ReviewAction, REVIEW_ACTIONS.keys(), "review_action")
         self._seed_nodes(NodeType.CoverageItem, POLICY_REVIEW_TOPICS.keys(), "cov")
+        self._seed_rule_nodes(NodeType.ExclusionReason, EXCLUSION_REASONS, "exclusion_reason")
+        self._seed_rule_nodes(NodeType.BenefitLimit, BENEFIT_LIMITS, "benefit_limit")
+        self._seed_rule_nodes(NodeType.DeductibleRule, DEDUCTIBLE_RULES, "deductible_rule")
+        self._seed_required_document_nodes()
+        self._seed_rule_nodes(NodeType.CoordinationRule, COORDINATION_RULES, "coordination_rule")
+        self._seed_rule_nodes(NodeType.RenewalOrGenerationRule, RENEWAL_OR_GENERATION_RULES, "generation_rule")
 
     def _seed_nodes(self, node_type: NodeType, names: Any, prefix: str) -> None:
         for name in names:
@@ -827,6 +1042,40 @@ class PolicyReviewExtractor:
                     node_type=node_type,
                     canonical_name=name,
                     normalized_name=normalized,
+                )
+            )
+
+    def _seed_rule_nodes(self, node_type: NodeType, mapping: dict[str, dict[str, Any]], prefix: str) -> None:
+        for name, spec in mapping.items():
+            normalized = normalize_name(name)
+            properties = {key: value for key, value in spec.items() if key != "keywords"}
+            properties.setdefault("display_name", name)
+            self.store.upsert_node(
+                Node(
+                    node_id=f"{prefix}_{normalized}",
+                    node_type=node_type,
+                    canonical_name=name,
+                    normalized_name=normalized,
+                    properties=properties,
+                )
+            )
+
+    def _seed_required_document_nodes(self) -> None:
+        for name, aliases in REQUIRED_DOCUMENTS.items():
+            normalized = normalize_name(name)
+            self.store.upsert_node(
+                Node(
+                    node_id=f"required_doc_{normalized}",
+                    node_type=NodeType.RequiredDocument,
+                    canonical_name=name,
+                    normalized_name=normalized,
+                    properties={
+                        "document_name": name,
+                        "document_category": "claim_evidence",
+                        "required_for": "claim_review",
+                        "blocks_auto_decision": True,
+                        "alternative_names": aliases,
+                    },
                 )
             )
 
@@ -1003,6 +1252,8 @@ class PolicyReviewExtractor:
         for action in self._matched_keys(text, REVIEW_ACTIONS):
             self._link(source_node_id, f"review_action_{normalize_name(action)}", EdgeType.HAS_REVIEW_ACTION, evidence_id)
 
+        self._link_policy_rule_nodes(source_node_id, text, evidence_id)
+
         diagnosis_codes = []
         for code in meta.get("codes") or []:
             code_str = str(code).strip()
@@ -1028,6 +1279,37 @@ class PolicyReviewExtractor:
                 )
             )
             self._link(source_node_id, node_id, EdgeType.RELATES_TO_DIAGNOSIS, evidence_id)
+
+    def _link_policy_rule_nodes(self, source_node_id: str, text: str, evidence_id: str) -> None:
+        exclusion_reasons = self._matched_spec_keys(text, EXCLUSION_REASONS)
+        for reason in exclusion_reasons:
+            target_id = f"exclusion_reason_{normalize_name(reason)}"
+            self._link(source_node_id, target_id, EdgeType.HAS_EXCLUSION_REASON, evidence_id)
+            condition_id = f"cond_{normalize_name(reason)}"
+            if reason in CLAIM_CONDITIONS:
+                self._link(condition_id, target_id, EdgeType.TRIGGERS_EXCLUSION_REASON, evidence_id)
+
+        for limit in self._matched_spec_keys(text, BENEFIT_LIMITS):
+            self._link(source_node_id, f"benefit_limit_{normalize_name(limit)}", EdgeType.HAS_BENEFIT_LIMIT, evidence_id)
+
+        for rule in self._matched_spec_keys(text, DEDUCTIBLE_RULES):
+            self._link(source_node_id, f"deductible_rule_{normalize_name(rule)}", EdgeType.HAS_DEDUCTIBLE_RULE, evidence_id)
+
+        for doc in self._matched_keys(text, REQUIRED_DOCUMENTS):
+            doc_id = f"required_doc_{normalize_name(doc)}"
+            self._link(source_node_id, doc_id, EdgeType.REQUIRES_DOCUMENT, evidence_id)
+            if doc == "진료비 세부내역서":
+                self._link(f"review_action_{normalize_name('세부내역서 요청')}", doc_id, EdgeType.REQUESTS_DOCUMENT, evidence_id)
+            elif doc == "진단서":
+                self._link(f"review_action_{normalize_name('진단서 요청')}", doc_id, EdgeType.REQUESTS_DOCUMENT, evidence_id)
+            elif doc == "수술확인서":
+                self._link(f"review_action_{normalize_name('수술확인서 요청')}", doc_id, EdgeType.REQUESTS_DOCUMENT, evidence_id)
+
+        for rule in self._matched_spec_keys(text, COORDINATION_RULES):
+            self._link(source_node_id, f"coordination_rule_{normalize_name(rule)}", EdgeType.HAS_COORDINATION_RULE, evidence_id)
+
+        for rule in self._matched_spec_keys(text, RENEWAL_OR_GENERATION_RULES):
+            self._link(source_node_id, f"generation_rule_{normalize_name(rule)}", EdgeType.HAS_GENERATION_RULE, evidence_id)
 
     def _link(self, source_node_id: str, target_node_id: str, edge_type: EdgeType, evidence_id: str) -> None:
         edge_id = f"edge_{edge_type.value.lower()}_{source_node_id}_{target_node_id}"
@@ -1059,6 +1341,18 @@ class PolicyReviewExtractor:
                 continue
 
             if any(keyword.lower() in lowered for keyword in keywords):
+                matched.append(key)
+        return matched
+
+    def _matched_spec_keys(self, text: str, mapping: dict[str, dict[str, Any]]) -> list[str]:
+        lowered = text.lower()
+        matched = []
+        for key, spec in mapping.items():
+            keywords = spec.get("keywords") or []
+            if key.lower() in lowered:
+                matched.append(key)
+                continue
+            if any(str(keyword).lower() in lowered for keyword in keywords):
                 matched.append(key)
         return matched
 

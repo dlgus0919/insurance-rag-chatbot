@@ -574,6 +574,12 @@ def run_claim_calculation(
     review_reasons = []
     missing_evidence: list[str] = []
     structured_review_actions: list[str] = []
+    exclusion_reasons: list[str] = []
+    benefit_limits: list[str] = []
+    deductible_rules: list[str] = []
+    required_documents: list[str] = []
+    coordination_rules: list[str] = []
+    generation_rules: list[str] = []
     confirmed_exclusion_path_found = False
 
     if deterministic_review_reasons:
@@ -639,6 +645,26 @@ def run_claim_calculation(
                 reason = f"권장 검토 조치: {action}"
                 if reason not in review_reasons:
                     review_reasons.append(reason)
+
+            for item in getattr(path, "exclusion_reasons", []) or []:
+                _append_unique(exclusion_reasons, item)
+            for item in getattr(path, "benefit_limits", []) or []:
+                _append_unique(benefit_limits, item)
+            for item in getattr(path, "deductible_rules", []) or []:
+                _append_unique(deductible_rules, item)
+            for item in getattr(path, "required_documents", []) or []:
+                _append_unique(required_documents, item)
+                if not _is_evidence_requirement_satisfied(item, context.evidence_tags or []):
+                    _append_unique(missing_evidence, item)
+                    review_required = True
+            for item in getattr(path, "coordination_rules", []) or []:
+                _append_unique(coordination_rules, item)
+                review_required = True
+                reason = f"중복 보상 조정 검토가 필요합니다: {item}"
+                if reason not in review_reasons:
+                    review_reasons.append(reason)
+            for item in getattr(path, "generation_rules", []) or []:
+                _append_unique(generation_rules, item)
 
             has_confirmed_exclusion = any(_is_confirmed_exclusion_step(step) for step in path.steps)
             if has_confirmed_exclusion:
@@ -759,4 +785,10 @@ def run_claim_calculation(
         calculation_status=calculation_status,
         missing_evidence=missing_evidence,
         review_actions=structured_review_actions,
+        exclusion_reasons=exclusion_reasons,
+        benefit_limits=benefit_limits,
+        deductible_rules=deductible_rules,
+        required_documents=required_documents,
+        coordination_rules=coordination_rules,
+        generation_rules=generation_rules,
     )

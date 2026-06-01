@@ -68,7 +68,19 @@ def evaluate_case(case: dict[str, Any], result: GraphRetrievalResult) -> dict[st
     statuses = {path.status for path in result.review_paths}
     assertion_values = {assertion.value for assertion in result.session_assertions}
     review_actions = {action for path in result.review_paths for action in path.review_actions}
-    required_evidence = {item for path in result.review_paths for item in path.required_evidence}
+    required_evidence = {
+        item
+        for path in result.review_paths
+        for item in list(path.required_evidence or []) + list(path.required_documents or [])
+    }
+    rule_categories = {
+        "exclusion_reasons": {item for path in result.review_paths for item in path.exclusion_reasons},
+        "benefit_limits": {item for path in result.review_paths for item in path.benefit_limits},
+        "deductible_rules": {item for path in result.review_paths for item in path.deductible_rules},
+        "required_documents": {item for path in result.review_paths for item in path.required_documents},
+        "coordination_rules": {item for path in result.review_paths for item in path.coordination_rules},
+        "generation_rules": {item for path in result.review_paths for item in path.generation_rules},
+    }
     plan_topics = set(result.plan.coverage_topics or [])
     plan_conditions = set(result.plan.conditions or [])
     plan_clarifications = set(result.plan.clarification_questions or [])
@@ -128,6 +140,14 @@ def evaluate_case(case: dict[str, Any], result: GraphRetrievalResult) -> dict[st
     if any_evidence and not required_evidence.intersection(any_evidence):
         failures.append(f"missing_required_evidence_any:{','.join(sorted(any_evidence))}")
 
+    for category, values in rule_categories.items():
+        expected_any = set(case.get(f"required_{category}_any", []))
+        if expected_any and not values.intersection(expected_any):
+            failures.append(f"missing_{category}_any:{','.join(sorted(expected_any))}")
+        for expected in case.get(f"required_{category}", []):
+            if expected not in values:
+                failures.append(f"missing_{category}:{expected}")
+
     for forbidden in case.get("forbidden_text", []):
         if forbidden and forbidden in text:
             failures.append(f"forbidden_text:{forbidden}")
@@ -141,6 +161,7 @@ def evaluate_case(case: dict[str, Any], result: GraphRetrievalResult) -> dict[st
         "statuses": sorted(statuses),
         "required_evidence": sorted(required_evidence),
         "review_actions": sorted(review_actions),
+        "rule_categories": {key: sorted(values) for key, values in rule_categories.items()},
         "plan_topics": sorted(plan_topics),
         "plan_conditions": sorted(plan_conditions),
         "clarification_questions": sorted(plan_clarifications),

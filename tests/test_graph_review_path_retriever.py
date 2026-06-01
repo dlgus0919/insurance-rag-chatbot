@@ -39,6 +39,8 @@ def test_graph_retriever_builds_complication_review_path(tmp_path: Path) -> None
     assert path.path_type == "complication_review"
     assert path.status in {"confirmed", "review_required"}
     assert any(step.object == "합병증" for step in path.steps if step.source == "session")
+    assert "미용 목적" in path.exclusion_reasons
+    assert "진단서" in path.required_documents or "진단서" in path.required_evidence
     assert not any("당뇨" in (step.object or "") and "망막병증" in (step.object or "") for step in path.steps)
 
 
@@ -85,3 +87,50 @@ def test_graph_retriever_does_not_confirm_wrong_topic_exclusion(tmp_path: Path) 
     assert path.status == "review_required"
     assert any(step.object == "면책" and step.status == "candidate" for step in path.steps)
     assert not any(step.object == "면책" and step.status == "confirmed" for step in path.steps)
+
+
+def test_graph_retriever_builds_coordination_and_generation_rule_paths(tmp_path: Path) -> None:
+    db_path = tmp_path / "graph.sqlite"
+    store = GraphStore(db_path)
+    chunks_path = tmp_path / "chunks.jsonl"
+    chunks = [
+        {
+            "id": "약관_ch_0001",
+            "text": "제3조 자동차보험으로 이미 보상받은 치료비는 지급내역을 확인하고 중복 보상 조정이 필요하다.",
+            "metadata": {
+                "doc_short": "약관",
+                "doc_name": "실손 약관",
+                "pdf_filename": "medical.pdf",
+                "page_start": 88,
+                "page_end": 88,
+                "section": "제3조(중복 보상 조정)",
+                "codes": [],
+            },
+        },
+        {
+            "id": "약관_ch_0002",
+            "text": "제4조 5세대 실손 통원 도수치료는 연간 50회 한도와 공제금액을 적용한다.",
+            "metadata": {
+                "doc_short": "약관",
+                "doc_name": "실손 약관",
+                "pdf_filename": "medical.pdf",
+                "page_start": 89,
+                "page_end": 89,
+                "section": "제4조(5세대 한도와 공제)",
+                "codes": [],
+            },
+        },
+    ]
+    chunks_path.write_text("".join(json.dumps(chunk, ensure_ascii=False) + "\n" for chunk in chunks), encoding="utf-8")
+    PolicyReviewExtractor(store).extract(chunks_path)
+    store.close()
+
+    retriever = GraphRetriever(db_path)
+    coord = retriever.retrieve("자동차보험으로 이미 보상받은 치료비를 실손에서도 청구할 수 있나요?")
+    assert any(path.path_type == "coordination_review" for path in coord.review_paths)
+    assert any("자동차보험 처리 후 실손 청구" in path.coordination_rules for path in coord.review_paths)
+
+    generation = retriever.retrieve("5세대 실손 통원 도수치료 한도와 공제는 어떻게 보나요?")
+    assert any(path.path_type == "generation_rule_review" for path in generation.review_paths)
+    assert any("5세대 실손 적용 규칙" in path.generation_rules for path in generation.review_paths)
+    assert any("도수치료 횟수 한도" in path.benefit_limits for path in generation.review_paths)

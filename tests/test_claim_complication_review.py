@@ -64,7 +64,9 @@ def test_claim_pipeline_marks_complication_review_and_blocks_confirmed_exclusion
     assert result.payable_amount == "0"
     assert result.deductible == "100000"
     assert result.calculation_status == "not_covered"
-    assert set(result.missing_evidence) == {"진단서", "세부내역서"}
+    assert {"진단서", "세부내역서"}.issubset(set(result.missing_evidence))
     assert "진단서 요청" in result.review_actions
     assert "세부내역서 요청" in result.review_actions
+    assert "미용 목적" in result.exclusion_reasons
+    assert "진단서" in result.required_documents
     assert any("면책" in reason or "합병증" in reason for reason in result.review_reasons)

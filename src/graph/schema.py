@@ -31,6 +31,12 @@ class NodeType(str, Enum):
     VisitContext = "VisitContext"
     FacilityContext = "FacilityContext"
     ReviewAction = "ReviewAction"
+    ExclusionReason = "ExclusionReason"
+    BenefitLimit = "BenefitLimit"
+    DeductibleRule = "DeductibleRule"
+    RequiredDocument = "RequiredDocument"
+    CoordinationRule = "CoordinationRule"
+    RenewalOrGenerationRule = "RenewalOrGenerationRule"
 
 
 class EdgeType(str, Enum):
@@ -57,6 +63,14 @@ class EdgeType(str, Enum):
     APPLIES_TO_FACILITY = "APPLIES_TO_FACILITY"
     HAS_REVIEW_ACTION = "HAS_REVIEW_ACTION"
     SIMILAR_CASE_FOR = "SIMILAR_CASE_FOR"
+    HAS_EXCLUSION_REASON = "HAS_EXCLUSION_REASON"
+    HAS_BENEFIT_LIMIT = "HAS_BENEFIT_LIMIT"
+    HAS_DEDUCTIBLE_RULE = "HAS_DEDUCTIBLE_RULE"
+    REQUIRES_DOCUMENT = "REQUIRES_DOCUMENT"
+    HAS_COORDINATION_RULE = "HAS_COORDINATION_RULE"
+    HAS_GENERATION_RULE = "HAS_GENERATION_RULE"
+    TRIGGERS_EXCLUSION_REASON = "TRIGGERS_EXCLUSION_REASON"
+    REQUESTS_DOCUMENT = "REQUESTS_DOCUMENT"
 
 
 @dataclass

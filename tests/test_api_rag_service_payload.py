@@ -13,6 +13,8 @@ def test_graph_result_to_payload_adds_review_display_labels() -> None:
                 path_type="complication_review",
                 status="review_required",
                 summary="합병증 관련 조항 검토",
+                exclusion_reasons=["미용 목적"],
+                required_documents=["진단서"],
                 steps=[
                     GraphPathStep(
                         source="session",
@@ -32,6 +34,10 @@ def test_graph_result_to_payload_adds_review_display_labels() -> None:
     path = payload["graph_review_paths"][0]
     assert path["path_type_label"] == "합병증/후유증 검토"
     assert path["status_label"] == "검토 필요"
+    assert path["exclusion_reasons"] == ["미용 목적"]
+    assert path["required_documents"] == ["진단서"]
+    assert payload["exclusion_reasons"] == ["미용 목적"]
+    assert payload["required_documents"] == ["진단서"]
 
 
 
@@ -48,9 +54,10 @@ def test_graph_result_to_payload_includes_clarification_and_normalized_terms() -
         ),
         source_chunk_refs=[
             ChunkLookupRef(
-                requested_id='실무가이드_v2_manual_ch_009999',
-                source_chunk_id='실무가이드_ch_000111',
-                doc_short='실무가이드',
+                requested_id="실무가이드_v2_manual_ch_000111",
+                canonical_chunk_id="실무가이드:000111",
+                source_chunk_id="실무가이드_ch_000111",
+                doc_short="실무가이드",
                 page_start=80,
                 page_end=80,
             )
@@ -64,4 +71,6 @@ def test_graph_result_to_payload_includes_clarification_and_normalized_terms() -
     assert payload['plan']['term_correction_candidates'][0]['raw'] == '엠알아이'
     assert payload['plan']['ambiguous_terms'] == ['실손 세대']
     assert payload['plan']['clarification_questions'] == ['어느 실손 세대 기준인지 확인해 주세요.']
-    assert payload['source_chunk_refs'][0]['source_chunk_id'] == '실무가이드_ch_000111'
+    assert payload["source_chunk_refs"][0]["requested_id"] == "실무가이드_v2_manual_ch_000111"
+    assert payload["source_chunk_refs"][0]["canonical_chunk_id"] == "실무가이드:000111"
+    assert payload["source_chunk_refs"][0]["source_chunk_id"] == "실무가이드_ch_000111"

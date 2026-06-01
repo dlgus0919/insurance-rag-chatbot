@@ -34,16 +34,17 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
     clarification_questions = list(getattr(result.plan, "clarification_questions", []) or [])
     normalized_terms = dict(getattr(result.plan, "normalized_terms", {}) or {})
     term_candidates = list(getattr(result.plan, "term_correction_candidates", []) or [])
-    if not result.facts and not clarification_questions and not normalized_terms and not term_candidates:
+    review_paths = list(getattr(result, "review_paths", []) or [])
+    if not result.facts and not review_paths and not clarification_questions and not normalized_terms and not term_candidates:
         return ""
 
     intents = result.plan.intents
     # 만약 intents가 비어있다면 ordinary_rag로 기본 동작
     if not intents:
         intents = ["ordinary_rag"]
-        
+
     keep_indices = set()
-    
+
     # 각 intent에 대해 살려야 할 fact들의 index를 수집
     for intent in intents:
         if intent == "surgery_grade_lookup":
@@ -75,7 +76,7 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
         else: # ordinary_rag 등
             for i, f in enumerate(result.facts):
                 keep_indices.add(i)
-                
+
     filtered_facts = [result.facts[i] for i in sorted(list(keep_indices))]
 
     lines = []
@@ -99,6 +100,28 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
             normalized = item.get("normalized", "")
             reason = item.get("reason", "")
             lines.append(f"- {raw} -> {normalized} ({reason})")
+        lines.append("")
+
+    if review_paths:
+        lines.append("=== 구조화 검토 경로 (Review Paths) ===")
+        lines.append("[지침] 아래 경로는 문서 기반 심사 검토 흐름입니다. candidate/review_required/missing 상태를 확정 보상 판단처럼 쓰지 말고, 필요한 서류와 검토 조치를 함께 안내하십시오.")
+        for path in review_paths[:6]:
+            lines.append(f"- {path.path_type} / {path.status}: {path.summary}")
+            if path.exclusion_reasons:
+                lines.append(f"  - 적용 가능 면책 사유: {', '.join(path.exclusion_reasons)}")
+            if path.benefit_limits:
+                lines.append(f"  - 적용 한도: {', '.join(path.benefit_limits)}")
+            if path.deductible_rules:
+                lines.append(f"  - 적용 공제: {', '.join(path.deductible_rules)}")
+            docs = list(dict.fromkeys(list(path.required_documents or []) + list(path.required_evidence or [])))
+            if docs:
+                lines.append(f"  - 필요 서류/증빙: {', '.join(docs)}")
+            if path.coordination_rules:
+                lines.append(f"  - 중복 보상 조정: {', '.join(path.coordination_rules)}")
+            if path.generation_rules:
+                lines.append(f"  - 세대/갱신 기준: {', '.join(path.generation_rules)}")
+            if path.review_actions:
+                lines.append(f"  - 권장 검토 조치: {', '.join(path.review_actions)}")
         lines.append("")
 
     if not filtered_facts:
@@ -193,7 +216,7 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
                     ev = fact.evidence[0]
                     page_info = f" p.{ev.page_start}" if ev.page_start is not None else ""
                     evidence_str = f" [근거: {ev.doc_short}{page_info}]"
-                
+
                 lines.append(
                     f"  - [{fact.status.upper()}] {fact.subject} --({fact.relation})--> "
                     f"검토 후보(확정 대상 아님){evidence_str}"

@@ -242,6 +242,8 @@ def graph_review_path_type_label(path_type: str) -> str:
         "procedure_policy_review": "수술/약관 검토",
         "claim_condition_review": "청구 조건 검토",
         "claim_calculation_review": "보험금 계산 검토",
+        "coordination_review": "중복 보상 조정 검토",
+        "generation_rule_review": "세대/갱신 기준 검토",
     }.get(path_type or "", path_type or "구조화 검토")
 
 
@@ -323,7 +325,22 @@ def graph_result_to_payload(result: Any) -> dict | None:
             "summary": getattr(path, "summary", ""),
             "required_evidence": list(getattr(path, "required_evidence", []) or []),
             "review_actions": list(getattr(path, "review_actions", []) or []),
+            "exclusion_reasons": list(getattr(path, "exclusion_reasons", []) or []),
+            "benefit_limits": list(getattr(path, "benefit_limits", []) or []),
+            "deductible_rules": list(getattr(path, "deductible_rules", []) or []),
+            "required_documents": list(getattr(path, "required_documents", []) or []),
+            "coordination_rules": list(getattr(path, "coordination_rules", []) or []),
+            "generation_rules": list(getattr(path, "generation_rules", []) or []),
         })
+
+    rule_payload = {
+        "exclusion_reasons": sorted({item for path in review_paths for item in path.get("exclusion_reasons", [])}),
+        "benefit_limits": sorted({item for path in review_paths for item in path.get("benefit_limits", [])}),
+        "deductible_rules": sorted({item for path in review_paths for item in path.get("deductible_rules", [])}),
+        "required_documents": sorted({item for path in review_paths for item in path.get("required_documents", [])}),
+        "coordination_rules": sorted({item for path in review_paths for item in path.get("coordination_rules", [])}),
+        "generation_rules": sorted({item for path in review_paths for item in path.get("generation_rules", [])}),
+    }
 
     return {
         "plan": {
@@ -352,6 +369,7 @@ def graph_result_to_payload(result: Any) -> dict | None:
         "graph_review_paths": review_paths,
         "required_evidence": list(getattr(result, "required_evidence", []) or []),
         "review_actions": list(getattr(result, "review_actions", []) or []),
+        **rule_payload,
         "source_chunk_ids": list(getattr(result, "source_chunk_ids", []) or []),
         "source_chunk_refs": [
             {

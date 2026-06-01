@@ -96,6 +96,12 @@ class CalculationResult:
     calculation_status: str = "auto_calculated"
     missing_evidence: list[str] = field(default_factory=list)
     review_actions: list[str] = field(default_factory=list)
+    exclusion_reasons: list[str] = field(default_factory=list)
+    benefit_limits: list[str] = field(default_factory=list)
+    deductible_rules: list[str] = field(default_factory=list)
+    required_documents: list[str] = field(default_factory=list)
+    coordination_rules: list[str] = field(default_factory=list)
+    generation_rules: list[str] = field(default_factory=list)
 
 
 from decimal import Decimal, InvalidOperation

@@ -830,10 +830,20 @@ function renderGraphReviewPathsHtml(graphResult) {
     const evidence = Array.isArray(path.required_evidence) && path.required_evidence.length
       ? `<div class="review-line"><strong>필요 증빙</strong>: ${path.required_evidence.map(escapeHTML).join(', ')}</div>`
       : '';
+    const ruleRows = [
+      ['적용 가능 면책 사유', path.exclusion_reasons],
+      ['적용 한도', path.benefit_limits],
+      ['적용 공제', path.deductible_rules],
+      ['필요 서류', path.required_documents],
+      ['중복 보상 조정', path.coordination_rules],
+      ['세대/갱신 기준', path.generation_rules],
+    ].map(([title, values]) => Array.isArray(values) && values.length
+      ? `<div class="review-line"><strong>${title}</strong>: ${values.map(escapeHTML).join(', ')}</div>`
+      : '').join('');
     const actions = Array.isArray(path.review_actions) && path.review_actions.length
       ? `<div class="review-line"><strong>권장 조치</strong>: ${path.review_actions.map(escapeHTML).join(', ')}</div>`
       : '';
-    return `<li><div><strong>${label}</strong> <span class="review-status">${status}</span></div>${summary}${evidence}${actions}</li>`;
+    return `<li><div><strong>${label}</strong> <span class="review-status">${status}</span></div>${summary}${ruleRows}${evidence}${actions}</li>`;
   }).join('');
 
   return `<div class="graph-review-paths"><div class="evidence-title">구조화 검토 경로</div><ul>${items}</ul></div>`;

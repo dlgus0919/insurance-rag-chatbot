@@ -40,6 +40,8 @@ def test_eval_graph_review_paths_passes_fixture(tmp_path: Path) -> None:
                 "required_session_assertions": ["미용 목적", "합병증"],
                 "required_review_actions_any": ["진단서 요청", "세부내역서 요청"],
                 "required_evidence_any": ["진단서", "세부내역서"],
+                "required_exclusion_reasons_any": ["미용 목적", "약관상 보상제외 치료"],
+                "required_required_documents_any": ["진단서", "진료비 세부내역서"],
                 "forbidden_text": ["당뇨 -> 망막병증"],
             },
             ensure_ascii=False,

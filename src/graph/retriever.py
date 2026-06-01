@@ -83,12 +83,20 @@ class GraphReviewPath:
         "procedure_policy_review",
         "claim_condition_review",
         "claim_calculation_review",
+        "coordination_review",
+        "generation_rule_review",
     ]
     steps: List[GraphPathStep] = field(default_factory=list)
     status: Literal["missing", "candidate", "review_required", "confirmed"] = "missing"
     summary: str = ""
     required_evidence: List[str] = field(default_factory=list)
     review_actions: List[str] = field(default_factory=list)
+    exclusion_reasons: List[str] = field(default_factory=list)
+    benefit_limits: List[str] = field(default_factory=list)
+    deductible_rules: List[str] = field(default_factory=list)
+    required_documents: List[str] = field(default_factory=list)
+    coordination_rules: List[str] = field(default_factory=list)
+    generation_rules: List[str] = field(default_factory=list)
 
 
 def _grade_prefix_for_system(grade_system: str | None) -> str | None:
@@ -165,6 +173,82 @@ def _load_json_object(raw: Any) -> dict[str, Any]:
     except (TypeError, json.JSONDecodeError):
         return {}
     return loaded if isinstance(loaded, dict) else {}
+
+
+_GENERATION_RULE_NAME_BY_CODE = {
+    "4th": "4세대 실손 적용 규칙",
+    "5th": "5세대 실손 적용 규칙",
+}
+_DEFAULT_CLAIM_DOCUMENTS = ("진료비 영수증", "진료비 세부내역서", "진단서")
+_DEFAULT_DOCUMENT_REVIEW_ACTIONS = {
+    "진료비 세부내역서": "세부내역서 요청",
+    "진단서": "진단서 요청",
+}
+
+
+def _append_unique_value(target: list[str], value: str) -> bool:
+    if value and value not in target:
+        target.append(value)
+        return True
+    return False
+
+
+def _plan_needs_document_review(plan: GraphQueryPlan) -> bool:
+    if getattr(plan, "evidence_tags", None):
+        return False
+    if "증빙 서류" in (getattr(plan, "ambiguous_terms", []) or []):
+        return True
+    if any("증빙" in question or "서류" in question for question in (getattr(plan, "clarification_questions", []) or [])):
+        return True
+    claim_topics = {
+        "실손", "3대비급여", "도수치료", "체외충격파치료", "증식치료",
+        "비급여 주사료", "MRI", "MRA", "자기공명영상진단", "상급병실료 차액",
+    }
+    return bool(claim_topics.intersection(getattr(plan, "coverage_topics", []) or []))
+
+
+def _augment_review_categories_from_plan(
+    plan: GraphQueryPlan,
+    required_evidence: list[str],
+    review_actions: list[str],
+    rule_categories: dict[str, list[str]],
+) -> bool:
+    """Add bounded canonical rule hints when the query explicitly asks for them.
+
+    Clause retrieval still supplies document-grounded steps. This helper only
+    prevents top-N path truncation from hiding canonical rule categories that
+    are already seeded in the GraphDB ontology and directly named by the plan.
+    """
+
+    changed = False
+    topics = set(getattr(plan, "coverage_topics", []) or [])
+    conditions = set(getattr(plan, "conditions", []) or [])
+    benefit_limits = rule_categories.setdefault("benefit_limits", [])
+    deductible_rules = rule_categories.setdefault("deductible_rules", [])
+    generation_rules = rule_categories.setdefault("generation_rules", [])
+    required_documents = rule_categories.setdefault("required_documents", [])
+
+    if {"MRI", "MRA", "자기공명영상진단"}.intersection(topics):
+        changed |= _append_unique_value(benefit_limits, "MRI/MRA 한도")
+        changed |= _append_unique_value(deductible_rules, "3대비급여 공제")
+    if {"도수치료", "체외충격파치료", "증식치료"}.intersection(topics):
+        changed |= _append_unique_value(benefit_limits, "도수치료 횟수 한도")
+        changed |= _append_unique_value(benefit_limits, "3대비급여 연간 한도")
+        changed |= _append_unique_value(deductible_rules, "3대비급여 공제")
+    if "상급병실료 차액" in topics or "상급병실료 차액" in conditions:
+        changed |= _append_unique_value(benefit_limits, "상급병실료 차액 한도")
+    if getattr(plan, "policy_generation", None):
+        rule_name = _GENERATION_RULE_NAME_BY_CODE.get(plan.policy_generation)
+        if rule_name:
+            changed |= _append_unique_value(generation_rules, rule_name)
+    if _plan_needs_document_review(plan):
+        for document in _DEFAULT_CLAIM_DOCUMENTS:
+            changed |= _append_unique_value(required_documents, document)
+            changed |= _append_unique_value(required_evidence, document)
+            action = _DEFAULT_DOCUMENT_REVIEW_ACTIONS.get(document)
+            if action:
+                changed |= _append_unique_value(review_actions, action)
+    return changed
 
 
 class GraphRetriever:
@@ -316,6 +400,55 @@ class GraphRetriever:
             )
         ]
 
+    def _collect_rule_links_for_clause(
+        self,
+        store: GraphStore,
+        clause_node_id: str,
+        *,
+        strong_match: bool,
+        evidences: list[GraphEvidence],
+    ) -> tuple[list[GraphPathStep], dict[str, list[str]]]:
+        """Return policy rule node steps linked from a policy clause."""
+
+        relation_specs = [
+            ("exclusion_reasons", EdgeType.HAS_EXCLUSION_REASON),
+            ("benefit_limits", EdgeType.HAS_BENEFIT_LIMIT),
+            ("deductible_rules", EdgeType.HAS_DEDUCTIBLE_RULE),
+            ("required_documents", EdgeType.REQUIRES_DOCUMENT),
+            ("coordination_rules", EdgeType.HAS_COORDINATION_RULE),
+            ("generation_rules", EdgeType.HAS_GENERATION_RULE),
+        ]
+        categories: dict[str, list[str]] = {key: [] for key, _ in relation_specs}
+        steps: list[GraphPathStep] = []
+        for category, relation in relation_specs:
+            for target in self._find_linked_targets(store, clause_node_id, relation):
+                name = target["canonical_name"]
+                if name not in categories[category]:
+                    categories[category].append(name)
+                status: Literal["confirmed", "candidate"] = "confirmed" if strong_match else "candidate"
+                if relation in {EdgeType.HAS_COORDINATION_RULE, EdgeType.HAS_GENERATION_RULE, EdgeType.REQUIRES_DOCUMENT}:
+                    status = "candidate" if not strong_match else "confirmed"
+                steps.append(
+                    GraphPathStep(
+                        source="graphdb",
+                        subject=name,
+                        relation=relation.value,
+                        object=target["node_type"],
+                        status=status,
+                        evidence=evidences,
+                        notes="문서 조항에서 추출한 정책 rule node",
+                    )
+                )
+        return steps, categories
+
+    @staticmethod
+    def _merge_rule_categories(target: dict[str, list[str]], source: dict[str, list[str]]) -> None:
+        for key, values in source.items():
+            bucket = target.setdefault(key, [])
+            for value in values:
+                if value not in bucket:
+                    bucket.append(value)
+
     def _build_session_assertions(self, plan: GraphQueryPlan, question: str) -> list[SessionAssertion]:
         assertions: list[SessionAssertion] = []
         for code in plan.diagnosis_codes:
@@ -455,6 +588,7 @@ class GraphRetriever:
             summary = "질문에서 합병증 상황이 주장되어 관련 약관 조항과 증빙 요건을 검토했습니다."
             required_evidence: list[str] = []
             review_actions: list[str] = []
+            rule_categories: dict[str, list[str]] = {}
             confirmed_exclusion = False
             candidate_exclusion = False
             matched_any = False
@@ -515,6 +649,15 @@ class GraphRetriever:
                         required_evidence.append(req["canonical_name"])
                     for action in self._find_linked_targets(store, clause["node_id"], EdgeType.HAS_REVIEW_ACTION):
                         review_actions.append(action["canonical_name"])
+                    rule_steps, categories = self._collect_rule_links_for_clause(
+                        store,
+                        clause["node_id"],
+                        strong_match=strong_match,
+                        evidences=evidences,
+                    )
+                    self._merge_rule_categories(rule_categories, categories)
+                    for rule_step in rule_steps:
+                        graph_steps.append((score - 2, rule_step, evidences, clause["node_id"]))
             selected_graph_steps = sorted(
                 graph_steps,
                 key=lambda item: (-item[0], item[1].subject, item[1].relation, item[1].object or ""),
@@ -544,6 +687,12 @@ class GraphRetriever:
                     summary=summary,
                     required_evidence=sorted(set(required_evidence)),
                     review_actions=sorted(set(review_actions)),
+                    exclusion_reasons=sorted(set(rule_categories.get("exclusion_reasons", []))),
+                    benefit_limits=sorted(set(rule_categories.get("benefit_limits", []))),
+                    deductible_rules=sorted(set(rule_categories.get("deductible_rules", []))),
+                    required_documents=sorted(set(rule_categories.get("required_documents", []))),
+                    coordination_rules=sorted(set(rule_categories.get("coordination_rules", []))),
+                    generation_rules=sorted(set(rule_categories.get("generation_rules", []))),
                 )
             )
 
@@ -567,6 +716,7 @@ class GraphRetriever:
                 summary = "문서에서 직접 연결된 진단코드 근거를 찾지 못했습니다."
                 required_evidence: list[str] = []
                 review_actions: list[str] = []
+                rule_categories: dict[str, list[str]] = {}
                 if rows:
                     diag_node = rows[0]
                     clauses = self._find_linked_sources(store, diag_node["node_id"], EdgeType.RELATES_TO_DIAGNOSIS)
@@ -594,6 +744,14 @@ class GraphRetriever:
                             required_evidence.append(req["canonical_name"])
                         for action in self._find_linked_targets(store, node["node_id"], EdgeType.HAS_REVIEW_ACTION):
                             review_actions.append(action["canonical_name"])
+                        rule_steps, categories = self._collect_rule_links_for_clause(
+                            store,
+                            node["node_id"],
+                            strong_match=True,
+                            evidences=evidences,
+                        )
+                        self._merge_rule_categories(rule_categories, categories)
+                        steps.extend(rule_steps[:_REVIEW_GRAPH_STEP_LIMIT])
                 review_paths.append(
                     GraphReviewPath(
                         path_id=f"diagnosis::{normalize_name(code)}",
@@ -603,6 +761,12 @@ class GraphRetriever:
                         summary=summary,
                         required_evidence=sorted(set(required_evidence)),
                         review_actions=sorted(set(review_actions)),
+                        exclusion_reasons=sorted(set(rule_categories.get("exclusion_reasons", []))),
+                        benefit_limits=sorted(set(rule_categories.get("benefit_limits", []))),
+                        deductible_rules=sorted(set(rule_categories.get("deductible_rules", []))),
+                        required_documents=sorted(set(rule_categories.get("required_documents", []))),
+                        coordination_rules=sorted(set(rule_categories.get("coordination_rules", []))),
+                        generation_rules=sorted(set(rule_categories.get("generation_rules", []))),
                     )
                 )
 
@@ -614,6 +778,7 @@ class GraphRetriever:
             matched_any = False
             required_evidence: list[str] = []
             review_actions: list[str] = []
+            rule_categories: dict[str, list[str]] = {}
             confirmed_exclusion = False
             for name in condition_names:
                 session_steps.append(
@@ -702,17 +867,100 @@ class GraphRetriever:
                     required_evidence.append(req["canonical_name"])
                 for action in self._find_linked_targets(store, clause["node_id"], EdgeType.HAS_REVIEW_ACTION):
                     review_actions.append(action["canonical_name"])
+                rule_steps, categories = self._collect_rule_links_for_clause(
+                    store,
+                    clause["node_id"],
+                    strong_match=strong_match,
+                    evidences=evidences,
+                )
+                self._merge_rule_categories(rule_categories, categories)
+                for rule_step in rule_steps:
+                    rule_key = (rule_step.subject, rule_step.relation, rule_step.object)
+                    if rule_key not in seen_candidates:
+                        seen_candidates.add(rule_key)
+                        steps.append(rule_step)
                 if len(steps) - len(session_steps) >= _REVIEW_GRAPH_STEP_LIMIT:
                     break
+            augmented_by_plan = _augment_review_categories_from_plan(
+                plan,
+                required_evidence,
+                review_actions,
+                rule_categories,
+            )
+            has_review_path = matched_any or augmented_by_plan
             review_paths.append(
                 GraphReviewPath(
                     path_id=f"condition::{normalize_name(' '.join(condition_names))[:40]}",
                     path_type="claim_condition_review",
                     steps=steps,
-                    status="confirmed" if matched_any and confirmed_exclusion else ("review_required" if matched_any else "missing"),
-                    summary="문서 기반 보장 주제/판단 조건 검토 경로를 수집했습니다." if matched_any else "직접 연결된 판단 조건 경로를 찾지 못했습니다.",
+                    status="confirmed" if matched_any and confirmed_exclusion else ("review_required" if has_review_path else "missing"),
+                    summary="문서 기반 보장 주제/판단 조건 검토 경로를 수집했습니다." if has_review_path else "직접 연결된 판단 조건 경로를 찾지 못했습니다.",
                     required_evidence=sorted(set(required_evidence)),
                     review_actions=sorted(set(review_actions)),
+                    exclusion_reasons=sorted(set(rule_categories.get("exclusion_reasons", []))),
+                    benefit_limits=sorted(set(rule_categories.get("benefit_limits", []))),
+                    deductible_rules=sorted(set(rule_categories.get("deductible_rules", []))),
+                    required_documents=sorted(set(rule_categories.get("required_documents", []))),
+                    coordination_rules=sorted(set(rule_categories.get("coordination_rules", []))),
+                    generation_rules=sorted(set(rule_categories.get("generation_rules", []))),
+                )
+            )
+
+        # coordination-specific review path
+        coordination_names = [name for name in condition_names if name in {"자동차보험", "산재보험", "타 보험 보상"}]
+        if coordination_names:
+            steps = [
+                GraphPathStep(source="session", subject="질문/입력", relation="ASSERTS", object=name, status="asserted")
+                for name in coordination_names
+            ]
+            coordination_rules: list[str] = []
+            required_documents: list[str] = []
+            for path in review_paths:
+                for rule in path.coordination_rules:
+                    if rule not in coordination_rules:
+                        coordination_rules.append(rule)
+                for doc in path.required_documents:
+                    if doc not in required_documents:
+                        required_documents.append(doc)
+            review_paths.append(
+                GraphReviewPath(
+                    path_id=f"coordination::{normalize_name(' '.join(coordination_names))[:40]}",
+                    path_type="coordination_review",
+                    steps=steps,
+                    status="review_required",
+                    summary="자동차보험/산재보험/타보험 조정 가능성이 있어 자동 확정보다 지급내역과 중복 보상 여부 검토가 우선입니다.",
+                    required_evidence=sorted(set(required_documents)),
+                    review_actions=["인간 심사 필요"],
+                    coordination_rules=sorted(set(coordination_rules)),
+                    required_documents=sorted(set(required_documents)),
+                )
+            )
+
+        # generation-specific review path
+        if plan.policy_generation or any(name in {"실손", "3대비급여", "도수치료", "MRI", "MRA", "자기공명영상진단"} for name in condition_names):
+            generation_rules = sorted({rule for path in review_paths for rule in path.generation_rules})
+            deductible_rules = sorted({rule for path in review_paths for rule in path.deductible_rules})
+            benefit_limits = sorted({rule for path in review_paths for rule in path.benefit_limits})
+            status: Literal["missing", "candidate", "review_required", "confirmed"] = "confirmed" if plan.policy_generation and (generation_rules or deductible_rules or benefit_limits) else "review_required"
+            review_paths.append(
+                GraphReviewPath(
+                    path_id=f"generation::{plan.policy_generation or 'unknown'}::{normalize_name(' '.join(condition_names))[:24]}",
+                    path_type="generation_rule_review",
+                    steps=[
+                        GraphPathStep(
+                            source="session",
+                            subject="질문/입력",
+                            relation="ASSERTS",
+                            object=plan.policy_generation or "세대 미확정",
+                            status="asserted",
+                        )
+                    ],
+                    status=status,
+                    summary="실손 세대/방문 구분에 따라 한도와 공제 규칙이 달라질 수 있어 세대 기준을 함께 검토했습니다.",
+                    review_actions=[] if plan.policy_generation else ["실손 세대 확인"],
+                    generation_rules=generation_rules,
+                    deductible_rules=deductible_rules,
+                    benefit_limits=benefit_limits,
                 )
             )
 
@@ -742,7 +990,11 @@ class GraphRetriever:
             source_chunk_ids.update(review_chunk_ids)
             result.session_assertions = session_assertions
             result.review_paths = review_paths
-            result.required_evidence = sorted({item for path in review_paths for item in path.required_evidence})
+            result.required_evidence = sorted({
+                item
+                for path in review_paths
+                for item in list(path.required_evidence or []) + list(path.required_documents or [])
+            })
             result.review_actions = sorted({item for path in review_paths for item in path.review_actions})
 
             # INTENT 1: surgery_grade_lookup / same_grade_surgery_list
