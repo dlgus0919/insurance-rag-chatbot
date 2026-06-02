@@ -141,6 +141,7 @@ async def prepare_retrieved_context(
     question: str,
     top_k: int,
     history: list[ChatMessage],
+    clarification: dict | None = None,
 ):
     """Retrieve chunks, GraphDB facts, source metadata, and a prompt for generation."""
 
@@ -151,14 +152,8 @@ async def prepare_retrieved_context(
 
     if getattr(pipeline, "graph_enabled", False) and getattr(pipeline, "graph_retriever", None):
         try:
-            graph_result = pipeline.graph_retriever.retrieve(question)
+            graph_result = pipeline.graph_retriever.retrieve(question, clarification=clarification)
             graph_context = build_graph_context(graph_result)
-            clarification_questions = list(getattr(getattr(graph_result, "plan", None), "clarification_questions", []) or [])
-            if clarification_questions:
-                warnings.append({
-                    "code": "CLARIFICATION_RECOMMENDED",
-                    "message": "질문에 빠진 조건이 있어 확인 질문이 권장됩니다: " + " / ".join(clarification_questions[:3]),
-                })
             source_chunk_ids = getattr(graph_result, "source_chunk_ids", []) or []
             source_chunk_refs = getattr(graph_result, "source_chunk_refs", []) or []
             if source_chunk_refs:

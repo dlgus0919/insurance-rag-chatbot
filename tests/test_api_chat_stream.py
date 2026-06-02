@@ -86,7 +86,7 @@ class FakePipeline:
 
 
 class FakeGraphRetriever:
-    def retrieve(self, question):
+    def retrieve(self, question, clarification=None):
         return GraphRetrievalResult(
             plan=GraphQueryPlan(
                 intents=["surgery_grade_lookup"],

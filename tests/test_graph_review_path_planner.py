@@ -86,3 +86,46 @@ def test_query_planner_adds_unconfirmed_term_correction_candidate() -> None:
     assert '용어 보정 후보' in plan.ambiguous_terms
     assert any('엠알아이' in question and 'MRI' in question for question in plan.clarification_questions)
     assert 'ordinary_rag' in plan.intents
+
+
+def test_query_planner_applies_clarification_payload_before_reasking() -> None:
+    planner = GraphQueryPlanner()
+    plan = planner.plan(
+        '도수치료 보상 제외 조건 4세대 약관 찾아줘',
+        clarification={
+            'selections': [
+                {'group': 'visit_type', 'label': '방문 구분', 'value': '통원', 'display': '통원'},
+                {'group': 'evidence_tags', 'label': '증빙 서류', 'value': '영수증', 'display': '영수증'},
+                {'group': 'evidence_tags', 'label': '증빙 서류', 'value': '세부내역서', 'display': '세부내역서'},
+            ]
+        },
+    )
+
+    assert plan.policy_generation == '4th'
+    assert plan.visit_type == 'outpatient'
+    assert plan.evidence_tags == ['영수증', '세부내역서']
+    assert '방문 구분' not in plan.ambiguous_terms
+    assert '증빙 서류' not in plan.ambiguous_terms
+    assert not any('입원/통원' in question for question in plan.clarification_questions)
+    assert not any('증빙' in question for question in plan.clarification_questions)
+
+
+def test_query_planner_confirmed_term_correction_removes_candidate_question() -> None:
+    planner = GraphQueryPlanner()
+    plan = planner.plan(
+        '엠알아이 비용도 실비로 청구 가능한가요?',
+        clarification={
+            'selections': [
+                {'group': 'term_correction', 'label': '용어 확인', 'value': 'MRI', 'raw': '엠알아이', 'display': 'MRI'},
+                {'group': 'policy_generation', 'label': '실손 세대', 'value': '5세대', 'display': '5세대 실손'},
+                {'group': 'visit_type', 'label': '방문 구분', 'value': '통원', 'display': '통원'},
+            ]
+        },
+    )
+
+    assert 'MRI' in plan.coverage_topics
+    assert plan.policy_generation == '5th'
+    assert plan.visit_type == 'outpatient'
+    assert plan.term_correction_candidates == []
+    assert '용어 보정 후보' not in plan.ambiguous_terms
+    assert not any('엠알아이' in question for question in plan.clarification_questions)

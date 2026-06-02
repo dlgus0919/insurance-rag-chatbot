@@ -227,7 +227,7 @@ test.describe('채팅 플로우', () => {
     );
   });
 
-  test('명확화 UX synthetic selection 프리셋 테스트', async ({ page }) => {
+  test('명확화 UX는 화면에 없는 조건을 프리셋으로 합성하지 않는다', async ({ page }) => {
     const graphPayload = {
       plan: {
         ambiguous_terms: ["실손 세대", "방문 구분"]
@@ -243,12 +243,14 @@ test.describe('채팅 플로우', () => {
     const summary = clarification.locator('[data-clarify-summary]');
     const applyBtn = clarification.locator('[data-action="apply-clarification"]');
 
-    // '도수/충격파 + 5세대 + 통원' 프리셋 버튼 클릭
+    // coverage_topic 개별 선택지가 없는 상황에서는 해당 값을 포함한 프리셋을 숨긴다.
     const presetBtn = clarification.locator('.clarify-preset[data-preset-id="manual-shockwave-fifth-outpatient"]');
-    await presetBtn.click();
+    await expect(presetBtn).toHaveCount(0);
 
-    // 화면에 coverage_topic 버튼이 없어도 summary 칩이 표시되는지 확인
-    await expect(summary).toContainText('도수/충격파');
+    const basicPresetBtn = clarification.locator('.clarify-preset[data-preset-id="fifth-outpatient"]');
+    await basicPresetBtn.click();
+
+    await expect(summary).not.toContainText('도수/충격파');
     await expect(summary).toContainText('5세대 실손');
     await expect(summary).toContainText('통원');
 
@@ -260,13 +262,11 @@ test.describe('채팅 플로우', () => {
     expect(chatRequestPayloads.length).toBe(2);
     const secondReq = chatRequestPayloads[1];
     expect(secondReq.query).toContain('[사용자 명확화]');
-    expect(secondReq.query).toContain('- 보장 항목: 도수치료 또는 체외충격파치료');
     expect(secondReq.query).toContain('- 실손 세대: 5세대');
     expect(secondReq.query).toContain('- 방문 구분: 통원');
 
     expect(secondReq.clarification.selections).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ group: 'coverage_topic', value: '도수치료 또는 체외충격파치료' }),
         expect.objectContaining({ group: 'policy_generation', value: '5세대' }),
         expect.objectContaining({ group: 'visit_type', value: '통원' }),
       ])

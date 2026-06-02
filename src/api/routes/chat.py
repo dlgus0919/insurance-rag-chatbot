@@ -89,6 +89,7 @@ async def chat_stream(
                     chat_request.query,
                     chat_request.top_k,
                     history,
+                    chat_request.clarification,
                 )
             yield _sse("sources", sources)
             if graph_payload is not None:

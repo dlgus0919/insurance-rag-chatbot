@@ -185,6 +185,80 @@ class GraphQueryPlanner:
                         reason="문서 기반 canonical 용어와 유사하지만 자동 확정하지 않는 사용자 입력 표현입니다.",
                     )
 
+    def _apply_clarification(self, plan: GraphQueryPlan, clarification: dict | None) -> None:
+        if not isinstance(clarification, dict):
+            return
+        selections = clarification.get("selections")
+        if not isinstance(selections, list):
+            return
+
+        confirmed_groups: set[str] = set()
+        for selection in selections:
+            if not isinstance(selection, dict):
+                continue
+            group = str(selection.get("group") or "").strip()
+            value = str(selection.get("value") or "").strip()
+            raw = str(selection.get("raw") or "").strip()
+            if not group or not value:
+                continue
+
+            confirmed_groups.add(group)
+            if group == "policy_generation":
+                if "5" in value:
+                    plan.policy_generation = "5th"
+                elif "4" in value:
+                    plan.policy_generation = "4th"
+            elif group == "visit_type":
+                visit_map = {"입원": "hospitalization", "통원": "outpatient", "처방조제": "pharmacy"}
+                plan.visit_type = visit_map.get(value, value)
+            elif group == "policy_product":
+                plan.policy_product = value
+            elif group in {"evidence_tag", "evidence_tags"}:
+                self._append_unique(plan.evidence_tags, value)
+            elif group in {"condition", "conditions"}:
+                self._append_unique(plan.conditions, value)
+            elif group in {"coverage_topic", "coverage_topics"}:
+                self._append_unique(plan.coverage_topics, value)
+            elif group == "treatment_purpose":
+                purpose_map = {
+                    "치료 목적": "treatment",
+                    "미용 목적": "cosmetic",
+                    "예방/검진 목적": "preventive",
+                    "예방 목적": "preventive",
+                    "합병증 치료": "complication_treatment",
+                }
+                plan.treatment_purpose = purpose_map.get(value, value)
+                if value in self.conditions:
+                    self._append_unique(plan.conditions, value)
+            elif group == "term_correction":
+                if raw:
+                    plan.normalized_terms[raw] = value
+                    plan.term_correction_candidates = [
+                        item for item in plan.term_correction_candidates
+                        if not (item.get("raw") == raw and item.get("normalized") == value)
+                    ]
+                    plan.clarification_questions = [
+                        question for question in plan.clarification_questions
+                        if raw not in question or value not in question
+                    ]
+                if value in self.coverage_topics or value in {"MRI", "MRA"}:
+                    self._append_unique(plan.coverage_topics, value)
+
+        ambiguous_by_group = {
+            "policy_generation": "실손 세대",
+            "visit_type": "방문 구분",
+            "policy_product": "상품/특약",
+            "treatment_purpose": "치료 목적",
+            "evidence_tag": "증빙 서류",
+            "evidence_tags": "증빙 서류",
+            "term_correction": "용어 보정 후보",
+        }
+        resolved = {ambiguous_by_group[group] for group in confirmed_groups if group in ambiguous_by_group}
+        if not plan.term_correction_candidates:
+            resolved.add("용어 보정 후보")
+        if resolved:
+            plan.ambiguous_terms = [term for term in plan.ambiguous_terms if term not in resolved]
+
     def _add_clarification_questions(self, plan: GraphQueryPlan, query: str) -> None:
         judgment_tokens = (
             "보상", "청구", "계산", "지급", "가능", "한도", "공제", "자기부담",
@@ -223,7 +297,7 @@ class GraphQueryPlanner:
             self._append_unique(plan.clarification_questions, "진료비 영수증, 진료비 세부내역서, 진단서 등 어떤 증빙이 있는지 확인해 주세요.")
             self._append_unique(plan.ambiguous_terms, "증빙 서류")
 
-    def plan(self, query: str) -> GraphQueryPlan:
+    def plan(self, query: str, clarification: dict | None = None) -> GraphQueryPlan:
         plan = GraphQueryPlan()
 
         # 1. Entity Extraction
@@ -403,6 +477,8 @@ class GraphQueryPlanner:
             plan.treatment_purpose = "treatment"
         elif "예방 목적" in query or "검진 목적" in query:
             plan.treatment_purpose = "preventive"
+
+        self._apply_clarification(plan, clarification)
 
         # 2. Intent Classification
         intents = []

@@ -901,19 +901,14 @@ function renderClarificationHtml(graphResult, query, mode, filters, memo) {
       </div>
     </div>`;
 
-  // 3. Preset Section (if conditions met)
-  const coverageTopics = Array.isArray(plan.coverage_topics) ? plan.coverage_topics : [];
-  const hasPresetCondition = ambiguous.includes('실손 세대') ||
-                             ambiguous.includes('방문 구분') ||
-                             coverageTopics.some(t => ['실손', 'MRI', 'MRA', '자기공명영상진단', '도수치료', '체외충격파치료', '3대비급여'].includes(t)) ||
-                             candidates.some(c => c.normalized === 'MRI' || c.normalized === 'MRA');
-
-  if (hasPresetCondition) {
+  // 3. Preset Section (only when every preset selection is available in this panel)
+  const applicablePresets = getApplicableClarificationPresets(plan);
+  if (applicablePresets.length) {
     html += `
     <div class="clarify-preset-section">
       <div class="clarify-subtitle">자주 쓰는 조건</div>
       <div class="clarify-preset-row">
-        ${Object.entries(CLARIFICATION_PRESETS).map(([presetId, preset]) => `
+        ${applicablePresets.map(([presetId, preset]) => `
           <button type="button" class="clarify-preset" data-action="apply-clarification-preset" data-preset-id="${escapeHTML(presetId)}">
             ${escapeHTML(preset.label)}
           </button>
@@ -1004,6 +999,37 @@ function renderClarificationHtml(graphResult, query, mode, filters, memo) {
 }
 
 // ===== CLARIFICATION UX HELPERS =====
+function getRequiredClarificationGroups(plan) {
+  const groups = new Set();
+  const ambiguous = Array.isArray(plan?.ambiguous_terms) ? plan.ambiguous_terms : [];
+  const candidates = Array.isArray(plan?.term_correction_candidates) ? plan.term_correction_candidates : [];
+
+  ambiguous.forEach((term) => {
+    const groupInfo = CLARIFICATION_GROUPS[term];
+    if (groupInfo?.group) groups.add(groupInfo.group);
+  });
+  if (candidates.length) groups.add('term_correction');
+  return groups;
+}
+
+function getApplicableClarificationPresets(plan) {
+  const requiredGroups = getRequiredClarificationGroups(plan);
+  if (!requiredGroups.size) return [];
+  const candidates = Array.isArray(plan?.term_correction_candidates) ? plan.term_correction_candidates : [];
+
+  return Object.entries(CLARIFICATION_PRESETS).filter(([, preset]) => {
+    const selections = Array.isArray(preset.selections) ? preset.selections : [];
+    if (!selections.length) return false;
+    return selections.every((selection) => {
+      if (!requiredGroups.has(selection.group)) return false;
+      if (selection.group === 'term_correction') {
+        return candidates.some((candidate) => candidate.normalized === selection.value);
+      }
+      return true;
+    });
+  });
+}
+
 function isMultiSelectClarificationGroup(group) {
   return group === 'evidence_tags' || group === 'conditions';
 }
@@ -1109,24 +1135,11 @@ function applyClarificationPreset(container, preset) {
     if (matchingButton) {
       matchingButton.classList.add('selected');
       matchingButton.setAttribute('aria-pressed', 'true');
-    } else {
-      addSyntheticClarificationSelection(container, selection);
     }
   });
 
   updateClarificationSummary(container);
   updateClarificationApplyState(container);
-}
-
-function addSyntheticClarificationSelection(container, selection) {
-  const span = document.createElement('span');
-  span.className = 'clarify-option selected synthetic';
-  span.dataset.clarifyGroup = selection.group;
-  span.dataset.clarifyLabel = selection.label;
-  span.dataset.clarifyValue = selection.value;
-  span.dataset.clarifyDisplay = selection.display;
-  span.setAttribute('hidden', 'true');
-  container.appendChild(span);
 }
 
 function renderWarningHtml(warnings) {

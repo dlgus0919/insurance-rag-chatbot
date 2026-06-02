@@ -1143,8 +1143,8 @@ class GraphRetriever:
             generation_rules=sorted(set(generation_rules)),
         )
 
-    def retrieve(self, question: str) -> GraphRetrievalResult:
-        plan = self.planner.plan(question)
+    def retrieve(self, question: str, clarification: dict | None = None) -> GraphRetrievalResult:
+        plan = self.planner.plan(question, clarification=clarification)
         result = GraphRetrievalResult(plan=plan)
 
         # fallback 대비: db_path가 없으면 경고만 남기고 리턴
