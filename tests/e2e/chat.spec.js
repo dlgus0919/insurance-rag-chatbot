@@ -91,6 +91,32 @@ test.describe('채팅 플로우', () => {
     await expect(page.locator('#chat-input')).toBeEnabled();
   });
 
+  test('GraphDB graph_summary를 4개 섹션으로 렌더링', async ({ page }) => {
+    const graphPayload = {
+      graph_summary: {
+        confirmed_facts: [{ subject: '대장내시경', relation: 'HAS_GRADE', object: '2종', source: '실무가이드, p.12' }],
+        review_required: [{ subject: '합병증', relation: 'RELATES_TO_COMPLICATION', object: '검토 후보(확정 대상 아님)', reason: '부분 키워드 매칭: 감염' }],
+        evidence_checklist: [{ name: '진단서', requirement: '합병증 진단명 확인', status: 'required', priority: 'high' }],
+        review_actions: [{ order: 1, action: '합병증 진단 확인', target: '의료기관 진료 기록', priority: 'high' }],
+      },
+    };
+    await mockChatStream(page, graphPayload, '테스트 답변');
+
+    await page.fill('#chat-input', '합병증 감염 검토가 필요합니다');
+    await page.keyboard.press('Enter');
+
+    const graphSummary = page.locator('.graph-four-sections');
+    await expect(graphSummary).toBeVisible({ timeout: 30000 });
+    await expect(graphSummary.locator('.confirmed-section')).toContainText('■ 섹션 1️⃣  【확정 근거】');
+    await expect(graphSummary.locator('.review-required-section')).toContainText('■ 섹션 2️⃣  【검토 필요 사항】');
+    await expect(graphSummary.locator('.evidence-section')).toContainText('■ 섹션 3️⃣  【추가 확인 사항】');
+    await expect(graphSummary.locator('.actions-section')).toContainText('■ 섹션 4️⃣  【권장 조치】');
+    await expect(graphSummary.locator('.confirmed-section')).toContainText('대장내시경');
+    await expect(graphSummary.locator('.review-required-section')).toContainText('부분 키워드 매칭: 감염');
+    await expect(graphSummary.locator('.evidence-section')).toContainText('진단서');
+    await expect(graphSummary.locator('.actions-section')).toContainText('합병증 진단 확인');
+  });
+
   test('명확화 UX 선택값 요약 칩 및 단일 선택 그룹 테스트', async ({ page }) => {
     const graphPayload = {
       plan: {

@@ -19,6 +19,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
 from src import config
+from src.graph.context import build_graph_summary
 from src.graph.retriever import GraphRetriever, GraphRetrievalResult
 
 
@@ -203,12 +204,122 @@ def run_eval(graph_path: Path, eval_path: Path, output_path: Path | None = None)
     return summary
 
 
+def _ratio(count: int, total: int) -> float:
+    return round(count / total, 4) if total else 0.0
+
+
+def _is_candidate_summary_item(item: dict[str, Any]) -> bool:
+    confidence = item.get("confidence")
+    try:
+        confidence_value = float(confidence)
+    except (TypeError, ValueError):
+        confidence_value = None
+    return item.get("status") == "candidate" or (
+        confidence_value is not None and 0.8 <= confidence_value <= 0.95
+    )
+
+
+def evaluate_four_sections_completeness(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    """Evaluate whether graph results are separated into the four review sections."""
+
+    total = len(samples)
+    counts = {
+        "confirmed_facts_completeness": 0,
+        "review_required_completeness": 0,
+        "evidence_checklist_completeness": 0,
+        "review_actions_completeness": 0,
+        "candidate_isolation_rate": 0,
+        "samples_with_all_sections": 0,
+    }
+    records: list[dict[str, Any]] = []
+
+    for sample in samples:
+        result = sample.get("graph_result")
+        if result is None:
+            records.append({"id": sample.get("id"), "question": sample.get("question"), "passed": False, "reason": "missing_graph_result"})
+            continue
+
+        summary = build_graph_summary(result)
+        has_confirmed = bool(summary["confirmed_facts"])
+        has_review = bool(summary["review_required"])
+        has_evidence = bool(summary["evidence_checklist"])
+        has_actions = bool(summary["review_actions"])
+        candidate_isolated = not any(_is_candidate_summary_item(item) for item in summary["confirmed_facts"])
+
+        counts["confirmed_facts_completeness"] += int(has_confirmed)
+        counts["review_required_completeness"] += int(has_review)
+        counts["evidence_checklist_completeness"] += int(has_evidence)
+        counts["review_actions_completeness"] += int(has_actions)
+        counts["candidate_isolation_rate"] += int(candidate_isolated)
+        counts["samples_with_all_sections"] += int(has_confirmed and has_review and has_evidence and has_actions)
+        records.append({
+            "id": sample.get("id"),
+            "question": sample.get("question"),
+            "has_confirmed_facts": has_confirmed,
+            "has_review_required": has_review,
+            "has_evidence_checklist": has_evidence,
+            "has_review_actions": has_actions,
+            "candidate_isolated": candidate_isolated,
+            "section_counts": {key: len(value) for key, value in summary.items()},
+        })
+
+    metrics = {key: _ratio(value, total) for key, value in counts.items() if key != "samples_with_all_sections"}
+    metrics["total_samples"] = total
+    metrics["samples_with_all_sections"] = counts["samples_with_all_sections"]
+    if total:
+        metrics["overall_score"] = round((metrics["confirmed_facts_completeness"] + metrics["review_required_completeness"] + metrics["evidence_checklist_completeness"] + metrics["review_actions_completeness"] + metrics["candidate_isolation_rate"]) / 5, 4)
+    else:
+        metrics["overall_score"] = 0.0
+    metrics["records"] = records
+    return metrics
+
+
+def run_four_sections_eval(graph_path: Path, eval_path: Path, output_path: Path | None = None) -> dict[str, Any]:
+    retriever = GraphRetriever(graph_path)
+    cases = _load_jsonl(eval_path)
+    samples = []
+    for case in cases:
+        result = retriever.retrieve(case["question"])
+        samples.append({"id": case.get("id"), "question": case.get("question"), "graph_result": result})
+
+    summary = evaluate_four_sections_completeness(samples)
+    if output_path is not None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        with output_path.open("w", encoding="utf-8") as f:
+            f.write(json.dumps(summary, ensure_ascii=False, indent=2))
+    return summary
+
+
+def _print_four_sections_summary(summary: dict[str, Any]) -> None:
+    def pct(key: str) -> str:
+        return f"{summary.get(key, 0.0) * 100:.1f}%"
+
+    print("=== 4개 섹션 완전성 평가 ===")
+    print(f"Confirmed Facts 완전성: {pct('confirmed_facts_completeness')}")
+    print(f"Review Required 완전성: {pct('review_required_completeness')}")
+    print(f"Evidence Checklist 완전성: {pct('evidence_checklist_completeness')}")
+    print(f"Review Actions 완전성: {pct('review_actions_completeness')}")
+    print(f"Candidate 격리율: {pct('candidate_isolation_rate')}")
+    print("---")
+    print(f"전체 평가: {pct('overall_score')} (평가 기준: 80% 이상 = 양호)")
+    print(f"평가 완료: {summary.get('total_samples', 0)}개 샘플, {summary.get('samples_with_all_sections', 0)}개 완전성 확인")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Evaluate GraphDB review path behavior.")
+    parser.add_argument("--mode", choices=["review_paths", "evaluate_four_sections"], default="review_paths")
     parser.add_argument("--graph", type=Path, default=config.GRAPH_INDEX_PATH)
     parser.add_argument("--eval", type=Path, default=Path("eval/graph_review_paths.jsonl"))
     parser.add_argument("--output", type=Path, default=Path("reports/graph_review_paths/eval_graph_review_paths.jsonl"))
     args = parser.parse_args()
+
+    if args.mode == "evaluate_four_sections":
+        output = args.output
+        if output.name == "eval_graph_review_paths.jsonl":
+            output = output.with_name("eval_graph_four_sections.json")
+        summary = run_four_sections_eval(args.graph, args.eval, output)
+        _print_four_sections_summary(summary)
+        return 0 if summary.get("candidate_isolation_rate", 0.0) >= 1.0 else 1
 
     summary = run_eval(args.graph, args.eval, args.output)
     print(f"Graph review path evaluation: {summary['passed']}/{summary['total']} passed")

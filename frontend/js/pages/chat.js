@@ -746,6 +746,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '', clar
     bubble.innerHTML = renderAssistantContent(answer)
       + renderClarificationHtml(graphResult, query, mode, filters, memo)
       + renderWarningHtml(warnings)
+      + renderGraphSummaryFourSections(graphResult)
       + renderGraphReviewPathsHtml(graphResult)
       + renderGraphFactsHtml(graphResult)
       + (sources.length ? `<div class="msg-sources">📄 참고: ${sources.map((source) => `<span class="src-badge">${escapeHTML(formatSource(source))}</span>`).join('')}</div>` : '');
@@ -1148,6 +1149,130 @@ function renderWarningHtml(warnings) {
     .map((warning) => `<li>${escapeHTML(warning.message || warning.code || '처리 중 경고가 발생했습니다.')}</li>`)
     .join('');
   return `<div class="msg-warnings"><div class="evidence-title">처리 경고</div><ul>${items}</ul></div>`;
+}
+
+function renderGraphSummaryFourSections(graphResult) {
+  const summary = graphResult?.graph_summary;
+  if (!summary || typeof summary !== 'object') return '';
+
+  return `
+    <div class="graph-four-sections" aria-label="GraphDB 4개 섹션 요약">
+      ${renderFourSectionsConfirmedFacts(summary.confirmed_facts)}
+      ${renderFourSectionsReviewRequired(summary.review_required)}
+      ${renderFourSectionsEvidenceChecklist(summary.evidence_checklist)}
+      ${renderFourSectionsReviewActions(summary.review_actions)}
+    </div>
+  `;
+}
+
+function renderFourSectionsConfirmedFacts(facts) {
+  const safeFacts = Array.isArray(facts) ? facts : [];
+  const body = safeFacts.length
+    ? `<ul>${safeFacts.map((fact) => {
+      const subject = escapeHTML(fact.subject || 'N/A');
+      const relation = escapeHTML(fact.relation || '?');
+      const object = escapeHTML(fact.object || 'N/A');
+      const source = fact.source ? ` <span class="fact-source">(출처: ${escapeHTML(fact.source)})</span>` : '';
+      return `<li><span class="section-icon">✅</span><span><strong>${subject}</strong> --(<em>${relation}</em>)--> ${object}${source}</span></li>`;
+    }).join('')}</ul>`
+    : '<div class="section-empty">해당 없음</div>';
+
+  return `
+    <section class="four-section confirmed-section">
+      <div class="section-header">■ 섹션 1️⃣  【확정 근거】</div>
+      <div class="section-content">${body}</div>
+    </section>
+  `;
+}
+
+function renderFourSectionsReviewRequired(items) {
+  const safeItems = Array.isArray(items) ? items : [];
+  const body = safeItems.length
+    ? `<ul>${safeItems.map((item) => {
+      const title = item.topic
+        ? item.topic
+        : `${item.subject || 'N/A'} --${item.relation || '?'}--> ${item.object || 'N/A'}`;
+      const reason = item.reason || '입력 조건 또는 근거 확인 필요';
+      const summary = item.summary ? `<div class="review-summary">${escapeHTML(item.summary)}</div>` : '';
+      return `
+        <li>
+          <div><span class="section-icon">⚠️</span><strong>【${escapeHTML(title)}】</strong></div>
+          ${summary}
+          <span class="review-reason">이유: ${escapeHTML(reason)}</span>
+          <span class="review-action">➜ 확인 필요: 원문 근거, 입력 조건, 상품/특약 적용 여부</span>
+        </li>
+      `;
+    }).join('')}</ul>`
+    : '<div class="section-empty">해당 없음</div>';
+
+  return `
+    <section class="four-section review-required-section">
+      <div class="section-header">■ 섹션 2️⃣  【검토 필요 사항】</div>
+      <div class="section-content">${body}</div>
+    </section>
+  `;
+}
+
+function renderFourSectionsEvidenceChecklist(checklist) {
+  const safeChecklist = Array.isArray(checklist) ? checklist : [];
+  const statusMap = {
+    provided: ['✅', '제출됨'],
+    required: ['❌', '필수'],
+    recommended: ['➜', '권장'],
+  };
+  const body = safeChecklist.length
+    ? `<ul class="checklist">${safeChecklist.map((item) => {
+      const [statusIcon, statusText] = statusMap[item.status] || ['➜', escapeHTML(item.status || '확인 필요')];
+      const checked = item.status === 'provided' ? 'checked' : '';
+      return `
+        <li>
+          <input type="checkbox" ${checked} disabled>
+          <span>
+            <strong>${escapeHTML(item.name || '확인 사항')}</strong>: ${escapeHTML(item.requirement || '')}
+            <span class="checklist-meta">${statusIcon} 현황: ${statusText} / 중요도: ${escapeHTML(item.priority || 'medium')}</span>
+          </span>
+        </li>
+      `;
+    }).join('')}</ul>`
+    : '<div class="section-empty">해당 없음</div>';
+
+  return `
+    <section class="four-section evidence-section">
+      <div class="section-header">■ 섹션 3️⃣  【추가 확인 사항】</div>
+      <div class="section-content">${body}</div>
+    </section>
+  `;
+}
+
+function renderFourSectionsReviewActions(actions) {
+  const safeActions = Array.isArray(actions) ? actions : [];
+  const priorityRank = { high: 0, medium: 1, low: 2 };
+  const priorityIcon = { high: '🔴', medium: '🟡', low: '🟢' };
+  const ordered = [...safeActions].sort((a, b) => {
+    const rankA = priorityRank[a.priority] ?? 1;
+    const rankB = priorityRank[b.priority] ?? 1;
+    if (rankA !== rankB) return rankA - rankB;
+    return Number(a.order || 999) - Number(b.order || 999);
+  });
+  const body = ordered.length
+    ? `<ol class="actions-list">${ordered.map((action, index) => {
+      const priority = action.priority || 'medium';
+      const order = action.order || index + 1;
+      return `
+        <li>
+          <strong>→ ${escapeHTML(order)}. ${escapeHTML(action.action || 'N/A')}</strong>
+          <span class="action-meta">${priorityIcon[priority] || '🟡'} 대상: ${escapeHTML(action.target || 'N/A')} / 우선순위: ${escapeHTML(priority)}</span>
+        </li>
+      `;
+    }).join('')}</ol>`
+    : '<div class="section-empty">해당 없음</div>';
+
+  return `
+    <section class="four-section actions-section">
+      <div class="section-header">■ 섹션 4️⃣  【권장 조치】</div>
+      <div class="section-content">${body}</div>
+    </section>
+  `;
 }
 
 function renderAssistantContent(text) {

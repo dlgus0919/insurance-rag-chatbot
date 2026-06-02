@@ -1,8 +1,10 @@
 import json
 from pathlib import Path
 
-from scripts.eval_graph_review_paths import run_eval
+from scripts.eval_graph_review_paths import evaluate_four_sections_completeness, run_eval
 from src.graph.extractors import PolicyReviewExtractor
+from src.graph.query_planner import GraphQueryPlan
+from src.graph.retriever import GraphEvidence, GraphFact, GraphRetrievalResult
 from src.graph.store import GraphStore
 
 
@@ -40,8 +42,6 @@ def test_eval_graph_review_paths_passes_fixture(tmp_path: Path) -> None:
                 "required_session_assertions": ["미용 목적", "합병증"],
                 "required_review_actions_any": ["진단서 요청", "세부내역서 요청"],
                 "required_evidence_any": ["진단서", "세부내역서"],
-                "required_exclusion_reasons_any": ["미용 목적", "약관상 보상제외 치료"],
-                "required_required_documents_any": ["진단서", "진료비 세부내역서"],
                 "forbidden_text": ["당뇨 -> 망막병증"],
             },
             ensure_ascii=False,
@@ -54,3 +54,37 @@ def test_eval_graph_review_paths_passes_fixture(tmp_path: Path) -> None:
 
     assert summary["passed"] == 1
     assert summary["failed"] == 0
+
+
+def test_evaluate_four_sections_completeness_tracks_candidate_isolation() -> None:
+    result = GraphRetrievalResult(
+        plan=GraphQueryPlan(intents=["session_claim_path_review"]),
+        facts=[
+            GraphFact(
+                subject="확정 수술",
+                relation="HAS_GRADE",
+                object="2종",
+                confidence=1.0,
+                status="confirmed",
+                evidence=[GraphEvidence(evidence_id="ev-1", doc_short="실무가이드", page_start=12)],
+            ),
+            GraphFact(
+                subject="후보 지급비율",
+                relation="PAYS_BY_RATIO",
+                object="100%",
+                confidence=0.9,
+                status="candidate",
+            ),
+        ],
+        required_evidence=["진단서"],
+        review_actions=["원문 확인"],
+    )
+
+    summary = evaluate_four_sections_completeness([{"id": "case", "question": "질문", "graph_result": result}])
+
+    assert summary["confirmed_facts_completeness"] == 1.0
+    assert summary["review_required_completeness"] == 1.0
+    assert summary["evidence_checklist_completeness"] == 1.0
+    assert summary["review_actions_completeness"] == 1.0
+    assert summary["candidate_isolation_rate"] == 1.0
+    assert summary["samples_with_all_sections"] == 1

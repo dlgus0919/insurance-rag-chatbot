@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
-from src.graph.context import build_graph_context
+from src.graph.context import build_graph_context, build_graph_summary
 from src.graph.query_planner import GraphQueryPlan
-from src.graph.retriever import GraphFact, GraphRetrievalResult
+from src.graph.retriever import GraphEvidence, GraphFact, GraphRetrievalResult
+
+
+def _evidence(evidence_id: str = "ev-1") -> GraphEvidence:
+    return GraphEvidence(
+        evidence_id=evidence_id,
+        chunk_id=f"{evidence_id}-chunk",
+        doc_short="실무가이드",
+        page_start=12,
+        page_end=12,
+    )
 
 
 def test_graph_context_preserves_conflicting_values() -> None:
@@ -19,6 +29,7 @@ def test_graph_context_preserves_conflicting_values() -> None:
                 object="신1-5종 4종",
                 confidence=1.0,
                 status="confirmed",
+                evidence=[_evidence("ev-grade-new")],
             ),
             GraphFact(
                 subject="테스트수술",
@@ -26,6 +37,7 @@ def test_graph_context_preserves_conflicting_values() -> None:
                 object="1-5종 3종",
                 confidence=1.0,
                 status="confirmed",
+                evidence=[_evidence("ev-grade-old")],
             ),
         ],
     )
@@ -56,6 +68,7 @@ def test_graph_context_category_table_keeps_multiple_fee_codes() -> None:
                 object="신1-5종 5종",
                 confidence=1.0,
                 status="confirmed",
+                evidence=[_evidence("ev-grade")],
             ),
             GraphFact(
                 subject="췌장 이식수술",
@@ -63,6 +76,7 @@ def test_graph_context_category_table_keeps_multiple_fee_codes() -> None:
                 object="Q8061 (췌이식술-부분)",
                 confidence=1.0,
                 status="confirmed",
+                evidence=[_evidence("ev-fee-1")],
             ),
             GraphFact(
                 subject="췌장 이식수술",
@@ -70,6 +84,7 @@ def test_graph_context_category_table_keeps_multiple_fee_codes() -> None:
                 object="Q8062 (췌이식술-췌장 및 십이지장)",
                 confidence=1.0,
                 status="confirmed",
+                evidence=[_evidence("ev-fee-2")],
             ),
             GraphFact(
                 subject="췌장 이식수술",
@@ -136,3 +151,46 @@ def test_graph_context_includes_unconfirmed_term_correction_candidates() -> None
     assert "입력 용어 보정 후보 (미확정)" in context
     assert "엠알아이 -> MRI" in context
     assert "확인 전에는 보상 판단의 전제로 삼지 마십시오" in context
+
+
+def test_graph_context_always_renders_four_review_sections_with_na() -> None:
+    result = GraphRetrievalResult(
+        plan=GraphQueryPlan(intents=["session_claim_path_review"]),
+        required_evidence=["진단서"],
+    )
+
+    context = build_graph_context(result)
+
+    assert "■ 섹션 1️⃣  【확정 근거】" in context
+    assert "■ 섹션 2️⃣  【검토 필요 사항】" in context
+    assert "■ 섹션 3️⃣  【추가 확인 사항】" in context
+    assert "■ 섹션 4️⃣  【권장 조치】" in context
+    assert "■ 섹션 1️⃣  【확정 근거】\n해당 없음" in context
+    assert "■ 섹션 2️⃣  【검토 필요 사항】\n해당 없음" in context
+    assert "☐ 진단서: 진단서" in context
+    assert "■ 섹션 4️⃣  【권장 조치】\n해당 없음" in context
+
+
+def test_graph_summary_keeps_candidate_confidence_out_of_confirmed_section() -> None:
+    result = GraphRetrievalResult(
+        plan=GraphQueryPlan(intents=["hira_code_lookup"]),
+        facts=[
+            GraphFact(
+                subject="췌장 이식수술",
+                relation="HAS_MEDICAL_FEE_CODE",
+                object="Q8061",
+                confidence=0.95,
+                status="confirmed",
+                evidence=[_evidence("ev-candidate-confidence")],
+            )
+        ],
+    )
+
+    summary = build_graph_summary(result)
+    context = build_graph_context(result)
+
+    assert summary["confirmed_facts"] == []
+    assert summary["review_required"][0]["object"] == "신뢰도 0.8~0.95 후보 구간(확정 근거 제외)"
+    section1 = context.split("■ 섹션 2️⃣  【검토 필요 사항】", 1)[0]
+    assert "Q8061" not in section1
+    assert "confidence가 0.8~0.95 후보 구간" in context

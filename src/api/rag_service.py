@@ -9,7 +9,7 @@ from typing import Any
 
 from src import config
 from src.api.models import ChatMessage
-from src.graph.context import build_graph_context
+from src.graph.context import build_graph_context, build_graph_summary
 from src.llm.factory import build_llm
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.rag.evidence import append_evidence_validation_warning
@@ -374,6 +374,7 @@ def graph_result_to_payload(result: Any) -> dict | None:
         "facts": facts,
         "session_assertions": session_assertions,
         "graph_review_paths": review_paths,
+        "graph_summary": build_graph_summary(result),
         "required_evidence": list(getattr(result, "required_evidence", []) or []),
         "review_actions": list(getattr(result, "review_actions", []) or []),
         **rule_payload,

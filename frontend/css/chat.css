@@ -342,7 +342,7 @@
     display:inline-block;background:var(--primary-light);color:var(--primary);
     padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;margin:2px 2px 0 0;
   }
-  .msg-warnings,.msg-clarifications,.graph-review-paths,.graph-facts{
+  .msg-warnings,.msg-clarifications,.graph-review-paths,.graph-facts,.graph-four-sections{
     margin-top:10px;padding:9px 10px;border:1px solid var(--border);
     border-radius:8px;background:var(--soft-bg);font-size:11px;color:var(--navy);
   }

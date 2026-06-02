@@ -4,6 +4,14 @@ from src.graph.retriever import GraphRetrievalResult
 from src.config import GRAPH_CONTEXT_MAX_CHARS
 
 
+GRAPH_SECTION_TITLES = (
+    "■ 섹션 1️⃣  【확정 근거】",
+    "■ 섹션 2️⃣  【검토 필요 사항】",
+    "■ 섹션 3️⃣  【추가 확인 사항】",
+    "■ 섹션 4️⃣  【권장 조치】",
+)
+
+
 def _conflicting_fact_groups(facts) -> list[tuple[tuple[str, str], list[str]]]:
     grouped: dict[tuple[str, str], list[str]] = {}
     for fact in facts:
@@ -30,22 +38,233 @@ def _merge_table_cell(existing: str, value: str) -> str:
     return f"{existing} / {value}"
 
 
+def _source_label(evidence) -> str:
+    page_start = getattr(evidence, "page_start", None)
+    page_end = getattr(evidence, "page_end", page_start)
+    if page_start is None:
+        page_label = "p.?"
+    elif page_end is not None and page_end != page_start:
+        page_label = f"p.{page_start}-{page_end}"
+    else:
+        page_label = f"p.{page_start}"
+    return f"{getattr(evidence, 'doc_short', '') or '문서'}, {page_label}"
+
+
+def _is_candidate_confidence(fact) -> bool:
+    """Return whether the confidence falls in the candidate-only range."""
+
+    confidence = getattr(fact, "confidence", None)
+    if confidence is None:
+        return False
+    return 0.8 <= float(confidence) <= 0.95
+
+
+def _fact_value_for_review(fact) -> str:
+    """Render candidate/missing facts without leaking sensitive candidate values."""
+
+    if fact.status == "missing":
+        return "[누락/확인불가]"
+    if fact.status == "candidate":
+        return "검토 후보(확정 대상 아님)"
+    if _is_candidate_confidence(fact):
+        return "신뢰도 0.8~0.95 후보 구간(확정 근거 제외)"
+    return str(fact.object or "N/A")
+
+
+def _candidate_reason(fact) -> str:
+    reason = fact.properties.get("reason") if getattr(fact, "properties", None) else None
+    if reason:
+        return str(reason)
+    matched_keyword = fact.properties.get("matched_keyword") if getattr(fact, "properties", None) else None
+    if matched_keyword:
+        return f"부분 키워드 매칭: {matched_keyword}"
+    if _is_candidate_confidence(fact):
+        return "confidence가 0.8~0.95 후보 구간이므로 확정 근거로 사용할 수 없습니다."
+    if fact.status == "missing":
+        return "GraphDB에서 연결 정보를 확인하지 못했습니다."
+    return "부분 매칭 또는 입력 조건 확인이 필요한 GraphDB 항목입니다."
+
+
+def build_graph_summary(result: GraphRetrievalResult) -> dict:
+    """Group graph retrieval output into the four review template sections."""
+
+    confirmed_facts = []
+    review_required = []
+    evidence_checklist = []
+    review_actions = []
+
+    for fact in result.facts:
+        first_evidence = fact.evidence[0] if fact.evidence else None
+        fact_payload = {
+            "subject": fact.subject,
+            "relation": fact.relation,
+            "object": fact.object,
+            "confidence": fact.confidence,
+            "status": fact.status,
+            "source": _source_label(first_evidence) if first_evidence else None,
+            "reason": _candidate_reason(fact),
+        }
+        if fact.status == "confirmed" and fact.evidence and not _is_candidate_confidence(fact):
+            confirmed_facts.append(fact_payload)
+        else:
+            fact_payload["object"] = _fact_value_for_review(fact)
+            review_required.append(fact_payload)
+
+    for path in getattr(result, "review_paths", []) or []:
+        if getattr(path, "status", "") in {"candidate", "review_required", "missing"}:
+            review_required.append(
+                {
+                    "topic": getattr(path, "path_type", "review_path"),
+                    "status": getattr(path, "status", "review_required"),
+                    "summary": getattr(path, "summary", ""),
+                    "reason": "Graph review path가 자동 확정이 아닌 검토 대상으로 반환되었습니다.",
+                }
+            )
+        for item in getattr(path, "required_evidence", []) or []:
+            evidence_checklist.append(
+                {
+                    "name": item,
+                    "requirement": item,
+                    "status": "required",
+                    "priority": "high",
+                }
+            )
+        for action in getattr(path, "review_actions", []) or []:
+            review_actions.append(
+                {
+                    "action": action,
+                    "target": getattr(path, "path_type", "review_path"),
+                    "priority": "high" if getattr(path, "status", "") in {"confirmed", "review_required"} else "medium",
+                }
+            )
+
+    for item in getattr(result, "required_evidence", []) or []:
+        evidence_checklist.append(
+            {
+                "name": item,
+                "requirement": item,
+                "status": "required",
+                "priority": "high",
+            }
+        )
+    for action in getattr(result, "review_actions", []) or []:
+        review_actions.append(
+            {
+                "action": action,
+                "target": "GraphDB review",
+                "priority": "high",
+            }
+        )
+
+    clarification_questions = list(getattr(result.plan, "clarification_questions", []) or [])
+    for question in clarification_questions:
+        evidence_checklist.append(
+            {
+                "name": "입력 조건 확인",
+                "requirement": question,
+                "status": "required",
+                "priority": "high",
+            }
+        )
+
+    def dedupe(items: list[dict], keys: tuple[str, ...]) -> list[dict]:
+        seen = set()
+        unique = []
+        for item in items:
+            key = tuple(str(item.get(k, "")) for k in keys)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(item)
+        return unique
+
+    review_actions = [
+        {"order": index, **item}
+        for index, item in enumerate(dedupe(review_actions, ("action", "target")), start=1)
+    ]
+    return {
+        "confirmed_facts": dedupe(confirmed_facts, ("subject", "relation", "object")),
+        "review_required": dedupe(review_required, ("subject", "relation", "object", "topic", "summary")),
+        "evidence_checklist": dedupe(evidence_checklist, ("name", "requirement")),
+        "review_actions": review_actions,
+    }
+
+
+def _render_graph_review_template(summary: dict) -> list[str]:
+    lines = [
+        "=== Graph Retrieval Summary: 담당자용 4개 섹션 템플릿 ===",
+        "[지침] 아래 네 섹션은 최종 답변에서도 같은 순서와 제목으로 유지하십시오.",
+        "[지침] 정보가 없는 섹션도 생략하지 말고 반드시 '해당 없음'이라고 쓰십시오.",
+        "[지침] candidate 또는 confidence 0.8~0.95 항목은 어떠한 경우에도 섹션 1️⃣ 【확정 근거】에 쓰지 마십시오.",
+        "",
+        GRAPH_SECTION_TITLES[0],
+    ]
+
+    confirmed = summary["confirmed_facts"]
+    if not confirmed:
+        lines.append("해당 없음")
+    else:
+        for item in confirmed:
+            source = f" (출처: {item['source']})" if item.get("source") else ""
+            lines.append(f"- {item['subject']} --({item['relation']})--> {item['object']}{source}")
+
+    lines.extend(["", GRAPH_SECTION_TITLES[1]])
+    review_required = summary["review_required"]
+    if not review_required:
+        lines.append("해당 없음")
+    else:
+        for item in review_required:
+            if item.get("topic"):
+                lines.append(f"- 【{item.get('topic')}】 {item.get('summary') or '검토 필요'}")
+            else:
+                lines.append(f"- 【{item.get('subject')}】 {item.get('relation')} -> {item.get('object')}")
+            lines.append(f"  ⚠️ 이유: {item.get('reason') or '입력 조건 또는 근거 확인 필요'}")
+            lines.append("  ➜ 확인 필요: 원문 근거, 입력 조건, 상품/특약 적용 여부를 확인하십시오.")
+
+    lines.extend(["", GRAPH_SECTION_TITLES[2]])
+    checklist = summary["evidence_checklist"]
+    if not checklist:
+        lines.append("해당 없음")
+    else:
+        for item in checklist:
+            lines.append(f"☐ {item['name']}: {item['requirement']}")
+            lines.append(f"   현황: {item['status']} / 중요도: {item['priority']}")
+
+    lines.extend(["", GRAPH_SECTION_TITLES[3]])
+    actions = summary["review_actions"]
+    if not actions:
+        lines.append("해당 없음")
+    else:
+        for item in actions:
+            lines.append(f"→ {item['order']}. {item['action']}")
+            lines.append(f"   대상: {item['target']} / 우선순위: {item['priority']}")
+    lines.append("")
+    return lines
+
+
 def build_graph_context(result: GraphRetrievalResult) -> str:
     clarification_questions = list(getattr(result.plan, "clarification_questions", []) or [])
     normalized_terms = dict(getattr(result.plan, "normalized_terms", {}) or {})
     term_candidates = list(getattr(result.plan, "term_correction_candidates", []) or [])
     review_paths = list(getattr(result, "review_paths", []) or [])
-    if not result.facts and not review_paths and not clarification_questions and not normalized_terms and not term_candidates:
+    required_evidence = list(getattr(result, "required_evidence", []) or [])
+    review_actions = list(getattr(result, "review_actions", []) or [])
+    if (
+        not result.facts
+        and not clarification_questions
+        and not normalized_terms
+        and not term_candidates
+        and not review_paths
+        and not required_evidence
+        and not review_actions
+    ):
         return ""
 
     intents = result.plan.intents
-    # 만약 intents가 비어있다면 ordinary_rag로 기본 동작
     if not intents:
         intents = ["ordinary_rag"]
 
     keep_indices = set()
-
-    # 각 intent에 대해 살려야 할 fact들의 index를 수집
     for intent in intents:
         if intent == "surgery_grade_lookup":
             for i, f in enumerate(result.facts):
@@ -73,13 +292,14 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
             for i, f in enumerate(result.facts):
                 if f.relation == "HAS_MEDICAL_FEE_CODE" or f.status == "missing":
                     keep_indices.add(i)
-        else: # ordinary_rag 등
+        else:
             for i, f in enumerate(result.facts):
                 keep_indices.add(i)
 
     filtered_facts = [result.facts[i] for i in sorted(list(keep_indices))]
 
-    lines = []
+    summary = build_graph_summary(result)
+    lines = _render_graph_review_template(summary)
     if clarification_questions:
         lines.append("=== 사용자 입력 명확화 필요 사항 ===")
         lines.append("[지침] 아래 항목은 현재 질문에서 빠졌거나 혼용될 수 있는 조건입니다. 최종 보상 가능 여부를 단정하지 말고 필요한 확인 질문으로 먼저 제시하십시오.")
@@ -100,28 +320,6 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
             normalized = item.get("normalized", "")
             reason = item.get("reason", "")
             lines.append(f"- {raw} -> {normalized} ({reason})")
-        lines.append("")
-
-    if review_paths:
-        lines.append("=== 구조화 검토 경로 (Review Paths) ===")
-        lines.append("[지침] 아래 경로는 문서 기반 심사 검토 흐름입니다. candidate/review_required/missing 상태를 확정 보상 판단처럼 쓰지 말고, 필요한 서류와 검토 조치를 함께 안내하십시오.")
-        for path in review_paths[:6]:
-            lines.append(f"- {path.path_type} / {path.status}: {path.summary}")
-            if path.exclusion_reasons:
-                lines.append(f"  - 적용 가능 면책 사유: {', '.join(path.exclusion_reasons)}")
-            if path.benefit_limits:
-                lines.append(f"  - 적용 한도: {', '.join(path.benefit_limits)}")
-            if path.deductible_rules:
-                lines.append(f"  - 적용 공제: {', '.join(path.deductible_rules)}")
-            docs = list(dict.fromkeys(list(path.required_documents or []) + list(path.required_evidence or [])))
-            if docs:
-                lines.append(f"  - 필요 서류/증빙: {', '.join(docs)}")
-            if path.coordination_rules:
-                lines.append(f"  - 중복 보상 조정: {', '.join(path.coordination_rules)}")
-            if path.generation_rules:
-                lines.append(f"  - 세대/갱신 기준: {', '.join(path.generation_rules)}")
-            if path.review_actions:
-                lines.append(f"  - 권장 검토 조치: {', '.join(path.review_actions)}")
         lines.append("")
 
     if not filtered_facts:
@@ -145,9 +343,7 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
             lines.append(f"- {subject} --({relation})--> {value_text}")
         lines.append("")
 
-    # category_grade_listing일 경우 표 형태로 압축
     if "category_grade_listing" in intents:
-        # 수술별 정보 수집
         surgery_info = {}
         excluded_candidate_facts = []
         for f in filtered_facts:
@@ -164,13 +360,13 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
                 if f.status == "missing":
                     reason = f.properties.get('reason', '데이터 연결 없음')
                     value = f"[MISSING] ({reason})"
-                elif f.status == "confirmed":
+                elif f.status == "confirmed" and f.evidence and not _is_candidate_confidence(f):
                     value = f.object or "N/A"
                 else:
-                    value = f"[{f.status.upper()}] {f.object}"
+                    value = _fact_value_for_review(f)
                 surgery_info[subj]["fee_code"] = _merge_table_cell(surgery_info[subj]["fee_code"], value)
             elif f.relation == "PAYS_BY_RATIO":
-                if f.status == "candidate":
+                if f.status == "candidate" or _is_candidate_confidence(f):
                     excluded_candidate_facts.append(f)
                     continue
                 if f.status == "missing":
@@ -192,9 +388,16 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
                 lines.append(f"- {fact.subject} --({fact.relation})--> candidate")
             lines.append("")
     else:
-        # Group by status
-        confirmed_facts = [f for f in filtered_facts if f.status == "confirmed"]
-        candidate_facts = [f for f in filtered_facts if f.status == "candidate"]
+        confirmed_facts = [
+            f
+            for f in filtered_facts
+            if f.status == "confirmed" and f.evidence and not _is_candidate_confidence(f)
+        ]
+        candidate_facts = [
+            f
+            for f in filtered_facts
+            if f.status == "candidate" or (f.status == "confirmed" and _is_candidate_confidence(f)) or (f.status == "confirmed" and not f.evidence)
+        ]
         missing_facts = [f for f in filtered_facts if f.status == "missing"]
 
         if confirmed_facts:
@@ -216,9 +419,8 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
                     ev = fact.evidence[0]
                     page_info = f" p.{ev.page_start}" if ev.page_start is not None else ""
                     evidence_str = f" [근거: {ev.doc_short}{page_info}]"
-
                 lines.append(
-                    f"  - [{fact.status.upper()}] {fact.subject} --({fact.relation})--> "
+                    f"  - [CANDIDATE] {fact.subject} --({fact.relation})--> "
                     f"검토 후보(확정 대상 아님){evidence_str}"
                 )
             lines.append("")
