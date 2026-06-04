@@ -258,6 +258,8 @@ def _build_rag_diagnostics(
     bm25_hits = list(getattr(debug, "bm25_hits", []) or [])
     rrf_hits = list(getattr(debug, "rrf_hits", []) or [])
     final_hits = list(getattr(debug, "final_hits", []) or [])
+    search_intent = getattr(debug, "search_intent", None) if debug is not None else None
+    search_intent_payload = search_intent.to_payload() if hasattr(search_intent, "to_payload") else None
     graph_result = getattr(debug, "graph_result", None) if debug is not None else None
     graph_plan = getattr(graph_result, "plan", None) if graph_result is not None else None
     return {
@@ -270,6 +272,7 @@ def _build_rag_diagnostics(
         "term_correction_candidates": list(getattr(graph_plan, "term_correction_candidates", []) or []),
         "ambiguous_terms": list(getattr(graph_plan, "ambiguous_terms", []) or []),
         "clarification_questions": list(getattr(graph_plan, "clarification_questions", []) or []),
+        "search_intent": search_intent_payload,
         "graph_review_path_count": len(getattr(graph_result, "review_paths", []) or []) if graph_result is not None else 0,
         "steps": [
             {
@@ -278,6 +281,13 @@ def _build_rag_diagnostics(
                 "result": question.strip()[:200],
                 "elapsed_ms": None,
                 "status": "done",
+            },
+            {
+                "key": "intent_classification",
+                "label": "검색 의도 분류",
+                "result": _format_search_intent_result(search_intent_payload),
+                "elapsed_ms": None,
+                "status": "done" if search_intent_payload else "empty",
             },
             _build_hit_step("bm25", "BM25 키워드 검색", bm25_hits),
             _build_hit_step("dense", "임베딩 벡터 검색", dense_hits),
@@ -292,6 +302,16 @@ def _build_rag_diagnostics(
             },
         ],
     }
+
+
+def _format_search_intent_result(intent: dict | None) -> str:
+    if not intent:
+        return "결과 없음"
+    return (
+        f"{intent.get('intent')} / "
+        f"BM25 {intent.get('bm25_weight')} · Chroma {intent.get('dense_weight')} / "
+        f"skip_dense={intent.get('skip_dense')}"
+    )
 
 
 def _build_hit_step(key: str, label: str, hits: list, *, source_count: int | None = None) -> dict:

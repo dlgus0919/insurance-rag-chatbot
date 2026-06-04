@@ -12,6 +12,7 @@ from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.parser.chunker import Chunk
 from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context, detect_retrieval_conflicts
+from src.rag.search_intent import SearchIntentPlan, classify_search_intent
 from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
@@ -212,6 +213,7 @@ class DebugInfo:
     bm25_hits: list[StageHit]
     rrf_hits: list[StageHit]
     final_hits: list[StageHit]
+    search_intent: SearchIntentPlan | None = None
     graph_result: Any = None
 
 
@@ -890,8 +892,13 @@ class RagPipeline:
         """질문에 대한 최종 검색 후보를 반환한다."""
 
         final_top_k = top_k or self.top_k_final
+        search_intent = classify_search_intent(
+            question,
+            doc_filter=doc_filter,
+            default_top_k_dense=self.top_k_dense,
+            default_top_k_bm25=self.top_k_bm25,
+        )
         retrieval_query = _expand_retrieval_query(question)
-        query_embedding = self.embedder.embed_query(retrieval_query)
         query_codes = _extract_query_codes(question)
         named_code_terms = _extract_named_code_terms(question)
         surgery_name = _extract_surgery_name_from_query(question)
@@ -899,25 +906,34 @@ class RagPipeline:
         enforce_doc_coverage = _needs_doc_coverage(question, requested_docs)
         code_hits: list[Hit] = []
         coverage_hits: list[Hit] = []
+        dense_hits: list[Hit] = []
+        bm25_hits: list[Hit] = []
+        query_embedding = None
 
-        if query_codes and hasattr(self.vector_store, "query_with_filter"):
-            half_k = max(1, self.top_k_dense // 2)
-            code_hits = self.vector_store.query_with_filter(
-                query_embedding,
-                filter_codes=query_codes,
-                top_k=half_k,
-                prefer_non_table=True,
-                doc_filter=doc_filter,
-            )
-            general_top_k = half_k if code_hits else self.top_k_dense
-            general_hits = self.vector_store.query(query_embedding, general_top_k, doc_filter=doc_filter)
-            seen = {hit.id for hit in code_hits}
-            dense_hits = code_hits + [hit for hit in general_hits if hit.id not in seen]
-        else:
-            dense_hits = self.vector_store.query(query_embedding, self.top_k_dense, doc_filter=doc_filter)
+        if not search_intent.skip_dense or enforce_doc_coverage:
+            query_embedding = self.embedder.embed_query(retrieval_query)
 
-        bm25_hits = self.bm25.query(retrieval_query, self.top_k_bm25)
-        bm25_hits = _filter_hits_by_doc(bm25_hits, doc_filter)
+        if not search_intent.skip_dense and query_embedding is not None:
+            dense_top_k = max(1, search_intent.top_k_dense)
+            if query_codes and hasattr(self.vector_store, "query_with_filter"):
+                half_k = max(1, dense_top_k // 2)
+                code_hits = self.vector_store.query_with_filter(
+                    query_embedding,
+                    filter_codes=query_codes,
+                    top_k=half_k,
+                    prefer_non_table=True,
+                    doc_filter=doc_filter,
+                )
+                general_top_k = half_k if code_hits else dense_top_k
+                general_hits = self.vector_store.query(query_embedding, general_top_k, doc_filter=doc_filter)
+                seen = {hit.id for hit in code_hits}
+                dense_hits = code_hits + [hit for hit in general_hits if hit.id not in seen]
+            else:
+                dense_hits = self.vector_store.query(query_embedding, dense_top_k, doc_filter=doc_filter)
+
+        if not search_intent.skip_bm25:
+            bm25_hits = self.bm25.query(retrieval_query, max(1, search_intent.top_k_bm25))
+            bm25_hits = _filter_hits_by_doc(bm25_hits, doc_filter)
         debug_dense = list(dense_hits)
         debug_bm25 = list(bm25_hits)
         dense_hits = [hit for hit in dense_hits if not _is_low_value_wide_range(hit)]
@@ -931,9 +947,16 @@ class RagPipeline:
         if surgery_name:
             # 수술명 질의는 인접 페이지 표가 섞이기 쉬워 부스팅 전에 후보 풀을 확장한다.
             rrf_top_k = max(rrf_top_k, final_top_k * 3)
-        fused_hits = rrf_fuse(dense_hits, bm25_hits, top_k=rrf_top_k, rrf_k=self.rrf_k)
+        fused_hits = rrf_fuse(
+            dense_hits,
+            bm25_hits,
+            top_k=rrf_top_k,
+            rrf_k=self.rrf_k,
+            dense_weight=search_intent.dense_weight,
+            bm25_weight=search_intent.bm25_weight,
+        )
         debug_rrf = list(fused_hits)
-        if enforce_doc_coverage:
+        if enforce_doc_coverage and query_embedding is not None:
             coverage_hits = self._best_doc_coverage_hits(retrieval_query, query_embedding, requested_docs)
             fused_hits = _merge_hits_preserving_order(fused_hits, coverage_hits, limit=max(rrf_top_k, final_top_k))
         if code_hits:
@@ -969,6 +992,7 @@ class RagPipeline:
                 bm25_hits=_hits_to_stage(debug_bm25),
                 rrf_hits=_hits_to_stage(debug_rrf),
                 final_hits=_hits_to_stage(final_hits),
+                search_intent=search_intent,
             )
             if return_debug
             else None

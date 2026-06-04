@@ -326,7 +326,18 @@ def _tab_search_diagnostics(_log) -> None:
         bm25_hits=debug.bm25_hits,
         rrf_hits=debug.rrf_hits,
         final_hits=debug.final_hits,
+        search_intent=getattr(debug, "search_intent", None),
+        graph_result=getattr(debug, "graph_result", None),
     )
+    if debug.search_intent is not None:
+        intent = debug.search_intent
+        st.info(
+            "검색 의도: "
+            f"{intent.intent} · BM25 {intent.bm25_weight:.2f} / Chroma {intent.dense_weight:.2f} · "
+            f"dense 생략: {'예' if intent.skip_dense else '아니오'}"
+        )
+        if intent.reason:
+            st.caption(intent.reason)
     for stage_name, stage_hits in [
         ("① Dense (BGE-M3)", debug.dense_hits),
         ("② BM25 (키워드)", debug.bm25_hits),

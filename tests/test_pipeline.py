@@ -27,7 +27,11 @@ from src.retrieval import Hit
 
 
 class DummyEmbedder:
+    def __init__(self):
+        self.calls = []
+
     def embed_query(self, text: str):
+        self.calls.append(text)
         return np.asarray([1.0, 0.0], dtype=np.float32)
 
 
@@ -195,7 +199,7 @@ def test_pipeline_builds_prompt_and_returns_sources() -> None:
     assert "AA157은 무엇인가요?" in llm.prompt
     assert "[컨텍스트 1:" in llm.prompt
     assert result.answer.startswith("재진 진찰료")
-    assert result.chunks[0].id == "code"
+    assert result.chunks[0].id == "dense"
     assert result.timing["total_ms"] >= 0
 
 
@@ -203,7 +207,7 @@ def test_pipeline_injects_paired_ocr_context_when_mapping_exists() -> None:
     llm = DummyLLM()
     pair_store = DummyPairStore(
         {
-            "code": {
+            "dense": {
                 "v1_chunk_id": "v1_code_001",
                 "use_v1": True,
                 "score": 0.98,
@@ -510,10 +514,11 @@ def test_merge_hits_preserving_order_deduplicates_and_limits() -> None:
     assert merged[0].document == "A"
 
 
-def test_code_query_uses_filtered_dense_hits() -> None:
+def test_exact_code_query_skips_dense_and_prioritizes_bm25() -> None:
+    embedder = DummyEmbedder()
     vector_store = DummyVectorStore()
     pipeline = RagPipeline(
-        DummyEmbedder(),
+        embedder,
         vector_store,
         DummyBM25(),
         DummyLLM(),
@@ -524,8 +529,10 @@ def test_code_query_uses_filtered_dense_hits() -> None:
 
     hits, _ = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=8)
 
-    assert vector_store.filter_calls == [(["AA157"], 6, True, None)]
-    assert hits[0].id == "code"
+    assert embedder.calls == []
+    assert vector_store.filter_calls == []
+    assert vector_store.query_calls == []
+    assert hits[0].id == "dense"
 
 
 def test_doc_filter_flows_to_vector_store_and_filters_bm25() -> None:
@@ -540,10 +547,9 @@ def test_doc_filter_flows_to_vector_store_and_filters_bm25() -> None:
         reranker_enabled=False,
     )
 
-    hits, _ = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=8, doc_filter=["심평원"])
+    hits, _ = pipeline.retrieve_hits("식도조루술의 수가코드는 무엇인가요?", top_k=8, doc_filter=["심평원"])
 
-    assert vector_store.filter_calls == [(["AA157"], 6, True, ["심평원"])]
-    assert vector_store.query_calls == [(6, ["심평원"])]
+    assert vector_store.query_calls == [(12, ["심평원"])]
     assert all(hit.metadata.get("doc_short") == "심평원" for hit in hits)
 
 
@@ -587,11 +593,13 @@ def test_retrieve_hits_can_return_debug_info() -> None:
         reranker_enabled=False,
     )
 
-    hits, debug = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=2, return_debug=True)
+    hits, debug = pipeline.retrieve_hits("도수치료 받았는데 실손 보장돼?", top_k=2, return_debug=True)
 
     assert len(hits) == 2
     assert isinstance(debug, DebugInfo)
-    assert debug.dense_hits[0].chunk_id == "code"
+    assert debug.search_intent is not None
+    assert debug.search_intent.intent == "coverage_judgment"
+    assert debug.dense_hits[0].chunk_id == "dense"
     assert debug.bm25_hits[0].chunk_id == "dense"
     assert debug.rrf_hits
     assert debug.final_hits
