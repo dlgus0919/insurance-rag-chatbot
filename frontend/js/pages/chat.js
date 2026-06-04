@@ -1,11 +1,25 @@
-import { STORAGE_KEYS } from '../config.js';
+import { SESSION_KEYS, STORAGE_KEYS } from '../config.js';
 import { createConfirmModal } from '../modules/modal.js';
+import { compactClaimBasisItems } from '../modules/claim-result.js';
 import { getCurrentSessionId, setCurrentSession } from '../modules/session.js';
 import { setupMenuHandlers } from '../modules/sidebar.js';
 import { toast } from '../modules/ui.js';
 import { apiFetch, escapeHTML, formatSource, readSse } from '../utils.js';
 
 const FALLBACK_LOGO_SRC = '';
+const SCOPE_DOC_FILTERS = {
+  '전체': null,
+  '실손 약관': ['약관', '표준약관'],
+  '3대비급여': ['약관', '표준약관'],
+  '급여/비급여': ['심평원', '비급여 표준모델'],
+  '분류점수산정': ['심평원'],
+  '판례/심사례': ['상담사례집'],
+};
+const EMBEDDED_REVIEW_TEMPLATE_MARKERS = ['■ 섹션 1', '섹션 1️⃣', '【확정 근거】'];
+const EMBEDDED_REVIEW_SECTION_PATTERN = /^\s*■\s*섹션\s*\d/;
+const EMBEDDED_REVIEW_HEADING_PATTERN = /^\s*【[^】]+】\s*$/;
+const EMBEDDED_REVIEW_BULLET_PATTERN = /^\s*(?:[-*•]\s+|☐\s*|→\s*\d+\.\s*|→\s*)/;
+const SOURCE_CITATION_LINE_PATTERN = /^\s*\[출처:\s*.+\]\s*$/;
 
 let me = null;
 let msgs = [];
@@ -13,107 +27,14 @@ let currentMode = 'general';
 let currentSession = null;
 let activeAbort = null;
 
-// ===== CLARIFICATION UX GLOBAL CONTEXT =====
-const clarificationPayloads = new Map();
-let nextClarificationId = 1;
-
-const CLARIFICATION_GROUPS = {
-  '실손 세대': {
-    group: 'policy_generation',
-    buttons: [
-      { value: '4세대', display: '4세대 실손' },
-      { value: '5세대', display: '5세대 실손' }
-    ]
-  },
-  '방문 구분': {
-    group: 'visit_type',
-    buttons: [
-      { value: '입원', display: '입원' },
-      { value: '통원', display: '통원' },
-      { value: '처방조제', display: '처방조제' }
-    ]
-  },
-  '상품/특약': {
-    group: 'policy_product',
-    buttons: [
-      { value: 'SOL건강', display: 'SOL건강' },
-      { value: '실손의료보험', display: '실손의료보험' },
-      { value: '운전자보험', display: '운전자보험' }
-    ]
-  },
-  '치료 목적': {
-    group: 'treatment_purpose',
-    buttons: [
-      { value: '치료 목적', display: '치료 목적' },
-      { value: '미용 목적', display: '미용 목적' },
-      { value: '예방/검진 목적', display: '예방/검진 목적' },
-      { value: '합병증 치료', display: '합병증 치료' }
-    ]
-  },
-  '증빙 서류': {
-    group: 'evidence_tags',
-    buttons: [
-      { value: '영수증', display: '영수증' },
-      { value: '세부내역서', display: '세부내역서' },
-      { value: '진단서', display: '진단서' },
-      { value: '수술확인서', display: '수술확인서' },
-      { value: '검사결과지', display: '검사결과지' }
-    ]
-  }
-};
-
-const CLARIFICATION_PRESETS = {
-  'fifth-outpatient': {
-    label: '5세대 + 통원',
-    selections: [
-      { group: 'policy_generation', label: '실손 세대', value: '5세대', display: '5세대 실손' },
-      { group: 'visit_type', label: '방문 구분', value: '통원', display: '통원' },
-    ],
-  },
-  'fourth-outpatient': {
-    label: '4세대 + 통원',
-    selections: [
-      { group: 'policy_generation', label: '실손 세대', value: '4세대', display: '4세대 실손' },
-      { group: 'visit_type', label: '방문 구분', value: '통원', display: '통원' },
-    ],
-  },
-  'fifth-inpatient': {
-    label: '5세대 + 입원',
-    selections: [
-      { group: 'policy_generation', label: '실손 세대', value: '5세대', display: '5세대 실손' },
-      { group: 'visit_type', label: '방문 구분', value: '입원', display: '입원' },
-    ],
-  },
-  'fourth-inpatient': {
-    label: '4세대 + 입원',
-    selections: [
-      { group: 'policy_generation', label: '실손 세대', value: '4세대', display: '4세대 실손' },
-      { group: 'visit_type', label: '방문 구분', value: '입원', display: '입원' },
-    ],
-  },
-  'mri-fifth-outpatient': {
-    label: 'MRI + 5세대 + 통원',
-    selections: [
-      { group: 'term_correction', label: '용어 확인', value: 'MRI', display: 'MRI' },
-      { group: 'policy_generation', label: '실손 세대', value: '5세대', display: '5세대 실손' },
-      { group: 'visit_type', label: '방문 구분', value: '통원', display: '통원' },
-    ],
-  },
-  'manual-shockwave-fifth-outpatient': {
-    label: '도수/충격파 + 5세대 + 통원',
-    selections: [
-      { group: 'coverage_topic', label: '보장 항목', value: '도수치료 또는 체외충격파치료', display: '도수/충격파' },
-      { group: 'policy_generation', label: '실손 세대', value: '5세대', display: '5세대 실손' },
-      { group: 'visit_type', label: '방문 구분', value: '통원', display: '통원' },
-    ],
-  },
-};
-
 export async function initChatPage({ currentUser, onGoAdmin, onLogout } = {}) {
   me = currentUser || null;
 
   applyUserToChatPage();
+  applySelectedModelLabel();
+  await setupModelSwitcher();
   renderWelcome();
+  showFreshChatNoticeIfNeeded();
   setupChatMenuHandlers({ onGoAdmin, onLogout });
   setupChatInput();
   setupChatDelegatedHandlers();
@@ -242,83 +163,7 @@ function setupChatDelegatedHandlers() {
       }
 
       // 자동 재계산 트리거
-      await sendClaim();
-      return;
-    }
-
-    // Clarification option selection
-    const clarifyOption = target.closest('[data-action="select-clarification"]');
-    if (clarifyOption) {
-      const container = clarifyOption.closest('[data-clarification-id]');
-      const group = clarifyOption.dataset.clarifyGroup;
-      if (container && group) {
-        if (!isMultiSelectClarificationGroup(group)) {
-          container.querySelectorAll(`.clarify-option[data-clarify-group="${group}"]`).forEach((btn) => {
-            btn.classList.remove('selected');
-            btn.removeAttribute('aria-pressed');
-          });
-        }
-
-        const isSelected = clarifyOption.classList.contains('selected');
-        if (isMultiSelectClarificationGroup(group)) {
-          if (isSelected) {
-            clarifyOption.classList.remove('selected');
-            clarifyOption.removeAttribute('aria-pressed');
-          } else {
-            clarifyOption.classList.add('selected');
-            clarifyOption.setAttribute('aria-pressed', 'true');
-          }
-        } else {
-          // Single select: force select
-          clarifyOption.classList.add('selected');
-          clarifyOption.setAttribute('aria-pressed', 'true');
-        }
-
-        updateClarificationSummary(container);
-        updateClarificationApplyState(container);
-      }
-      return;
-    }
-
-    // Clarification Preset Apply
-    const presetBtn = target.closest('[data-action="apply-clarification-preset"]');
-    if (presetBtn) {
-      const container = presetBtn.closest('[data-clarification-id]');
-      const presetId = presetBtn.dataset.presetId;
-      const preset = CLARIFICATION_PRESETS[presetId];
-      if (container && preset) {
-        applyClarificationPreset(container, preset);
-      }
-      return;
-    }
-
-    // Clarification Reset
-    const resetBtn = target.closest('[data-action="reset-clarification"]');
-    if (resetBtn) {
-      const container = resetBtn.closest('[data-clarification-id]');
-      if (container) {
-        resetClarificationSelections(container);
-      }
-      return;
-    }
-
-    // Clarification Apply Search (Re-search)
-    const applyBtn = target.closest('[data-action="apply-clarification"]');
-    if (applyBtn) {
-      const container = applyBtn.closest('[data-clarification-id]');
-      const id = container?.dataset.clarificationId;
-      const payload = clarificationPayloads.get(id);
-      if (container && payload) {
-        const selections = collectClarificationSelections(container);
-        const rewrittenQuery = buildClarifiedQuery(payload.query, selections);
-        const clarificationPayload = buildClarificationPayload(selections);
-
-        // Show selection in user bubble
-        appendMsg('user', `[명확화 선택] ${selections.map(s => s.display).join(', ')}`);
-
-        // Trigger re-search with same session, mode, filters, memo, and clarification
-        await streamChat(rewrittenQuery, payload.mode, payload.filters, payload.memo, clarificationPayload);
-      }
+      await sendClaim({ suppressUserMessage: true });
       return;
     }
 
@@ -398,6 +243,67 @@ function applyUserToChatPage() {
   if (adminLink) adminLink.classList.toggle('hidden', me.role !== 'admin');
 }
 
+function applySelectedModelLabel() {
+  const label = document.getElementById('active-model-label');
+  if (!label) return;
+  label.textContent = formatSelectedModelLabel(getSelectedModel());
+}
+
+async function setupModelSwitcher() {
+  const select = document.getElementById('active-model-select');
+  const wrap = document.getElementById('model-switcher-wrap');
+  if (!select || !wrap) return;
+
+  select.disabled = true;
+  select.innerHTML = '<option value="">모델 확인 중...</option>';
+
+  try {
+    const response = await apiFetch('/system/models');
+    const payload = await response.json();
+    const localModels = Array.isArray(payload.providers?.local) ? payload.providers.local : [];
+
+    if (!localModels.length) {
+      wrap.classList.add('hidden');
+      return;
+    }
+
+    const currentModel = getSelectedModel();
+    const defaultModel = payload.defaults?.local || localModels[0]?.id || '';
+    const resolvedModel = localModels.some((model) => model.id === currentModel)
+      ? currentModel
+      : defaultModel;
+
+    select.innerHTML = localModels.map((model) => `
+      <option value="${escapeHTML(model.id)}">${escapeHTML(model.label || formatSelectedModelLabel(model.id))}</option>
+    `).join('');
+
+    if (resolvedModel && resolvedModel !== currentModel) {
+      localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, resolvedModel);
+      localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE, 'default');
+    }
+
+    select.value = resolvedModel;
+    select.disabled = localModels.length <= 1;
+    applySelectedModelLabel();
+
+    if (!select.dataset.phase3Bound) {
+      select.dataset.phase3Bound = 'true';
+      select.addEventListener('change', () => {
+        const nextModel = select.value;
+        if (!nextModel) return;
+        localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, nextModel);
+        localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE, 'explicit');
+        applySelectedModelLabel();
+        toast(`활성 모델을 ${formatSelectedModelLabel(nextModel)}로 변경했습니다.`, 'success');
+      });
+    }
+  } catch (error) {
+    console.warn('Failed to load model switcher options:', error);
+    select.innerHTML = '<option value="">모델 목록 로드 실패</option>';
+    select.disabled = true;
+  }
+}
+
 function getLogoSrc() {
   return document.querySelector('.sidebar-logo')?.getAttribute('src') || FALLBACK_LOGO_SRC;
 }
@@ -457,14 +363,16 @@ async function loadSessions() {
 }
 
 async function newChat() {
+  abortActiveChat();
   msgs = [];
   currentSession = null;
   setCurrentSession(null);
-  document.querySelectorAll('.history-item').forEach((item) => item.classList.remove('active'));
-  renderWelcome();
-  const input = document.getElementById('chat-input');
-  if (input) input.value = '';
-  toast('새 채팅이 시작되었습니다.');
+  try {
+    window.sessionStorage.setItem(SESSION_KEYS.FRESH_CHAT_NOTICE, '1');
+  } catch (error) {
+    console.warn('Failed to persist fresh-chat notice flag:', error);
+  }
+  window.location.assign(`/chat?new=${Date.now()}`);
 }
 
 async function loadHist(element, sessionId) {
@@ -480,7 +388,19 @@ async function loadHist(element, sessionId) {
     const history = await response.json();
     const container = document.getElementById('chat-msgs');
     container.innerHTML = '';
-    history.forEach((message) => appendMsg(message.role === 'assistant' ? 'bot' : message.role, message.content, message.sources || [], false));
+    history.forEach((message) => {
+      const uiPayload = message.role === 'assistant'
+        ? (extractAssistantUiPayload(message.sources || []) || { legacyStructuredNotice: true })
+        : null;
+      const visibleSources = filterVisibleSources(message.sources || []);
+      appendMsg(
+        message.role === 'assistant' ? 'bot' : message.role,
+        message.content,
+        visibleSources,
+        false,
+        uiPayload,
+      );
+    });
     if (!history.length) renderWelcome();
   } catch (error) {
     toast(error.message, 'error');
@@ -509,25 +429,37 @@ async function deleteHist(event, button) {
   item.remove();
 }
 
-function appendMsg(role, text, sources, track = true) {
+function appendMsg(role, text, sources, track = true, uiPayload = null) {
   document.querySelector('.chat-welcome')?.remove();
   const container = document.getElementById('chat-msgs');
   if (!container) return;
 
   const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   const isUser = role === 'user';
+  const messageText = role === 'bot' ? sanitizeAssistantAnswer(text) : String(text || '');
   const sourceHtml = sources?.length
     ? `<div class="msg-sources">📄 참고: ${sources.map((source) => `<span class="src-badge">${escapeHTML(formatSource(source))}</span>`).join('')}</div>`
+    : '';
+  const graphResult = role === 'bot' ? (uiPayload?.graphResult || null) : null;
+  const warnings = role === 'bot' ? (uiPayload?.warnings || []) : [];
+  const legacyStructuredNotice = role === 'bot' ? Boolean(uiPayload?.legacyStructuredNotice) : false;
+  const suppressStructuredPanels = shouldSuppressStructuredPanels(messageText, graphResult);
+  const botExtras = role === 'bot'
+    ? renderClarificationHtml(graphResult)
+      + renderWarningHtml(warnings)
+      + renderLegacyStructuredNoticeHtml(legacyStructuredNotice)
+      + (suppressStructuredPanels ? '' : renderGraphReviewPathsHtml(graphResult))
+      + (suppressStructuredPanels ? '' : renderGraphFactsHtml(graphResult))
     : '';
   const row = document.createElement('div');
   row.className = `msg-row ${role}`;
   const avatar = isUser
     ? `<div class="msg-av usr">${me ? me.name[0] : 'U'}</div>`
     : `<div class="msg-av bot"><img src="${getBotLogoSrc()}" alt="AI"></div>`;
-  row.innerHTML = `${avatar}<div><div class="msg-bubble">${renderAssistantContent(text)}${sourceHtml}</div><div class="msg-meta">${time}</div></div>`;
+  row.innerHTML = `${avatar}<div><div class="msg-bubble">${renderAssistantContent(messageText)}${botExtras}${sourceHtml}</div><div class="msg-meta">${time}</div></div>`;
   container.appendChild(row);
   container.scrollTop = container.scrollHeight;
-  if (track) msgs.push({ role, text, time, sources: sources || [] });
+  if (track) msgs.push({ role, text: messageText, time, sources: sources || [], graphResult, warnings });
 }
 
 function showTyping() {
@@ -562,14 +494,19 @@ async function sendMsg() {
   appendMsg('user', text);
   input.value = '';
   input.style.height = 'auto';
-  await streamChat(text, currentMode === 'quick' ? 'quickcode' : currentMode);
+  await streamChat(text, currentMode === 'quick' ? 'quickcode' : currentMode, getActiveScopeFilters());
 }
 
 async function sendQuick() {
   const input = document.querySelector('#panel-quick .p-input');
   const term = input?.value.trim() || '백내장 수술';
+  const filters = {
+    ...getActiveScopeFilters(),
+    include_summary: document.getElementById('quick-include-summary')?.checked !== false,
+    include_coverage: document.getElementById('quick-include-coverage')?.checked !== false,
+  };
   appendMsg('user', '[퀵코드 검색] ' + term);
-  await streamChat(term, 'quickcode');
+  await streamChat(term, 'quickcode', filters);
 }
 
 async function sendFormal() {
@@ -577,11 +514,18 @@ async function sendFormal() {
   const memo = document.getElementById('formal-memo')?.value.trim() || '';
   const query = input?.value.trim() || 'N39.3 / 질병급여·비급여·3대비급여';
   const categories = [...document.querySelectorAll('.scenario-chip.active')].map((item) => item.textContent.trim());
+  const searchType = document.querySelector('input[name="ftype"]:checked')?.value || '보상가능 여부 판정';
+  const filters = {
+    ...getActiveScopeFilters(),
+    product_category: categories,
+    search_type: searchType,
+  };
   appendMsg('user', '[약관 정형] ' + query);
-  await streamChat(query, 'formal', { product_category: categories }, memo);
+  await streamChat(query, 'formal', filters, memo);
 }
 
-async function sendClaim() {
+async function sendClaim(options = {}) {
+  const { suppressUserMessage = false } = options;
   const items = collectClaimItems();
   if (!items.length) {
     toast('청구 항목을 1개 이상 입력하세요.');
@@ -592,10 +536,11 @@ async function sendClaim() {
   const visitType = document.getElementById('claim-visit-type')?.value || '';
   const note = document.getElementById('claim-note')?.value.trim() || '';
   const policyGeneration = document.querySelector('input[name="claim-policy-generation"]:checked')?.value || '4th';
-  const groupingText = `${coverageTopic} ${note} ${items.map((item) => `${item.input_name} ${item.user_category_hint}`).join(' ')}`;
 
   const itemSummary = items.map((item) => `${item.input_name} ${item.claimed_amount}원 x ${item.quantity}`).join(', ');
-  appendMsg('user', `[보험금 계산/${policyGeneration === '5th' ? '5세대' : '4세대'}] ${itemSummary}`);
+  if (!suppressUserMessage) {
+    appendMsg('user', `[보험금 계산/${policyGeneration === '5th' ? '5세대' : '4세대'}] ${itemSummary}`);
+  }
   await calculateClaim({
     items,
     context: {
@@ -604,11 +549,6 @@ async function sendClaim() {
       diagnosis_code: diagnosisCode,
       situation_note: note,
       policy_generation: policyGeneration,
-      complication_asserted: /(합병증|부작용|후유증|수술 후|시술 후)/.test(groupingText),
-      same_disease_claimed: /(하나의 질병|같은 질병|동일 질병|동일한 질병)/.test(groupingText),
-      same_treatment_purpose_claimed: /(같은 치료 목적|동일한 치료 목적|같은 치료를 목적)/.test(groupingText),
-      recurrent_or_continuing_treatment: /(2회 이상|반복 치료|재입원|계속 입원|계속 치료|90회|90건|180일)/.test(groupingText),
-      newly_found_disease_claimed: /(새로 발견된 질병|새로 발견|병행 치료)/.test(groupingText),
     },
     model: getSelectedModel(),
     top_k: getTopK(),
@@ -632,6 +572,45 @@ function collectClaimItems() {
       };
     })
     .filter(Boolean);
+}
+
+function resetClaimForm() {
+  const lines = document.getElementById('claim-lines');
+  const rows = lines ? [...lines.querySelectorAll('[data-claim-line]')] : [];
+  if (!rows.length) return;
+
+  rows.slice(1).forEach((row) => row.remove());
+  const firstRow = rows[0];
+  firstRow.querySelectorAll('input').forEach((input) => {
+    input.value = input.classList.contains('claim-quantity') ? '1' : '';
+  });
+  firstRow.querySelectorAll('select').forEach((select) => {
+    select.value = '';
+  });
+
+  const generation = document.querySelector('input[name="claim-policy-generation"][value="4th"]');
+  if (generation instanceof HTMLInputElement) generation.checked = true;
+
+  const diagnosisCode = document.getElementById('claim-diagnosis-code');
+  const coverageTopic = document.getElementById('claim-coverage-topic');
+  const visitType = document.getElementById('claim-visit-type');
+  const note = document.getElementById('claim-note');
+
+  if (diagnosisCode instanceof HTMLInputElement) diagnosisCode.value = '';
+  if (coverageTopic instanceof HTMLInputElement) coverageTopic.value = '';
+  if (visitType instanceof HTMLSelectElement) visitType.value = '';
+  if (note instanceof HTMLTextAreaElement) note.value = '';
+}
+
+function showFreshChatNoticeIfNeeded() {
+  try {
+    if (window.sessionStorage.getItem(SESSION_KEYS.FRESH_CHAT_NOTICE) !== '1') return;
+    window.sessionStorage.removeItem(SESSION_KEYS.FRESH_CHAT_NOTICE);
+    resetClaimForm();
+    toast('새 채팅이 시작되었습니다.');
+  } catch (error) {
+    console.warn('Failed to restore fresh-chat notice flag:', error);
+  }
 }
 
 function addClaimLine() {
@@ -685,7 +664,7 @@ async function calculateClaim(payload) {
   }
 }
 
-async function streamChat(query, mode = 'general', filters = {}, memo = '', clarification = {}) {
+async function streamChat(query, mode = 'general', filters = {}, memo = '') {
   abortActiveChat();
   activeAbort = new AbortController();
   const chatInput = document.getElementById('chat-input');
@@ -711,7 +690,6 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '', clar
       temperature: getTemperature(),
       filters,
       index_mode: getIndexMode(),
-      clarification,
     };
     if (memo) payload.memo = memo;
     const response = await apiFetch('/chat/stream', {
@@ -743,12 +721,13 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '', clar
       if (event.event === 'error') throw new Error(event.data.message || '응답 생성 중 오류가 발생했습니다.');
     });
     if (!answer) answer = '응답이 비어 있습니다.';
+    answer = sanitizeAssistantAnswer(answer);
+    const suppressStructuredPanels = shouldSuppressStructuredPanels(answer, graphResult);
     bubble.innerHTML = renderAssistantContent(answer)
-      + renderClarificationHtml(graphResult, query, mode, filters, memo)
+      + renderClarificationHtml(graphResult)
       + renderWarningHtml(warnings)
-      + renderGraphSummaryFourSections(graphResult)
-      + renderGraphReviewPathsHtml(graphResult)
-      + renderGraphFactsHtml(graphResult)
+      + (suppressStructuredPanels ? '' : renderGraphReviewPathsHtml(graphResult))
+      + (suppressStructuredPanels ? '' : renderGraphFactsHtml(graphResult))
       + (sources.length ? `<div class="msg-sources">📄 참고: ${sources.map((source) => `<span class="src-badge">${escapeHTML(formatSource(source))}</span>`).join('')}</div>` : '');
     msgs.push({
       role: 'bot',
@@ -824,13 +803,18 @@ function renderClaimResultHtml(result) {
     ? `<div class="claim-section claim-warning"><div class="evidence-title">처리 경고</div><ul>${result.warnings.map((warning) => `<li>${escapeHTML(warning)}</li>`).join('')}</ul></div>`
     : '';
   const candidates = ''; // candidates handled above
-  const basis = result.applied_basis?.length
-    ? `<div class="claim-section"><div class="evidence-title">적용 근거</div><ul>${result.applied_basis.slice(0, 6).map((basisItem) => `<li><strong>${escapeHTML(basisItem.source || '근거')}</strong>: ${escapeHTML(basisItem.content || '')}</li>`).join('')}</ul></div>`
+  const compactBasisItems = compactClaimBasisItems(result.applied_basis, 4);
+  const basis = compactBasisItems.length
+    ? `<div class="claim-section"><div class="evidence-title">적용 근거</div><ul>${compactBasisItems.map((basisItem) => {
+        const extra = basisItem.extraCount > 0
+          ? ` <span class="claim-inline-note">외 ${basisItem.extraCount}건</span>`
+          : '';
+        return `<li><strong>${escapeHTML(basisItem.source || '근거')}</strong>${extra}: ${escapeHTML(truncateUiText(basisItem.content || '', 180))}</li>`;
+      }).join('')}</ul></div>`
     : '';
   const lineResults = result.line_results?.length
     ? `<div class="claim-section"><div class="evidence-title">항목별 계산</div><ul>${result.line_results.map((line) => `<li><strong>${escapeHTML(line.input_name || '')}</strong> (${escapeHTML(line.category || '미분류')}): 청구 ${formatMoney(line.claimed_amount)}원 / 공제 ${formatMoney(line.deductible)}원 / 지급 ${formatMoney(line.payable_amount)}원</li>`).join('')}</ul></div>`
     : '';
-  const graphReviewPaths = renderGraphReviewPathsHtml({ graph_review_paths: result.graph_review_paths || [] });
 
   return `
     <div class="claim-result">
@@ -846,7 +830,6 @@ function renderClaimResultHtml(result) {
       ${warnings}
       ${reasons}
       ${candidates}
-      ${graphReviewPaths}
       ${basis}
     </div>`;
 }
@@ -865,10 +848,14 @@ function claimResultToText(result) {
   if (result.review_reasons?.length) {
     lines.push(`검토 사유: ${result.review_reasons.join(' / ')}`);
   }
-  if (result.graph_review_paths?.length) {
-    lines.push(`구조화 검토 경로: ${result.graph_review_paths.map((path) => path.path_type_label || path.path_type || '검토').join(' / ')}`);
-  }
   return lines.join('\n');
+}
+
+function truncateUiText(text, maxLength = 240) {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return '';
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
 }
 
 function formatMoney(value) {
@@ -877,270 +864,28 @@ function formatMoney(value) {
   return numeric.toLocaleString('ko-KR');
 }
 
-function renderClarificationHtml(graphResult, query, mode, filters, memo) {
+function renderClarificationHtml(graphResult) {
   const plan = graphResult?.plan || {};
   const questions = Array.isArray(plan.clarification_questions) ? plan.clarification_questions : [];
   const terms = plan.normalized_terms && typeof plan.normalized_terms === 'object' ? plan.normalized_terms : {};
   const candidates = Array.isArray(plan.term_correction_candidates) ? plan.term_correction_candidates : [];
   const ambiguous = Array.isArray(plan.ambiguous_terms) ? plan.ambiguous_terms : [];
-
   if (!questions.length && !Object.keys(terms).length && !candidates.length && !ambiguous.length) return '';
 
-  const id = `clarify-${nextClarificationId++}`;
-  clarificationPayloads.set(id, { query, mode, filters, memo, graphResult });
+  const questionHtml = questions.length
+    ? `<div class="clarify-subtitle">추가 확인 질문</div><ul>${questions.map((question) => `<li>${escapeHTML(question)}</li>`).join('')}</ul>`
+    : '';
+  const termHtml = Object.keys(terms).length
+    ? `<div class="clarify-subtitle">입력 용어 정규화</div><ul>${Object.entries(terms).map(([raw, normalized]) => `<li>${escapeHTML(raw)} → ${escapeHTML(normalized)}</li>`).join('')}</ul>`
+    : '';
+  const candidateHtml = candidates.length
+    ? `<div class="clarify-subtitle">입력 용어 보정 후보</div><ul>${candidates.map((item) => `<li>${escapeHTML(item.raw || '')} → ${escapeHTML(item.normalized || '')} <span class="muted">(확인 필요)</span></li>`).join('')}</ul>`
+    : '';
+  const ambiguousHtml = ambiguous.length
+    ? `<div class="clarify-tags">${ambiguous.map((term) => `<span>${escapeHTML(term)}</span>`).join('')}</div>`
+    : '';
 
-  // 1. Title
-  let html = `<div class="msg-clarifications" data-clarification-id="${id}">
-    <div class="evidence-title">추가 확인 필요</div>`;
-
-  // 2. Selected chips summary
-  html += `
-    <div class="clarify-selected-summary" data-clarify-summary>
-      <div class="clarify-subtitle">선택된 조건</div>
-      <div class="clarify-selected-chips" data-clarify-selected-chips>
-        <span class="clarify-empty">아직 선택된 조건이 없습니다.</span>
-      </div>
-    </div>`;
-
-  // 3. Preset Section (only when every preset selection is available in this panel)
-  const applicablePresets = getApplicableClarificationPresets(plan);
-  if (applicablePresets.length) {
-    html += `
-    <div class="clarify-preset-section">
-      <div class="clarify-subtitle">자주 쓰는 조건</div>
-      <div class="clarify-preset-row">
-        ${applicablePresets.map(([presetId, preset]) => `
-          <button type="button" class="clarify-preset" data-action="apply-clarification-preset" data-preset-id="${escapeHTML(presetId)}">
-            ${escapeHTML(preset.label)}
-          </button>
-        `).join('')}
-      </div>
-    </div>`;
-  }
-
-  // 4. Input correction candidates (Term Correction)
-  if (candidates.length) {
-    html += `
-    <div class="clarify-section">
-      <div class="clarify-subtitle">용어 확인</div>
-      <div class="clarify-option-row">
-        ${candidates.map((item) => `
-          <button type="button" class="clarify-option" data-action="select-clarification"
-            data-clarify-group="term_correction"
-            data-clarify-label="용어 확인"
-            data-clarify-value="${escapeHTML(item.normalized)}"
-            data-clarify-raw="${escapeHTML(item.raw)}"
-            data-clarify-display="${escapeHTML(item.normalized)}">
-            ${escapeHTML(item.normalized)} 맞음
-          </button>
-        `).join('')}
-      </div>
-    </div>`;
-  }
-
-  // 5. Ambiguous Terms
-  const unmappedAmbiguous = [];
-  ambiguous.forEach((term) => {
-    const groupInfo = CLARIFICATION_GROUPS[term];
-    if (groupInfo) {
-      html += `
-      <div class="clarify-section">
-        <div class="clarify-subtitle">${escapeHTML(term)}</div>
-        <div class="clarify-option-row">
-          ${groupInfo.buttons.map((btn) => `
-            <button type="button" class="clarify-option" data-action="select-clarification"
-              data-clarify-group="${escapeHTML(groupInfo.group)}"
-              data-clarify-label="${escapeHTML(term)}"
-              data-clarify-value="${escapeHTML(btn.value)}"
-              data-clarify-display="${escapeHTML(btn.display)}">
-              ${escapeHTML(btn.display)}
-            </button>
-          `).join('')}
-        </div>
-      </div>`;
-    } else {
-      unmappedAmbiguous.push(term);
-    }
-  });
-
-  if (unmappedAmbiguous.length) {
-    html += `
-    <div class="clarify-tags">
-      ${unmappedAmbiguous.map((term) => `<span>${escapeHTML(term)}</span>`).join('')}
-    </div>`;
-  }
-
-  // 6. Questions (Keep as text)
-  if (questions.length) {
-    html += `
-    <div class="clarify-subtitle">추가 확인 질문</div>
-    <ul>
-      ${questions.map((question) => `<li>${escapeHTML(question)}</li>`).join('')}
-    </ul>`;
-  }
-
-  // 7. Terms normalization (Keep as text/info)
-  if (Object.keys(terms).length) {
-    html += `
-    <div class="clarify-subtitle">입력 용어 정규화</div>
-    <ul>
-      ${Object.entries(terms).map(([raw, normalized]) => `<li>${escapeHTML(raw)} → ${escapeHTML(normalized)}</li>`).join('')}
-    </ul>`;
-  }
-
-  // 8. Action buttons (Apply and Reset)
-  html += `
-    <div class="clarify-actions">
-      <button type="button" class="clarify-apply" data-action="apply-clarification" disabled>선택값으로 다시 검색</button>
-      <button type="button" class="clarify-reset" data-action="reset-clarification" disabled>선택 초기화</button>
-    </div>
-  </div>`;
-
-  return html;
-}
-
-// ===== CLARIFICATION UX HELPERS =====
-function getRequiredClarificationGroups(plan) {
-  const groups = new Set();
-  const ambiguous = Array.isArray(plan?.ambiguous_terms) ? plan.ambiguous_terms : [];
-  const candidates = Array.isArray(plan?.term_correction_candidates) ? plan.term_correction_candidates : [];
-
-  ambiguous.forEach((term) => {
-    const groupInfo = CLARIFICATION_GROUPS[term];
-    if (groupInfo?.group) groups.add(groupInfo.group);
-  });
-  if (candidates.length) groups.add('term_correction');
-  return groups;
-}
-
-function getApplicableClarificationPresets(plan) {
-  const requiredGroups = getRequiredClarificationGroups(plan);
-  if (!requiredGroups.size) return [];
-  const candidates = Array.isArray(plan?.term_correction_candidates) ? plan.term_correction_candidates : [];
-
-  return Object.entries(CLARIFICATION_PRESETS).filter(([, preset]) => {
-    const selections = Array.isArray(preset.selections) ? preset.selections : [];
-    if (!selections.length) return false;
-    return selections.every((selection) => {
-      if (!requiredGroups.has(selection.group)) return false;
-      if (selection.group === 'term_correction') {
-        return candidates.some((candidate) => candidate.normalized === selection.value);
-      }
-      return true;
-    });
-  });
-}
-
-function isMultiSelectClarificationGroup(group) {
-  return group === 'evidence_tags' || group === 'conditions';
-}
-
-function updateClarificationSummary(container) {
-  const chipsContainer = container.querySelector('[data-clarify-selected-chips]');
-  if (!chipsContainer) return;
-
-  const selections = collectClarificationSelections(container);
-  if (!selections.length) {
-    chipsContainer.innerHTML = '<span class="clarify-empty">아직 선택된 조건이 없습니다.</span>';
-    return;
-  }
-
-  chipsContainer.innerHTML = selections
-    .map((item) => `<span class="clarify-selected-chip" data-group="${escapeHTML(item.group)}">${escapeHTML(item.display)}</span>`)
-    .join('');
-}
-
-function updateClarificationApplyState(container) {
-  const applyBtn = container.querySelector('[data-action="apply-clarification"]');
-  const resetBtn = container.querySelector('[data-action="reset-clarification"]');
-  const selections = collectClarificationSelections(container);
-  const hasSelections = selections.length > 0;
-
-  if (applyBtn) applyBtn.disabled = !hasSelections;
-  if (resetBtn) resetBtn.disabled = !hasSelections;
-}
-
-function collectClarificationSelections(container) {
-  const selections = [];
-  const selectedButtons = container.querySelectorAll('.clarify-option.selected');
-
-  selectedButtons.forEach((btn) => {
-    const group = btn.dataset.clarifyGroup || '';
-    const label = btn.dataset.clarifyLabel || '';
-    const value = btn.dataset.clarifyValue || '';
-    const display = btn.dataset.clarifyDisplay || btn.textContent.trim();
-    const raw = btn.dataset.clarifyRaw || '';
-
-    // Check for duplicate group+value
-    const exists = selections.some(s => s.group === group && s.value === value);
-    if (!exists) {
-      selections.push({ group, label, value, display, raw });
-    }
-  });
-
-  return selections;
-}
-
-function buildClarifiedQuery(originalQuery, selections) {
-  let cleanedQuery = originalQuery.trim();
-  const clarifyIdx = cleanedQuery.indexOf('[사용자 명확화]');
-  if (clarifyIdx !== -1) {
-    cleanedQuery = cleanedQuery.substring(0, clarifyIdx).trim();
-  }
-
-  const lines = [cleanedQuery, '', '[사용자 명확화]'];
-  selections.forEach((selection) => {
-    if (selection.group === 'term_correction' && selection.raw) {
-      lines.push(`- 용어 확인: ${selection.raw} = ${selection.value}`);
-    } else {
-      lines.push(`- ${selection.label}: ${selection.value}`);
-    }
-  });
-  return lines.join('\n');
-}
-
-function buildClarificationPayload(selections) {
-  return {
-    selections: selections.map((selection) => ({
-      group: selection.group,
-      label: selection.label,
-      value: selection.value,
-      display: selection.display,
-      raw: selection.raw || '',
-    })),
-  };
-}
-
-function resetClarificationSelections(container) {
-  container.querySelectorAll('.clarify-option.selected').forEach((button) => {
-    button.classList.remove('selected');
-    button.removeAttribute('aria-pressed');
-  });
-  container.querySelectorAll('.clarify-option.synthetic').forEach((el) => {
-    el.remove();
-  });
-  updateClarificationSummary(container);
-  updateClarificationApplyState(container);
-}
-
-function applyClarificationPreset(container, preset) {
-  resetClarificationSelections(container);
-
-  preset.selections.forEach((selection) => {
-    const matchingButton = [...container.querySelectorAll('.clarify-option')]
-      .find((button) =>
-        button.dataset.clarifyGroup === selection.group
-        && button.dataset.clarifyValue === selection.value
-      );
-
-    if (matchingButton) {
-      matchingButton.classList.add('selected');
-      matchingButton.setAttribute('aria-pressed', 'true');
-    }
-  });
-
-  updateClarificationSummary(container);
-  updateClarificationApplyState(container);
+  return `<div class="msg-clarifications"><div class="evidence-title">추가 확인 필요</div>${ambiguousHtml}${questionHtml}${termHtml}${candidateHtml}</div>`;
 }
 
 function renderWarningHtml(warnings) {
@@ -1151,128 +896,84 @@ function renderWarningHtml(warnings) {
   return `<div class="msg-warnings"><div class="evidence-title">처리 경고</div><ul>${items}</ul></div>`;
 }
 
-function renderGraphSummaryFourSections(graphResult) {
-  const summary = graphResult?.graph_summary;
-  if (!summary || typeof summary !== 'object') return '';
-
-  return `
-    <div class="graph-four-sections" aria-label="GraphDB 4개 섹션 요약">
-      ${renderFourSectionsConfirmedFacts(summary.confirmed_facts)}
-      ${renderFourSectionsReviewRequired(summary.review_required)}
-      ${renderFourSectionsEvidenceChecklist(summary.evidence_checklist)}
-      ${renderFourSectionsReviewActions(summary.review_actions)}
-    </div>
-  `;
+function shouldSuppressStructuredPanels(answer, graphResult) {
+  if (!graphResult) return false;
+  const text = String(answer || '');
+  return text.includes('【확정 근거】')
+    || text.includes('섹션 1️⃣')
+    || text.includes('구조화 검토 경로');
 }
 
-function renderFourSectionsConfirmedFacts(facts) {
-  const safeFacts = Array.isArray(facts) ? facts : [];
-  const body = safeFacts.length
-    ? `<ul>${safeFacts.map((fact) => {
-      const subject = escapeHTML(fact.subject || 'N/A');
-      const relation = escapeHTML(fact.relation || '?');
-      const object = escapeHTML(fact.object || 'N/A');
-      const source = fact.source ? ` <span class="fact-source">(출처: ${escapeHTML(fact.source)})</span>` : '';
-      return `<li><span class="section-icon">✅</span><span><strong>${subject}</strong> --(<em>${relation}</em>)--> ${object}${source}</span></li>`;
-    }).join('')}</ul>`
-    : '<div class="section-empty">해당 없음</div>';
+function sanitizeAssistantAnswer(answer) {
+  const text = String(answer || '').trim();
+  if (!text) return '';
 
-  return `
-    <section class="four-section confirmed-section">
-      <div class="section-header">■ 섹션 1️⃣  【확정 근거】</div>
-      <div class="section-content">${body}</div>
-    </section>
-  `;
+  const positions = EMBEDDED_REVIEW_TEMPLATE_MARKERS
+    .map((marker) => text.indexOf(marker))
+    .filter((index) => index >= 0);
+  if (!positions.length) return stripTrailingSourceCitationLines(text);
+
+  const cutIndex = Math.min(...positions);
+  const leading = text.slice(0, cutIndex).trimEnd();
+  if (leading) return stripTrailingSourceCitationLines(leading);
+
+  const answerMarker = text.indexOf('[답변]');
+  if (answerMarker >= 0) {
+    const extracted = text.slice(answerMarker + '[답변]'.length).trim();
+    if (extracted) return stripTrailingSourceCitationLines(extracted);
+  }
+  return stripTrailingSourceCitationLines(summarizeEmbeddedReviewTemplate(text));
 }
 
-function renderFourSectionsReviewRequired(items) {
-  const safeItems = Array.isArray(items) ? items : [];
-  const body = safeItems.length
-    ? `<ul>${safeItems.map((item) => {
-      const title = item.topic
-        ? item.topic
-        : `${item.subject || 'N/A'} --${item.relation || '?'}--> ${item.object || 'N/A'}`;
-      const reason = item.reason || '입력 조건 또는 근거 확인 필요';
-      const summary = item.summary ? `<div class="review-summary">${escapeHTML(item.summary)}</div>` : '';
-      return `
-        <li>
-          <div><span class="section-icon">⚠️</span><strong>【${escapeHTML(title)}】</strong></div>
-          ${summary}
-          <span class="review-reason">이유: ${escapeHTML(reason)}</span>
-          <span class="review-action">➜ 확인 필요: 원문 근거, 입력 조건, 상품/특약 적용 여부</span>
-        </li>
-      `;
-    }).join('')}</ul>`
-    : '<div class="section-empty">해당 없음</div>';
+function summarizeEmbeddedReviewTemplate(text) {
+  const candidates = [];
+  String(text || '').split(/\r?\n/).forEach((rawLine) => {
+    const line = rawLine.replace(/\u00a0/g, ' ').trim();
+    if (!line) return;
+    if (line.startsWith('[출처:')) return;
+    if (EMBEDDED_REVIEW_SECTION_PATTERN.test(line)) return;
+    if (EMBEDDED_REVIEW_HEADING_PATTERN.test(line)) return;
+    if (line === '해당 없음') return;
+    if (line.includes('Graph review path')) return;
+    if (line.startsWith('⚠️')) return;
+    if (line.startsWith('➜')) return;
+    if (line.includes('현황:') && line.includes('중요도:')) return;
 
-  return `
-    <section class="four-section review-required-section">
-      <div class="section-header">■ 섹션 2️⃣  【검토 필요 사항】</div>
-      <div class="section-content">${body}</div>
-    </section>
-  `;
-}
-
-function renderFourSectionsEvidenceChecklist(checklist) {
-  const safeChecklist = Array.isArray(checklist) ? checklist : [];
-  const statusMap = {
-    provided: ['✅', '제출됨'],
-    required: ['❌', '필수'],
-    recommended: ['➜', '권장'],
-  };
-  const body = safeChecklist.length
-    ? `<ul class="checklist">${safeChecklist.map((item) => {
-      const [statusIcon, statusText] = statusMap[item.status] || ['➜', escapeHTML(item.status || '확인 필요')];
-      const checked = item.status === 'provided' ? 'checked' : '';
-      return `
-        <li>
-          <input type="checkbox" ${checked} disabled>
-          <span>
-            <strong>${escapeHTML(item.name || '확인 사항')}</strong>: ${escapeHTML(item.requirement || '')}
-            <span class="checklist-meta">${statusIcon} 현황: ${statusText} / 중요도: ${escapeHTML(item.priority || 'medium')}</span>
-          </span>
-        </li>
-      `;
-    }).join('')}</ul>`
-    : '<div class="section-empty">해당 없음</div>';
-
-  return `
-    <section class="four-section evidence-section">
-      <div class="section-header">■ 섹션 3️⃣  【추가 확인 사항】</div>
-      <div class="section-content">${body}</div>
-    </section>
-  `;
-}
-
-function renderFourSectionsReviewActions(actions) {
-  const safeActions = Array.isArray(actions) ? actions : [];
-  const priorityRank = { high: 0, medium: 1, low: 2 };
-  const priorityIcon = { high: '🔴', medium: '🟡', low: '🟢' };
-  const ordered = [...safeActions].sort((a, b) => {
-    const rankA = priorityRank[a.priority] ?? 1;
-    const rankB = priorityRank[b.priority] ?? 1;
-    if (rankA !== rankB) return rankA - rankB;
-    return Number(a.order || 999) - Number(b.order || 999);
+    const cleaned = line.replace(EMBEDDED_REVIEW_BULLET_PATTERN, '').trim();
+    if (!cleaned) return;
+    if (!candidates.includes(cleaned)) candidates.push(cleaned);
   });
-  const body = ordered.length
-    ? `<ol class="actions-list">${ordered.map((action, index) => {
-      const priority = action.priority || 'medium';
-      const order = action.order || index + 1;
-      return `
-        <li>
-          <strong>→ ${escapeHTML(order)}. ${escapeHTML(action.action || 'N/A')}</strong>
-          <span class="action-meta">${priorityIcon[priority] || '🟡'} 대상: ${escapeHTML(action.target || 'N/A')} / 우선순위: ${escapeHTML(priority)}</span>
-        </li>
-      `;
-    }).join('')}</ol>`
-    : '<div class="section-empty">해당 없음</div>';
 
-  return `
-    <section class="four-section actions-section">
-      <div class="section-header">■ 섹션 4️⃣  【권장 조치】</div>
-      <div class="section-content">${body}</div>
-    </section>
-  `;
+  if (!candidates.length) return '제공된 구조화 검토 경로 기준으로 추가 확인이 필요합니다.';
+  const summary = candidates.slice(0, 3).join(' ').replace(/\s+/g, ' ').trim();
+  if (!summary) return '제공된 구조화 검토 경로 기준으로 추가 확인이 필요합니다.';
+  return /[.!?]$/.test(summary) ? summary : `${summary}.`;
+}
+
+function stripTrailingSourceCitationLines(text) {
+  const lines = String(text || '').trim().split(/\r?\n/);
+  if (!lines.length) return '';
+
+  let end = lines.length;
+  while (end > 0) {
+    const line = lines[end - 1].trim();
+    if (!line) {
+      end -= 1;
+      continue;
+    }
+    if (SOURCE_CITATION_LINE_PATTERN.test(line)) {
+      end -= 1;
+      continue;
+    }
+    break;
+  }
+
+  const stripped = lines.slice(0, end);
+  while (stripped.length && !stripped[stripped.length - 1].trim()) {
+    stripped.pop();
+  }
+  const cleaned = stripped.join('\n').trim();
+  return cleaned || String(text || '').trim();
 }
 
 function renderAssistantContent(text) {
@@ -1400,6 +1101,11 @@ function renderGraphReviewPathsHtml(graphResult) {
   return `<div class="graph-review-paths"><div class="evidence-title">구조화 검토 경로</div><ul>${items}</ul></div>`;
 }
 
+function renderLegacyStructuredNoticeHtml(shouldRender) {
+  if (!shouldRender) return '';
+  return '<div class="graph-review-paths"><div class="evidence-title">구조화 검토 경로</div><ul><li>(이전 세션 — 구조화 검토 패널 미지원)</li></ul></div>';
+}
+
 function renderGraphFactsHtml(graphResult) {
   const facts = graphResult?.facts || [];
   if (!facts.length) return '';
@@ -1476,9 +1182,29 @@ function toggleScope(element) {
   element.classList.add('active');
 }
 
+function getActiveScopeFilters() {
+  const active = document.querySelector('.scope-chip.active');
+  const scope = active?.dataset.scope || active?.textContent?.trim() || '전체';
+  const docFilter = SCOPE_DOC_FILTERS[scope];
+  return docFilter ? { doc_filter: docFilter } : {};
+}
+
 function toggleExport(event) {
   event.stopPropagation();
   document.getElementById('exp-menu')?.classList.toggle('open');
+}
+
+function filterVisibleSources(sources) {
+  return (Array.isArray(sources) ? sources : []).filter((source) => source?.__kind !== 'assistant_meta');
+}
+
+function extractAssistantUiPayload(sources) {
+  const meta = (Array.isArray(sources) ? sources : []).find((source) => source?.__kind === 'assistant_meta');
+  if (!meta) return null;
+  return {
+    graphResult: meta.graph_result || null,
+    warnings: Array.isArray(meta.warnings) ? meta.warnings : [],
+  };
 }
 
 async function exportChat(format) {
@@ -1510,6 +1236,20 @@ async function exportChat(format) {
 
 function getSelectedModel() {
   return localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'ollama:exaone3.5:7.8b';
+}
+
+function formatSelectedModelLabel(modelId) {
+  const value = String(modelId || '').trim();
+  if (!value) return '미확인';
+
+  const [, raw = value] = value.split(':', 2);
+  if (value === 'sglang:gpt-oss-20b') return 'SGLang · GPT-OSS 20B';
+  if (value === 'ollama:exaone3.5:7.8b') return 'Ollama · exaone3.5:7.8b';
+  if (value.startsWith('sglang:')) return `SGLang · ${raw}`;
+  if (value.startsWith('vllm:')) return `vLLM · ${raw}`;
+  if (value.startsWith('ollama:')) return `Ollama · ${raw}`;
+  if (value.startsWith('openai:')) return `OpenAI · ${raw}`;
+  return raw;
 }
 
 function getIndexMode() {

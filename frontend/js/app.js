@@ -1,10 +1,12 @@
 import { getToken, getUser, removeToken, removeUser, setUser } from './storage.js';
 import { isAuthenticated } from './modules/auth.js';
+import { MODEL_SELECTION_SOURCES, resolveSelectedModelForAuthenticatedRoute } from './modules/model-selection.js';
 import { toast } from './modules/ui.js';
 import { apiFetch } from './utils.js';
-import { initLoginCanvas, initLoginPage } from './pages/login.js?v=20260527_model_discovery2';
-import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260601_workspace_merge';
-import { initAdminPage } from './pages/admin.js?v=20260601_workspace_merge';
+import { STORAGE_KEYS } from './config.js';
+import { initLoginCanvas, initLoginPage } from './pages/login.js?v=20260602_model_sync_fix1';
+import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260603_chat_model_switch_fix1';
+import { initAdminPage } from './pages/admin.js?v=20260602_claim_reset_fix1';
 
 const PAGES = {
   LOGIN: '/html/login.html',
@@ -98,7 +100,7 @@ async function loadChatPage() {
       currentUser: me,
       onGoAdmin: () => {
         if (me?.role === 'admin') {
-          navigateToRoute(ROUTES.ADMIN);
+          hardNavigateToRoute(ROUTES.ADMIN);
         } else {
           toast('관리자 권한이 없습니다', 'error');
         }
@@ -123,7 +125,7 @@ async function loadAdminPage() {
     await initAdminPage({
       isUserAdmin: () => me?.role === 'admin',
       onLogout: () => doLogout(),
-      onGoChat: () => navigateToRoute(ROUTES.CHAT),
+      onGoChat: () => hardNavigateToRoute(ROUTES.CHAT),
     });
   } catch (error) {
     console.error('Failed to load admin page:', error);
@@ -173,6 +175,15 @@ function navigateToRoute(route) {
   loadPageByRoute(parseRoute(route));
 }
 
+function hardNavigateToRoute(route) {
+  const currentPath = window.location.pathname.replace(/\/$/, '') || '/';
+  if (currentPath === route) {
+    navigateToRoute(route);
+    return;
+  }
+  window.location.assign(route);
+}
+
 async function loadPageByRoute(routeName) {
   cleanupPreviousPage();
 
@@ -183,6 +194,10 @@ async function loadPageByRoute(routeName) {
   if (routeName !== 'login' && !me && !isAuthenticated() && !getToken()) {
     navigateToRoute(ROUTES.LOGIN);
     return;
+  }
+
+  if (routeName !== 'login' && me) {
+    await syncSelectedModelForAuthenticatedRoute();
   }
 
   switch (routeName) {
@@ -201,6 +216,35 @@ async function loadPageByRoute(routeName) {
 
 function cleanupPreviousPage() {
   abortActiveChat();
+}
+
+async function syncSelectedModelForAuthenticatedRoute() {
+  const source = localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE);
+  const selected = localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL);
+
+  try {
+    const response = await apiFetch('/system/models');
+    const payload = await response.json();
+    const localModels = Array.isArray(payload.providers?.local) ? payload.providers.local : [];
+    const localIds = localModels.map((model) => model.id).filter(Boolean);
+    const resolved = resolveSelectedModelForAuthenticatedRoute({
+      selectedModel: selected,
+      source,
+      availableLocalIds: localIds,
+      defaultLocal: payload.defaults?.local || '',
+    });
+
+    if (resolved.model === selected && resolved.source === source) return;
+
+    if (resolved.model) {
+      localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, resolved.model);
+    }
+    if (resolved.source) {
+      localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE, resolved.source);
+    }
+  } catch (error) {
+    console.warn('Failed to sync selected model for authenticated route:', error);
+  }
 }
 
 function showErrorAndReload(message) {

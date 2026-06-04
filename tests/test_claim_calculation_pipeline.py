@@ -23,7 +23,12 @@ def _matches_for(items: list[ClaimItemInput]) -> list[list[dict[str, str]]]:
 
 
 def test_pipeline_calculation_success_dousu():
-    """도수치료 청구 시나리오에서 지급예상액이 올바르게 계산되고 파이프라인이 정상 동작하는지 검증한다."""
+    """4세대 도수치료는 현재 규칙표상 비급여 30% 공제로 계산되며 추가 review는 강제하지 않는다.
+
+    한도/횟수/특약 조건을 확인할 증빙이 입력되지 않은 실제 심사 화면에서는 review path가
+    별도로 붙을 수 있지만, 이 단위 테스트는 표준코드가 단일 보상 후보로 확정된 순수
+    계산 경로만 검증한다.
+    """
     items = [
         ClaimItemInput(
             line_id="item_1",
@@ -156,6 +161,101 @@ def test_excluded_standard_opinion_forces_zero_payable():
     assert any("지급예상액을 0원" in reason for reason in result.review_reasons)
 
 
+def test_coordination_review_does_not_leak_without_explicit_signal():
+    """자동차/산재 맥락이 없는 청구에는 중복보상 조정 review reason이 붙지 않아야 한다."""
+    from src.graph.retriever import GraphRetrievalResult, GraphReviewPath
+
+    items = [ClaimItemInput(line_id="line_excluded", input_name="도수치료", claimed_amount="100000")]
+    context = ClaimCaseContext(
+        policy_generation="5th",
+        visit_type="outpatient",
+        coverage_topic="실손, 3대비급여",
+    )
+    mock_match = {
+        "std_cd": "51040",
+        "std_cd_nm": "도수치료",
+        "mid_category_cd_nm": "공상",
+        "ins_care_type_cd_nm": "급여",
+        "pay_opn_cd_nm": "면책",
+    }
+
+    mock_graph_result = MagicMock(spec=GraphRetrievalResult)
+    mock_graph_result.facts = []
+    mock_graph_result.review_paths = [
+        GraphReviewPath(
+            path_id="condition::dosu",
+            path_type="claim_condition_review",
+            status="review_required",
+            summary="문서 기반 보장 주제/판단 조건 검토 경로를 수집했습니다.",
+            coordination_rules=["산재보험 처리 후 실손 청구"],
+        )
+    ]
+
+    mock_rag = MagicMock()
+    mock_rag.graph_enabled = True
+    mock_rag.graph_retriever = MagicMock()
+    mock_rag.graph_retriever.retrieve.return_value = mock_graph_result
+
+    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
+        result = run_claim_calculation(
+            rag_pipeline=mock_rag,
+            items=items,
+            context=context,
+            use_fake_planner=True,
+        )
+
+    assert not any("중복 보상 조정 검토" in reason for reason in result.review_reasons)
+    assert result.coordination_rules == []
+    assert not any("GraphDB ReviewPath" in basis["source"] for basis in result.applied_basis)
+
+
+def test_review_path_guidance_does_not_pollute_applied_basis():
+    """검토 경로 요약은 review reason에는 남아도 적용 근거 목록에는 직접 섞이지 않아야 한다."""
+    from src.graph.retriever import GraphRetrievalResult, GraphReviewPath
+
+    items = [ClaimItemInput(line_id="line_reviewpath", input_name="도수치료", claimed_amount="100000")]
+    context = ClaimCaseContext(
+        policy_generation="5th",
+        visit_type="outpatient",
+        coverage_topic="실손, 3대비급여",
+    )
+    mock_match = {
+        "std_cd": "51040",
+        "std_cd_nm": "도수치료",
+        "mid_category_cd_nm": "공상",
+        "ins_care_type_cd_nm": "급여",
+        "pay_opn_cd_nm": "면책",
+    }
+
+    mock_graph_result = MagicMock(spec=GraphRetrievalResult)
+    mock_graph_result.facts = []
+    mock_graph_result.review_paths = [
+        GraphReviewPath(
+            path_id="condition::dosu",
+            path_type="claim_condition_review",
+            status="review_required",
+            summary="문서 기반 보장 주제/판단 조건 검토 경로를 수집했습니다.",
+            review_actions=["진단서 요청"],
+        )
+    ]
+
+    mock_rag = MagicMock()
+    mock_rag.graph_enabled = True
+    mock_rag.graph_retriever = MagicMock()
+    mock_rag.graph_retriever.retrieve.return_value = mock_graph_result
+
+    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
+        result = run_claim_calculation(
+            rag_pipeline=mock_rag,
+            items=items,
+            context=context,
+            use_fake_planner=True,
+        )
+
+    assert any("권장 검토 조치: 진단서 요청" in reason for reason in result.review_reasons)
+    assert not any("GraphDB ReviewPath" in basis["source"] for basis in result.applied_basis)
+
+
 def test_excluded_standard_opinion_blocks_llm_formula(monkeypatch):
     """LLM 경로에서도 표준모델 면책 의견은 일반 산식보다 우선되어 0원 처리된다."""
     items = [ClaimItemInput(line_id="line_excluded_llm", input_name="도수치료", input_code="51040", claimed_amount="100000")]
@@ -254,6 +354,38 @@ def test_upper_room_charge_difference_special_rule_caps_daily_average():
     context = ClaimCaseContext(policy_generation="5th", visit_type="hospitalization")
 
     with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.claimed_amount == "300000"
+    assert result.payable_amount == "100000"
+    assert result.deductible == "200000"
+    assert result.line_results[0]["rule_summary"].startswith("상급병실료 차액 특례")
+
+
+def test_upper_room_charge_difference_ignores_stale_exclusion_code_match():
+    """상급병실료 차액은 잘못 남은 표준코드가 있어도 이름 기반 특례 규칙을 우선 적용해야 한다."""
+    items = [
+        ClaimItemInput(
+            line_id="line_room",
+            input_name="상급병실료 차액",
+            input_code="51040",
+            claimed_amount="150000",
+            quantity="2",
+        )
+    ]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="hospitalization")
+
+    stale_match_row = {
+        "std_cd": "51040",
+        "std_cd_nm": "도수치료",
+        "mid_category_cd_nm": "비급여",
+        "pay_opn_cd_nm": "면책",
+    }
+
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=stale_match_row), patch(
+        "src.db.standard_codes.search_by_name",
+        return_value=[stale_match_row],
+    ):
         result = run_claim_calculation(None, items, context, use_fake_planner=True)
 
     assert result.claimed_amount == "300000"
@@ -694,6 +826,7 @@ def test_pipeline_confirmed_without_evidence_excluded():
 
     mock_graph_result = MagicMock(spec=GraphRetrievalResult)
     mock_graph_result.facts = [mock_fact_no_ev, mock_fact_with_ev]
+    mock_graph_result.review_paths = []
 
     mock_rag = MagicMock()
     mock_rag.graph_enabled = True
@@ -738,6 +871,7 @@ def test_pipeline_candidate_pays_by_ratio_without_confirmed_forces_review():
 
     mock_graph_result = MagicMock(spec=GraphRetrievalResult)
     mock_graph_result.facts = [mock_fact_candidate]
+    mock_graph_result.review_paths = []
 
     mock_rag = MagicMock()
     mock_rag.graph_enabled = True

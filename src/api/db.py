@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import NullPool
 
 from src.api.settings import get_api_settings
 
@@ -19,7 +20,19 @@ def _database_url() -> str:
     return get_api_settings().database_url
 
 
-engine = create_async_engine(_database_url(), future=True)
+def _engine_kwargs() -> dict:
+    url = _database_url()
+    kwargs = {"future": True}
+    if url.startswith("sqlite+aiosqlite:"):
+        # SQLite file DB in this app is low-concurrency and long-lived.
+        # Avoid reusing stale pooled connections that can surface as
+        # "no active connection" / "Connection closed" on resumed traffic.
+        kwargs["poolclass"] = NullPool
+        kwargs["connect_args"] = {"timeout": 30}
+    return kwargs
+
+
+engine = create_async_engine(_database_url(), **_engine_kwargs())
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 
@@ -29,6 +42,9 @@ def _enable_sqlite_foreign_keys(dbapi_connection, _) -> None:
 
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    cursor.execute("PRAGMA busy_timeout=30000")
     cursor.close()
 
 

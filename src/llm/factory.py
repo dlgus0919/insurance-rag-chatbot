@@ -184,6 +184,25 @@ def _available_vllm_models() -> list[str]:
     return _ordered_unique(available)
 
 
+def _runtime_available_vllm_models() -> list[str]:
+    """Return only vLLM models currently advertised by a live endpoint."""
+
+    candidates = list_vllm_large_models()
+    endpoints = [config.VLLM_BASE_URL, *config.VLLM_MODEL_ENDPOINTS.values(), *[config.vllm_base_url_for_model(model) for model in candidates]]
+    served_by_endpoint = _served_models_by_endpoint(endpoints, api_key=config.VLLM_API_KEY)
+    served_models = _ordered_unique([model for models in served_by_endpoint.values() for model in models])
+    if not served_models:
+        return []
+
+    available: list[str] = []
+    for model in _ordered_unique(candidates + served_models):
+        served = served_by_endpoint.get(config.vllm_base_url_for_model(model), [])
+        if model in served:
+            available.append(model)
+    return _ordered_unique(available)
+
+
+
 def list_startup_large_models() -> list[tuple[str, str]]:
     """Return provider/model pairs that can be loaded as the login-time large model."""
 
@@ -213,6 +232,32 @@ def _available_sglang_models() -> list[str]:
 
     available: list[str] = []
     for model in candidates:
+        served = served_by_endpoint.get(config.sglang_base_url_for_model(model), [])
+        if model in served:
+            available.append(model)
+    return _ordered_unique(available)
+
+
+
+def _runtime_available_sglang_models() -> list[str]:
+    """Return only SGLang models currently advertised by a live endpoint."""
+
+    candidates = _configured_sglang_models()
+    endpoints = [config.SGLANG_BASE_URL, *config.SGLANG_MODEL_ENDPOINTS.values(), *[config.sglang_base_url_for_model(model) for model in candidates]]
+    served_by_endpoint = _served_models_by_endpoint(endpoints, api_key=config.SGLANG_API_KEY)
+    served_models = _ordered_unique(
+        [
+            model
+            for models in served_by_endpoint.values()
+            for model in models
+            if not is_sglang_model_disabled(model)
+        ]
+    )
+    if not served_models:
+        return []
+
+    available: list[str] = []
+    for model in _ordered_unique(candidates + served_models):
         served = served_by_endpoint.get(config.sglang_base_url_for_model(model), [])
         if model in served:
             available.append(model)
@@ -335,6 +380,29 @@ def list_available_models() -> dict[str, list[str]]:
     if is_cloud_allowed() and os.getenv("OPENAI_API_KEY", ""):
         grouped["openai"] = list(config.OPENAI_CANDIDATE_MODELS)
     return grouped
+
+
+def list_runtime_available_models() -> dict[str, list[str]]:
+    """Return only models that are callable in the current runtime."""
+
+    grouped: dict[str, list[str]] = {
+        "sglang": _runtime_available_sglang_models(),
+        "vllm": _runtime_available_vllm_models(),
+        "ollama": [],
+        "openai": [],
+    }
+    if is_ollama_allowed():
+        try:
+            installed = set(OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL).list_models())
+            grouped["ollama"] = [model for model in config.OLLAMA_CANDIDATE_MODELS if model in installed]
+            if config.OLLAMA_MODEL in installed and config.OLLAMA_MODEL not in grouped["ollama"]:
+                grouped["ollama"].insert(0, config.OLLAMA_MODEL)
+        except Exception:
+            grouped["ollama"] = []
+    if is_cloud_allowed() and os.getenv("OPENAI_API_KEY", ""):
+        grouped["openai"] = list(config.OPENAI_CANDIDATE_MODELS)
+    return grouped
+
 
 
 def build_llm(model: str, provider: str | None = None) -> LLMClient:

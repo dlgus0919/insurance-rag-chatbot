@@ -15,6 +15,7 @@ from src.api.deps import require_permission
 from src.api.exceptions import InvalidFormatException, SessionNotFoundException
 from src.api.models import ChatMessage, ChatSession
 from src.api.rate_limit import limiter
+from src.api.rag_service import normalize_assistant_answer_for_display
 from src.api.schemas.sessions import MessageResponse, SessionCreateRequest, SessionResponse
 from src.auth.users import User
 
@@ -88,7 +89,7 @@ async def list_messages(
             id=message.id,
             session_id=message.session_id,
             role=message.role,
-            content=message.content,
+            content=_message_content_for_display(message),
             sources=message.sources,
             created_at=message.created_at,
         )
@@ -143,8 +144,9 @@ async def export_session(
                         {
                             "timestamp": message.created_at.isoformat(),
                             "role": message.role,
-                            "content": message.content,
-                            "sources": message.sources or [],
+                            "content": _message_content_for_display(message),
+                            "sources": _public_sources(message.sources or []),
+                            **_public_export_meta(message.sources or []),
                         }
                         for message in messages
                     ],
@@ -164,8 +166,8 @@ async def export_session(
                 [
                     message.created_at.isoformat(),
                     message.role,
-                    message.content,
-                    _format_sources(message.sources or []),
+                    _message_content_for_display(message),
+                    _format_sources(_public_sources(message.sources or [])),
                 ]
             )
         return Response(buffer.getvalue(), media_type="text/csv; charset=utf-8", headers=headers)
@@ -196,14 +198,50 @@ def _format_txt_export(chat_session: ChatSession, messages: list[ChatMessage]) -
         lines.extend(
             [
                 f"[{message.created_at.strftime('%Y-%m-%d %H:%M:%S')}] {speaker}",
-                f"> {message.content}",
+                f"> {_message_content_for_display(message)}",
             ]
         )
-        sources = _format_sources(message.sources or [])
+        sources = _format_sources(_public_sources(message.sources or []))
         if sources:
             lines.append(f"출처: {sources}")
+        export_meta = _public_export_meta(message.sources or [])
+        warning_text = _format_export_warnings(export_meta.get("warnings", []))
+        if warning_text:
+            lines.append("처리 경고:")
+            for entry in warning_text.split(" | "):
+                lines.append(f"- {entry}")
+        review_text = _format_export_review_paths(export_meta.get("graph_review_paths", []))
+        if review_text:
+            lines.append("구조화 검토 경로:")
+            lines.extend(review_text.splitlines())
         lines.append("")
     return "\n".join(lines)
+
+
+def _public_sources(sources: list[dict]) -> list[dict]:
+    return [source for source in sources if source.get("__kind") != "assistant_meta"]
+
+
+def _extract_assistant_meta(sources: list[dict]) -> dict:
+    for source in sources:
+        if source.get("__kind") == "assistant_meta":
+            return source
+    return {}
+
+
+def _message_content_for_display(message: ChatMessage) -> str:
+    if message.role != "assistant":
+        return message.content
+    return normalize_assistant_answer_for_display(message.content)
+
+
+def _public_export_meta(sources: list[dict]) -> dict:
+    meta = _extract_assistant_meta(sources)
+    graph_result = meta.get("graph_result") or {}
+    return {
+        "warnings": list(meta.get("warnings") or []),
+        "graph_review_paths": list(graph_result.get("graph_review_paths") or []),
+    }
 
 
 def _format_sources(sources: list[dict]) -> str:
@@ -219,3 +257,49 @@ def _format_sources(sources: list[dict]) -> str:
             text += f" score={score}"
         formatted.append(text)
     return "; ".join(formatted)
+
+
+def _format_export_warnings(warnings: list[dict]) -> str:
+    formatted = []
+    for warning in warnings:
+        if not isinstance(warning, dict):
+            continue
+        message = str(warning.get("message") or "").strip()
+        code = str(warning.get("code") or "").strip()
+        if message and code:
+            formatted.append(f"{code}: {message}")
+        elif message:
+            formatted.append(message)
+        elif code:
+            formatted.append(code)
+    return " | ".join(formatted)
+
+
+def _format_export_review_paths(paths: list[dict]) -> str:
+    lines: list[str] = []
+    for path in paths:
+        if not isinstance(path, dict):
+            continue
+        label = str(path.get("path_type_label") or path.get("path_type") or "구조화 검토").strip()
+        status = str(path.get("status_label") or path.get("status") or "").strip()
+        heading = f"- {label}" + (f" ({status})" if status else "")
+        lines.append(heading)
+
+        summary = str(path.get("summary") or "").strip()
+        if summary:
+            lines.append(f"  요약: {summary}")
+
+        for key, title in (
+            ("required_evidence", "필요 증빙"),
+            ("review_actions", "권장 조치"),
+            ("exclusion_reasons", "적용 가능 면책 사유"),
+            ("benefit_limits", "적용 한도"),
+            ("deductible_rules", "적용 공제"),
+            ("required_documents", "필요 서류"),
+            ("coordination_rules", "중복 보상 조정"),
+            ("generation_rules", "세대/갱신 기준"),
+        ):
+            values = [str(item).strip() for item in (path.get(key) or []) if str(item).strip()]
+            if values:
+                lines.append(f"  {title}: {', '.join(values)}")
+    return "\n".join(lines)

@@ -20,7 +20,13 @@ export function hasToken() {
 // ===== 사용자 정보 관리 =====
 export function getUser() {
   const user = localStorage.getItem(STORAGE_KEYS.USER);
-  return user ? JSON.parse(user) : null;
+  if (!user) return null;
+  try {
+    return JSON.parse(user);
+  } catch {
+    localStorage.removeItem(STORAGE_KEYS.USER);
+    return null;
+  }
 }
 
 export function setUser(user) {

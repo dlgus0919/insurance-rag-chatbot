@@ -37,6 +37,35 @@ from src.retrieval.vector_store import VectorStore
 router = APIRouter(prefix="/admin", tags=["admin"])
 
 
+def _active_admin_users() -> list[User]:
+    return [
+        user
+        for user in user_store.list_users()
+        if user.role == user_store.ROLE_ADMIN and user.status == "active"
+    ]
+
+
+def _guard_admin_account_mutation(
+    target: User,
+    current: User,
+    *,
+    next_role: str | None = None,
+    next_status: str | None = None,
+) -> None:
+    is_admin_after = (next_role or target.role) == user_store.ROLE_ADMIN
+    is_active_after = (next_status or target.status) == "active"
+    removes_admin_access = target.role == user_store.ROLE_ADMIN and (not is_admin_after or not is_active_after)
+    if not removes_admin_access:
+        return
+
+    if target.username == current.username:
+        raise ValidationException(detail="현재 로그인한 관리자 계정은 비활성화, 역할 변경 또는 삭제할 수 없습니다.")
+
+    active_admin_count = len(_active_admin_users())
+    if target.status == "active" and active_admin_count <= 1:
+        raise ValidationException(detail="마지막 활성 관리자 계정은 비활성화, 역할 변경 또는 삭제할 수 없습니다.")
+
+
 GRAPH_TABLES = (
     "graph_nodes",
     "graph_edges",
@@ -600,11 +629,16 @@ async def update_admin_user(
 ) -> AdminUserResponse:
     """Update account profile, role, or status."""
 
-    if user_id == "admin":
-        if payload.status is not None and payload.status != "active":
-            raise ValidationException(detail="admin 계정은 비활성화할 수 없습니다.")
-        if payload.role is not None and payload.role != "admin":
-            raise ValidationException(detail="admin 계정의 역할은 변경할 수 없습니다.")
+    target = user_store.get_user(user_id)
+    if target is None:
+        raise UserNotFoundException(detail=f"사용자를 찾을 수 없습니다: {user_id}")
+
+    _guard_admin_account_mutation(
+        target,
+        current,
+        next_role=user_store._normalize_role(payload.role) if payload.role is not None else None,
+        next_status=payload.status,
+    )
 
     try:
         updated = user_store.update_user(
@@ -630,10 +664,11 @@ async def delete_admin_user(
 ) -> Response:
     """Permanently delete a users.json-backed account."""
 
-    if user_id == "admin":
-        raise ValidationException(detail="admin 계정은 삭제할 수 없습니다.")
-    if user_id == current.username:
-        raise ValidationException(detail="자기 자신의 계정은 삭제할 수 없습니다.")
+    target = user_store.get_user(user_id)
+    if target is None:
+        raise UserNotFoundException(detail=f"사용자를 찾을 수 없습니다: {user_id}")
+
+    _guard_admin_account_mutation(target, current, next_role="user", next_status="inactive")
 
     try:
         user_store.delete_user(user_id)

@@ -7,12 +7,11 @@ import {
   fetchAuditLogs,
   fetchSystemStats,
   fetchSystemSummary,
-  fetchGraphSyncStatus,
-  exportGraphSyncStatus,
   fetchLatestRagDiagnostics,
   fetchGraphVectorSync,
   normalizeListResponse,
-} from '../modules/admin.js?v=20260601_workspace_merge';
+} from '../modules/admin.js?v=20260531_graph_sync';
+import { fetchCurrentUser, getCurrentUser } from '../modules/auth.js';
 import { createAlertModal, createConfirmModal } from '../modules/modal.js';
 import { closeModal, getResetTargetUser, openModal, setResetTargetUser, toast } from '../modules/ui.js';
 import { escapeHTML, setTableLoading } from '../utils.js';
@@ -26,8 +25,6 @@ export {
   fetchAuditLogs,
   fetchSystemStats,
   fetchSystemSummary,
-  fetchGraphSyncStatus,
-  exportGraphSyncStatus,
   fetchLatestRagDiagnostics,
   fetchGraphVectorSync,
   normalizeListResponse,
@@ -48,6 +45,8 @@ export async function initAdminPage({ isUserAdmin, onLogout, onGoChat } = {}) {
 
 let adminActionRoot = null;
 let adminActionClickHandler = null;
+let currentAdminUserId = null;
+let activeAdminIds = new Set();
 
 export async function loadAdminDashboard() {
   await Promise.all([
@@ -92,21 +91,13 @@ async function loadAdminStats() {
   const modeDistribution = data.mode_distribution || {};
   const userDistribution = data.user_distribution || {};
   const modelDistribution = data.model_distribution || {};
-  const issueStats = data.issue_stats || {};
-  const modelQualityStats = Array.isArray(data.model_quality_stats) ? data.model_quality_stats : [];
   container.innerHTML = `
     <div class="stat-grid">
       ${renderMetricCard('누적 질문', formatNumber(data.total_queries || 0))}
       ${renderMetricCard('누적 응답', formatNumber(data.total_answers || 0))}
       ${renderMetricCard('평균 응답(초)', formatFloat(data.avg_elapsed_sec || 0))}
       ${renderMetricCard('평균 근거 수', formatFloat(data.avg_source_count || 0))}
-      ${renderMetricCard('최근 실패 질의', formatNumber(issueStats.failed_query_count || 0))}
-      ${renderMetricCard('경고 포함 질의', formatNumber(issueStats.warning_query_count || 0))}
-      ${renderMetricCard('모호성 질의', formatNumber(issueStats.ambiguity_query_count || 0))}
-      ${renderMetricCard('확인 질문', formatNumber(issueStats.clarification_question_count || 0))}
     </div>
-    ${renderIssueStatsPanel(issueStats)}
-    ${renderModelQualityStats(modelQualityStats)}
     ${renderSimpleBarChart('사용자별 질문 수', userDistribution)}
     ${renderModeChart(modeDistribution)}
     ${renderSimpleBarChart('모델별 질의 수', modelDistribution)}
@@ -120,6 +111,18 @@ async function loadAdminUsers() {
 
   setTableLoading(tbody, 7);
   const data = normalizeListResponse(await fetchAllUsers({ page: 1, pageSize: 100 }));
+  let currentUser = null;
+  try {
+    currentUser = await fetchCurrentUser();
+  } catch {
+    currentUser = getCurrentUser();
+  }
+  currentAdminUserId = currentUser?.username || currentUser?.id || null;
+  activeAdminIds = new Set(
+    data.items
+      .filter((user) => user.role === 'admin' && user.status === 'active')
+      .map((user) => user.id)
+  );
   if (badge) badge.textContent = '총 ' + data.total + '명';
   tbody.innerHTML = data.items.map(renderUserRow).join('');
 }
@@ -127,13 +130,7 @@ async function loadAdminUsers() {
 async function loadSystemSummary() {
   const container = document.getElementById('sub-system');
   if (!container) return;
-  const [data, graphSyncStatus] = await Promise.all([
-    fetchSystemSummary(),
-    fetchGraphSyncStatus().catch((error) => ({
-      available: false,
-      message: error.message || 'Graph sync 상태를 불러오지 못했습니다.',
-    })),
-  ]);
+  const data = await fetchSystemSummary();
   const indices = Array.isArray(data.indices) ? data.indices : [];
   const assets = data.assets || {};
   const llm = data.llm || {};
@@ -155,7 +152,6 @@ async function loadSystemSummary() {
         ${renderSystemFlagRow('표준코드 DB', assets.relational)}
         ${renderSystemFlagRow('users.json', assets.users)}
       </div>
-      ${renderGraphSyncExportCard(graphSyncStatus)}
       <div class="sys-card">
         <h3>LLM</h3>
         <div class="sys-row"><span class="sys-k">Ollama 허용</span><span class="sys-v ${llm.ollama_allowed ? 'ok' : 'err'}">${String(Boolean(llm.ollama_allowed))}</span></div>
@@ -293,13 +289,12 @@ function renderGraphVectorSyncPanel(data) {
         ${renderMetricCard('샘플 근거', formatNumber(total))}
         ${renderMetricCard('회수율', formatPercent(summary.hit_rate))}
         ${renderMetricCard('직접 일치', formatNumber(counts.direct_hit || 0))}
-        ${renderMetricCard('stable key 회수', formatNumber((counts.canonical_chunk_hit || 0) + (counts.source_chunk_hit || 0)))}
         ${renderMetricCard('문서/페이지 회수', formatNumber(counts.doc_page_hit || 0))}
       </div>
       <div style="padding:8px 18px 16px 18px;font-size:12px;color:var(--gray);">
         <div><strong>인덱스</strong>: ${escapeHTML(data.index_mode || '-')}</div>
         <div><strong>Chroma</strong>: ${escapeHTML(data.chroma_dir || '-')}</div>
-        <div><strong>누락</strong>: ${formatNumber(missing)}건 / canonical ${formatNumber(counts.canonical_chunk_hit || 0)}건 / source ${formatNumber(counts.source_chunk_hit || 0)}건 / fallback ID ${formatNumber(counts.fallback_hit || 0)}건</div>
+        <div><strong>누락</strong>: ${formatNumber(missing)}건 / fallback ID 회수 ${formatNumber(counts.fallback_hit || 0)}건</div>
         ${docs.length ? `
           <div style="margin-top:8px;"><strong>문서별 누락 상위</strong></div>
           <ul style="margin:4px 0 0 16px;">
@@ -312,16 +307,22 @@ function renderGraphVectorSyncPanel(data) {
 }
 
 function renderUserRow(user) {
-  const isProtected = user.id === 'admin';
+  const isSelf = currentAdminUserId && user.id === currentAdminUserId;
+  const isLastActiveAdmin = user.role === 'admin' && user.status === 'active' && activeAdminIds.size <= 1 && activeAdminIds.has(user.id);
+  const lockReason = isSelf
+    ? '현재 로그인한 계정은 비활성화 또는 삭제할 수 없습니다.'
+    : isLastActiveAdmin
+      ? '마지막 활성 관리자 계정은 비활성화 또는 삭제할 수 없습니다.'
+      : '';
   const roleClass = user.role === 'admin' ? 'admin' : user.role === 'viewer' ? 'viewer' : 'user';
   const roleLabel = user.role === 'admin' ? '관리자' : user.role === 'viewer' ? '열람자' : '사용자';
   const statusButtonText = user.status === 'active' ? '비활성화' : '활성화';
   const nextStatus = user.status === 'active' ? 'inactive' : 'active';
-  const statusButton = isProtected
-    ? '<button class="act-btn dng" type="button" disabled title="admin 계정은 비활성화할 수 없습니다.">비활성화</button>'
+  const statusButton = lockReason
+    ? `<button class="act-btn dng" type="button" disabled title="${escapeHTML(lockReason)}">${statusButtonText}</button>`
     : `<button class="act-btn dng" type="button" data-admin-action="toggle-user-status" data-user-id="${escapeHTML(user.id)}" data-user-status="${nextStatus}">${statusButtonText}</button>`;
-  const deleteButton = isProtected
-    ? '<button class="act-btn del" type="button" disabled title="admin 계정은 삭제할 수 없습니다.">삭제</button>'
+  const deleteButton = lockReason
+    ? `<button class="act-btn del" type="button" disabled title="${escapeHTML(lockReason)}">삭제</button>`
     : `<button class="act-btn del" type="button" data-admin-action="delete-user" data-user-id="${escapeHTML(user.id)}">삭제</button>`;
 
   return `
@@ -408,8 +409,12 @@ export async function resetPasswordFromModal() {
 }
 
 export async function setUserStatus(userId, status) {
-  if (userId === 'admin') {
-    toast('admin 계정은 비활성화할 수 없습니다.', 'warn');
+  if (currentAdminUserId && userId === currentAdminUserId) {
+    toast('현재 로그인한 계정은 비활성화할 수 없습니다.', 'warn');
+    return;
+  }
+  if (activeAdminIds.size <= 1 && activeAdminIds.has(userId) && status !== 'active') {
+    toast('마지막 활성 관리자 계정은 비활성화할 수 없습니다.', 'warn');
     return;
   }
 
@@ -423,8 +428,12 @@ export async function setUserStatus(userId, status) {
 }
 
 export async function deleteUserAccount(userId) {
-  if (userId === 'admin') {
-    toast('admin 계정은 삭제할 수 없습니다.', 'warn');
+  if (currentAdminUserId && userId === currentAdminUserId) {
+    toast('현재 로그인한 계정은 삭제할 수 없습니다.', 'warn');
+    return;
+  }
+  if (activeAdminIds.size <= 1 && activeAdminIds.has(userId)) {
+    toast('마지막 활성 관리자 계정은 삭제할 수 없습니다.', 'warn');
     return;
   }
 
@@ -478,8 +487,6 @@ function setupAdminActionHandlers() {
 
     if (action === 'export-audit') {
       toast('내보내기 완료');
-    } else if (action === 'export-graph-sync-status') {
-      await downloadGraphSyncStatus(actionTarget);
     } else if (action === 'open-add-user') {
       openModal('modal-add');
     } else if (action === 'close-add-user') {
@@ -500,34 +507,6 @@ function setupAdminActionHandlers() {
   };
 
   root.addEventListener('click', adminActionClickHandler);
-}
-
-async function downloadGraphSyncStatus(button) {
-  const originalText = button.textContent;
-  button.disabled = true;
-  button.textContent = '내보내는 중...';
-
-  try {
-    const { blob, filename } = await exportGraphSyncStatus();
-    downloadBlob(blob, filename);
-    toast('Graph sync 결과를 JSON 파일로 내보냈습니다.', 'success');
-  } catch (error) {
-    toast(error.message || 'Graph sync 결과 내보내기에 실패했습니다.', 'error');
-  } finally {
-    button.disabled = false;
-    button.textContent = originalText;
-  }
-}
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = filename;
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
 }
 
 function setupAdminMenuHandlers({ onLogout, onGoChat }) {
@@ -599,117 +578,6 @@ function renderMetricCard(label, value) {
   return `<div class="stat-card"><div class="stat-lbl">${escapeHTML(label)}</div><div class="stat-val">${escapeHTML(String(value))}</div></div>`;
 }
 
-function renderIssueStatsPanel(issueStats = {}) {
-  const failures = Array.isArray(issueStats.recent_failures) ? issueStats.recent_failures : [];
-  const warnings = Array.isArray(issueStats.recent_warnings) ? issueStats.recent_warnings : [];
-  const ambiguities = Array.isArray(issueStats.recent_ambiguities) ? issueStats.recent_ambiguities : [];
-
-  return `
-    <div class="chart-card">
-      <div class="chart-ttl">최근 실패 질의 / 경고 / 모호성</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">
-        ${renderIssueList('실패 질의', failures, renderFailureIssue)}
-        ${renderIssueList('경고', warnings, renderWarningIssue)}
-        ${renderIssueList('모호성', ambiguities, renderAmbiguityIssue)}
-      </div>
-      ${renderTopIssueTerms('경고 코드', issueStats.warning_code_distribution)}
-      ${renderTopIssueTerms('모호 조건', issueStats.ambiguous_term_distribution)}
-    </div>
-  `;
-}
-
-function renderModelQualityStats(rows = []) {
-  const body = rows.length
-    ? rows.map((row) => `
-      <tr>
-        <td style="font-size:12px;">${escapeHTML(row.model || '-')}</td>
-        <td>${formatNumber(row.total_attempts || 0)}</td>
-        <td>${formatNumber(row.success_count || 0)}</td>
-        <td>${formatNumber(row.failure_count || 0)}</td>
-        <td><span class="${Number(row.error_rate || 0) > 0 ? 'warn' : 'ok'}">${formatPercent(row.error_rate || 0)}</span></td>
-        <td>${row.avg_elapsed_sec == null ? '-' : `${formatFloat(row.avg_elapsed_sec)}s`}</td>
-        <td><span class="${Number(row.citation_missing_rate || 0) > 0 ? 'warn' : 'ok'}">${row.citation_missing_rate == null ? '-' : formatPercent(row.citation_missing_rate)}</span></td>
-      </tr>
-    `).join('')
-    : '<tr><td colspan="7" style="font-size:12px;color:var(--gray);">모델별 품질 통계가 없습니다.</td></tr>';
-
-  return `
-    <div class="data-card" style="margin-top:14px;">
-      <div class="data-card-hd"><h3>모델별 품질 지표</h3></div>
-      <table>
-        <thead><tr><th>모델</th><th>시도</th><th>성공</th><th>실패</th><th>오류율</th><th>평균 응답</th><th>Citation 누락률</th></tr></thead>
-        <tbody>${body}</tbody>
-      </table>
-    </div>
-  `;
-}
-
-function renderIssueList(title, items, renderer) {
-  const rows = items.length
-    ? items.map(renderer).join('')
-    : '<div style="font-size:12px;color:var(--gray);padding:8px 0;">최근 항목 없음</div>';
-  return `
-    <div style="min-width:0;">
-      <div style="font-size:12px;font-weight:800;margin-bottom:8px;">${escapeHTML(title)}</div>
-      ${rows}
-    </div>
-  `;
-}
-
-function renderFailureIssue(item) {
-  return renderIssueBox(
-    item,
-    `<div style="color:var(--danger);">${escapeHTML(item.error_code || 'CHAT_QUERY_FAILED')}</div>
-     <div>${escapeHTML(item.error_message || '오류 메시지 없음')}</div>`
-  );
-}
-
-function renderWarningIssue(item) {
-  const warnings = Array.isArray(item.warnings) ? item.warnings : [];
-  const text = warnings.map(formatWarning).join(' / ') || `${formatNumber(item.warning_count || 0)}건`;
-  return renderIssueBox(item, `<div>${escapeHTML(text)}</div>`);
-}
-
-function renderAmbiguityIssue(item) {
-  const terms = Array.isArray(item.ambiguous_terms) ? item.ambiguous_terms : [];
-  const questions = Array.isArray(item.clarification_questions) ? item.clarification_questions : [];
-  const termText = terms.length ? terms.join(', ') : '모호 조건';
-  const questionText = questions.length ? questions.join(' / ') : '';
-  return renderIssueBox(
-    item,
-    `<div>${escapeHTML(termText)}</div>${questionText ? `<div>${escapeHTML(questionText)}</div>` : ''}`
-  );
-}
-
-function renderIssueBox(item, bodyHtml) {
-  return `
-    <div style="border:1px solid var(--border);border-radius:8px;padding:9px 10px;margin-top:8px;font-size:12px;line-height:1.45;background:var(--soft-bg);">
-      <div style="font-weight:700;color:var(--navy);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHTML(item.query_preview || '-')}</div>
-      <div style="color:var(--gray);margin-top:3px;">${escapeHTML(formatDateTime(item.created_at))} · ${escapeHTML(item.user_id || '-')} · ${escapeHTML(item.model || '-')}</div>
-      <div style="margin-top:5px;color:var(--gray);">${bodyHtml}</div>
-    </div>
-  `;
-}
-
-function renderTopIssueTerms(title, distribution = {}) {
-  const rows = Object.entries(distribution || {})
-    .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
-    .slice(0, 6);
-  if (!rows.length) return '';
-  return `
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:12px;font-size:12px;">
-      <strong>${escapeHTML(title)}</strong>
-      ${rows.map(([label, value]) => `<span style="border:1px solid var(--border);border-radius:999px;padding:4px 8px;background:var(--white);">${escapeHTML(label)} ${formatNumber(value)}</span>`).join('')}
-    </div>
-  `;
-}
-
-function formatWarning(warning) {
-  if (typeof warning === 'string') return warning;
-  if (!warning || typeof warning !== 'object') return '경고';
-  return warning.code || warning.message || '경고';
-}
-
 function renderSimpleBarChart(title, distribution) {
   const rows = Object.entries(distribution || {})
     .sort((a, b) => Number(b[1] || 0) - Number(a[1] || 0))
@@ -761,51 +629,6 @@ function renderModeChart(distribution) {
 
 function renderSystemFlagRow(label, enabled) {
   return `<div class="sys-row"><span class="sys-k">${escapeHTML(label)}</span><span class="sys-v ${enabled ? 'ok' : 'err'}">${enabled ? '있음' : '없음'}</span></div>`;
-}
-
-function renderGraphSyncExportCard(data) {
-  if (!data?.available) {
-    return `
-      <div class="sys-card">
-        <h3>GraphDB 적재 결과</h3>
-        <div class="sys-row"><span class="sys-k">상태</span><span class="sys-v err">불가</span></div>
-        <div style="font-size:12px;color:var(--gray);line-height:1.5;margin-top:8px;">${escapeHTML(data?.message || 'GraphDB 적재 결과를 불러오지 못했습니다.')}</div>
-      </div>
-    `;
-  }
-
-  const loadedRows = data.loaded_rows || {};
-  const operation = data.operation_summary || {};
-  const nodeCount = loadedRows.nodes ?? data.manifest_counts?.nodes;
-  const edgeCount = loadedRows.edges ?? data.manifest_counts?.edges;
-  const evidenceCount = loadedRows.evidence ?? data.manifest_counts?.evidence;
-  const aliasCount = loadedRows.aliases ?? data.manifest_counts?.aliases;
-  const errorCount = Number(operation.technical_error_count || 0);
-  const networkError = operation.network_error_applicable === false
-    ? '해당 없음'
-    : formatNumber(operation.network_error_count || 0);
-  const statusText = data.pipeline_success ? '성공' : data.status || '확인 필요';
-  return `
-    <div class="sys-card">
-      <h3>GraphDB 적재 결과</h3>
-      <div class="sys-row"><span class="sys-k">작업 상태</span><span class="sys-v ${data.pipeline_success ? 'ok' : 'warn'}">${escapeHTML(statusText)}</span></div>
-      <div class="sys-row"><span class="sys-k">마지막 실행</span><span class="sys-v">${escapeHTML(formatDateTime(data.build_date))}</span></div>
-      <div class="sys-row"><span class="sys-k">적재 대상</span><span class="sys-v">${escapeHTML(data.sync_target || 'GraphDB')}</span></div>
-      <div class="sys-row"><span class="sys-k">소스 모드</span><span class="sys-v">${escapeHTML(data.source_mode || '-')}</span></div>
-      <div class="sys-row"><span class="sys-k">노드 적재</span><span class="sys-v">${formatNumber(nodeCount)}</span></div>
-      <div class="sys-row"><span class="sys-k">관계 적재</span><span class="sys-v">${formatNumber(edgeCount)}</span></div>
-      <div class="sys-row"><span class="sys-k">근거 적재</span><span class="sys-v">${formatNumber(evidenceCount)}</span></div>
-      <div class="sys-row"><span class="sys-k">별칭 적재</span><span class="sys-v">${formatNumber(aliasCount)}</span></div>
-      <div class="sys-row"><span class="sys-k">기술 오류</span><span class="sys-v ${errorCount ? 'err' : 'ok'}">${formatNumber(errorCount)}</span></div>
-      <div class="sys-row"><span class="sys-k">네트워크 오류</span><span class="sys-v">${escapeHTML(networkError)}</span></div>
-      <div style="font-size:11px;color:var(--gray);line-height:1.45;margin-top:8px;">${escapeHTML(data.metric_note || '')}</div>
-      <div style="margin-top:12px;">
-        <button class="topbar-btn pri" type="button" data-admin-action="export-graph-sync-status">
-          작업 결과 JSON
-        </button>
-      </div>
-    </div>
-  `;
 }
 
 function renderRagStepRow(step) {

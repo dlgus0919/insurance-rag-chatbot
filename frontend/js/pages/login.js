@@ -1,4 +1,5 @@
 import { createAlertModal } from '../modules/modal.js';
+import { MODEL_SELECTION_SOURCES } from '../modules/model-selection.js';
 import { showError } from '../ui/notification.js';
 import { fetchAPI } from '../api.js';
 import { STORAGE_KEYS } from '../config.js';
@@ -36,6 +37,7 @@ export async function initLoginPage({ onLogin } = {}) {
         return;
       }
       localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, selectedModel);
+      localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE, MODEL_SELECTION_SOURCES.EXPLICIT);
 
       const originalText = loginButton.textContent;
       loginButton.disabled = true;

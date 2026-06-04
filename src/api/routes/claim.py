@@ -20,6 +20,7 @@ from src.claim_calculation.pipeline import run_claim_calculation
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/claim", tags=["claim"])
+CLAIM_RAG_TOP_K = config.CLAIM_RAG_TOP_K
 
 MODEL_ALIAS = {
     "gemma4": "vllm:gemma-4-26b-a4b-nvfp4",
@@ -42,7 +43,7 @@ async def calculate_claim(
     selected_model = _select_model(payload)
     warnings: list[str] = []
     try:
-        pipeline = get_rag_pipeline(selected_model, payload.top_k, payload.index_mode)
+        pipeline = get_rag_pipeline(selected_model, CLAIM_RAG_TOP_K, payload.index_mode)
     except Exception as exc:
         pipeline = None
         warnings.append("RAG 근거 초기화에 실패하여 구조화 계산만 수행했습니다.")

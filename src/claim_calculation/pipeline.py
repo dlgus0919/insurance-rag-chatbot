@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from decimal import Decimal
 from typing import Any
 
+from src import config
 from src.claim_calculation.models import (
     ClaimItemInput,
     ClaimCaseContext,
@@ -156,6 +158,18 @@ def _is_upper_room_difference(item: ClaimItemInput) -> bool:
     return "상급병실" in text or "병실료 차액" in text
 
 
+def _has_coordination_signal(context: ClaimCaseContext) -> bool:
+    text = " ".join(
+        [
+            context.coverage_topic or "",
+            context.situation_note or "",
+            context.diagnosis_name or "",
+            context.accident_type or "",
+        ]
+    )
+    return any(keyword in text for keyword in config.CLAIM_COORDINATION_SIGNAL_KEYWORDS)
+
+
 def _calculate_line_items(
     items: list[ClaimItemInput],
     context: ClaimCaseContext,
@@ -178,7 +192,12 @@ def _calculate_line_items(
         line_review = False
         line_reasons: list[str] = []
 
-        if _is_ambiguous_match(match):
+        if _is_upper_room_difference(item):
+            capped_daily_amount = min(unit_amount, Decimal("100000"))
+            payable = capped_daily_amount * quantity * Decimal("0.5")
+            deductible = amount - payable
+            rule = "상급병실료 차액 특례: 1일 평균 10만원 한도 내 비급여 병실료의 50% 보상"
+        elif _is_ambiguous_match(match):
             deductible = Decimal("0")
             payable = Decimal("0")
             rule = "표준모델 후보 모호성으로 계산 보류"
@@ -221,11 +240,6 @@ def _calculate_line_items(
                 line_reasons.append(f"처방약 건당 한도 {rx_rule.per_visit_limit:,.0f}원 초과분 {excess:,.0f}원은 자기부담입니다.")
             rule = rx_rule.description
             category = "처방약"
-        elif _is_upper_room_difference(item):
-            capped_daily_amount = min(unit_amount, Decimal("100000"))
-            payable = capped_daily_amount * quantity * Decimal("0.5")
-            deductible = amount - payable
-            rule = "상급병실료 차액 특례: 1일 평균 10만원 한도 내 비급여 병실료의 50% 보상"
         else:
             deductible, rule, category_review = _line_deductible(amount, category, generation, context.visit_type, context.facility_grade)
             payable = amount - deductible
@@ -411,13 +425,7 @@ def run_claim_calculation(
             if context.complication_asserted:
                 query_parts.append("합병증")
             if context.same_disease_claimed:
-                query_parts.append("하나의 질병 동일 질병")
-            if context.same_treatment_purpose_claimed:
-                query_parts.append("같은 치료 목적")
-            if context.recurrent_or_continuing_treatment:
-                query_parts.append("2회 이상 반복 치료 계속 입원")
-            if context.newly_found_disease_claimed:
-                query_parts.append("새로 발견된 질병 병행 치료")
+                query_parts.append("하나의 질병")
             if context.treatment_purpose:
                 query_parts.append(context.treatment_purpose)
             if context.policy_generation:
@@ -453,6 +461,7 @@ def run_claim_calculation(
                     "source": f"GraphDB ReviewPath ({path.status})",
                     "content": f"{path.path_type}: {path.summary}",
                     "page": "N/A",
+                    "display_in_applied_basis": False,
                 })
         except Exception as e:
             logger.error(f"GraphDB 근거 조회 중 에러 발생: {e}")
@@ -627,15 +636,10 @@ def run_claim_calculation(
 
     # Graph candidate rule 검토 플래그 강제 적용
     if graph_result:
-        try:
-            from src.api.rag_service import graph_result_to_payload
-
-            graph_payload = graph_result_to_payload(graph_result) or {}
-            graph_review_paths_payload = list(graph_payload.get("graph_review_paths") or [])
-            session_assertions_payload = list(graph_payload.get("session_assertions") or [])
-        except Exception as exc:
-            logger.warning("Graph review path payload serialization failed: %s", exc)
         review_paths = getattr(graph_result, "review_paths", []) or []
+        graph_review_paths_payload = [asdict(path) for path in review_paths]
+        session_assertions_payload = [asdict(assertion) for assertion in getattr(graph_result, "session_assertions", []) or []]
+        coordination_requested = _has_coordination_signal(context)
         if context.complication_asserted and review_paths:
             review_required = True
             reason = "합병증/후유증/부작용 상황이 주장되어 구조화 검토 경로와 추가 서류 확인이 필요합니다."
@@ -676,6 +680,8 @@ def run_claim_calculation(
                     _append_unique(missing_evidence, item)
                     review_required = True
             for item in getattr(path, "coordination_rules", []) or []:
+                if not coordination_requested:
+                    continue
                 _append_unique(coordination_rules, item)
                 review_required = True
                 reason = f"중복 보상 조정 검토가 필요합니다: {item}"
@@ -750,6 +756,8 @@ def run_claim_calculation(
             })
     # RAG 문서 근거 추가
     for ev in retrieved_evidences:
+        if not ev.get("display_in_applied_basis", True):
+            continue
         applied_basis.append({
             "source": f"{ev['source']} p.{ev['page']}",
             "content": ev["content"][:200] + ("..." if len(ev["content"]) > 200 else "")

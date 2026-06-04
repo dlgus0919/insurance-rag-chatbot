@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -16,10 +17,45 @@ from src.api.db import init_db
 from src.api.exceptions import AppException, error_response
 from src.api.middleware import request_id_middleware
 from src.api.rate_limit import RateLimitExceeded, limiter
+from src.api.rag_service import get_rag_pipeline
+from src.api.routes.claim import CLAIM_RAG_TOP_K
 from src.api.routes import admin, auth, chat, claim, sessions, system
 from src.api.settings import get_api_settings
+from src import config
 
 logger = logging.getLogger(__name__)
+
+
+async def _warm_claim_rag_pipelines() -> None:
+    """Warm claim-calculation retrieval pipelines in the background after startup."""
+
+    model = f"sglang:{config.SGLANG_DEFAULT_MODEL}"
+    for index_mode in ("default", "v2_only"):
+        try:
+            await asyncio.to_thread(get_rag_pipeline, model, CLAIM_RAG_TOP_K, index_mode)
+            logger.info("Prewarmed claim RAG pipeline: model=%s index_mode=%s top_k=%s", model, index_mode, CLAIM_RAG_TOP_K)
+        except Exception as exc:  # pragma: no cover - runtime fallback
+            logger.warning("Claim RAG prewarm failed: model=%s index_mode=%s error=%s", model, index_mode, exc)
+
+
+async def _warm_primary_chat_rag_pipelines() -> None:
+    """Warm the most common chat/formal retrieval pipelines after startup."""
+
+    model = f"sglang:{config.SGLANG_DEFAULT_MODEL}"
+    top_k = 10
+    for index_mode in ("default", "v2_only"):
+        try:
+            await asyncio.to_thread(get_rag_pipeline, model, top_k, index_mode)
+            logger.info("Prewarmed chat RAG pipeline: model=%s index_mode=%s top_k=%s", model, index_mode, top_k)
+        except Exception as exc:  # pragma: no cover - runtime fallback
+            logger.warning("Chat RAG prewarm failed: model=%s index_mode=%s error=%s", model, index_mode, exc)
+
+
+async def _warm_primary_rag_pipelines() -> None:
+    """Warm claim and primary chat pipelines together."""
+
+    await _warm_primary_chat_rag_pipelines()
+    await _warm_claim_rag_pipelines()
 
 
 @asynccontextmanager
@@ -27,6 +63,7 @@ async def lifespan(_: FastAPI):
     """Initialize API-owned resources."""
 
     await init_db()
+    await _warm_primary_rag_pipelines()
     yield
 
 

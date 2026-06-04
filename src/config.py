@@ -17,6 +17,12 @@ if load_dotenv is not None:
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
 
+def _parse_csv_env(name: str, default: str) -> list[str]:
+    """Parse comma-separated environment values while preserving order."""
+
+    return [item.strip() for item in os.getenv(name, default).split(",") if item.strip()]
+
+
 @dataclass
 class PdfSource:
     """인제스트 대상 PDF 문서 정보."""
@@ -182,11 +188,7 @@ SGLANG_DEFAULT_CANDIDATES = (
     "qwen3-next-80b-a3b-instruct-fp8,"
     "qwen3-next-80b-a3b-thinking-fp8"
 )
-SGLANG_CANDIDATE_MODELS: list[str] = [
-    model.strip()
-    for model in os.getenv("SGLANG_CANDIDATE_MODELS", SGLANG_DEFAULT_CANDIDATES).split(",")
-    if model.strip()
-]
+SGLANG_CANDIDATE_MODELS: list[str] = _parse_csv_env("SGLANG_CANDIDATE_MODELS", SGLANG_DEFAULT_CANDIDATES)
 # `nvidia/Gemma-4-26B-A4B-NVFP4` is a vLLM-oriented NVFP4 checkpoint.
 # On the current native SGLang stack it serves but generates repeated <pad> tokens.
 SGLANG_DISABLED_MODELS: set[str] = {
@@ -229,11 +231,7 @@ VLLM_BASE_URL: str = os.getenv("VLLM_BASE_URL", "http://127.0.0.1:30001/v1")
 VLLM_API_KEY: str = os.getenv("VLLM_API_KEY", "EMPTY")
 VLLM_DEFAULT_MODEL: str = os.getenv("VLLM_DEFAULT_MODEL", "gemma-4-26b-a4b-nvfp4")
 VLLM_DEFAULT_CANDIDATES = "gemma-4-26b-a4b-nvfp4,gemma-4-31b-it-nvfp4,nemotron-3-nano-30b-a3b-nvfp4"
-VLLM_CANDIDATE_MODELS: list[str] = [
-    model.strip()
-    for model in os.getenv("VLLM_CANDIDATE_MODELS", VLLM_DEFAULT_CANDIDATES).split(",")
-    if model.strip()
-]
+VLLM_CANDIDATE_MODELS: list[str] = _parse_csv_env("VLLM_CANDIDATE_MODELS", VLLM_DEFAULT_CANDIDATES)
 VLLM_MODEL_ENDPOINTS: dict[str, str] = _parse_sglang_model_endpoints(os.getenv("VLLM_MODEL_ENDPOINTS", ""))
 VLLM_ENABLE_APP_SWITCH: bool = os.getenv("VLLM_ENABLE_APP_SWITCH", "true").lower() == "true"
 VLLM_SWITCH_SCRIPT: Path = Path(os.getenv("VLLM_SWITCH_SCRIPT", "/srv/ai-ops/bin/switch-vllm-model"))
@@ -266,10 +264,16 @@ OPENAI_EXCLUDED_STREAMING_MODELS: set[str] = {
     "gpt-5.2-pro-2025-12-11",
 }
 OPENAI_CANDIDATE_MODELS: list[str] = [
-    model.strip()
-    for model in os.getenv("OPENAI_CANDIDATE_MODELS", ",".join(DEFAULT_OPENAI_CANDIDATE_MODELS)).split(",")
-    if model.strip() and model.strip() not in OPENAI_EXCLUDED_STREAMING_MODELS
+    model
+    for model in _parse_csv_env("OPENAI_CANDIDATE_MODELS", ",".join(DEFAULT_OPENAI_CANDIDATE_MODELS))
+    if model not in OPENAI_EXCLUDED_STREAMING_MODELS
 ]
+
+CLAIM_RAG_TOP_K: int = int(os.getenv("CLAIM_RAG_TOP_K", "6"))
+CLAIM_COORDINATION_SIGNAL_KEYWORDS: list[str] = _parse_csv_env(
+    "CLAIM_COORDINATION_SIGNAL_KEYWORDS",
+    "자동차보험,자동차 보험,교통사고,산재보험,산재,산업재해,타 보험,다른 보험,중복 보상,이미 보상,근로복지공단 처리건,국민건강보험 선보상",
+)
 
 TOP_K_DENSE: int = int(os.getenv("TOP_K_DENSE", "12"))
 TOP_K_BM25: int = int(os.getenv("TOP_K_BM25", "12"))

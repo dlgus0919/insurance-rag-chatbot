@@ -9,10 +9,16 @@ from fastapi import APIRouter
 
 from src import config
 from src.api.schemas.system import HealthResponse, ModelInfo, ModelListResponse, SystemStatusResponse
-from src.llm.factory import format_model_label, list_available_models
+from src.llm.factory import format_model_label, list_runtime_available_models as _list_runtime_available_models
 from src.retrieval.index_mode import resolve_index_paths
 
 router = APIRouter(tags=["system"])
+
+
+def list_available_models() -> dict[str, list[str]]:
+    """Backward-compatible model discovery hook used by older route tests."""
+
+    return _list_runtime_available_models()
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -24,7 +30,7 @@ async def health() -> HealthResponse:
 
 @router.get("/system/models", response_model=ModelListResponse)
 async def models() -> ModelListResponse:
-    """Return provider-grouped model choices from env and Ollama state."""
+    """Return provider-grouped model choices that are callable right now."""
 
     grouped = list_available_models()
     local = []

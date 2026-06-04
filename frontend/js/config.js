@@ -30,7 +30,6 @@ export const API_CONFIG = {
     ADMIN_LOGS: '/admin/logs',
     ADMIN_STATS: '/admin/stats',
     ADMIN_SYSTEM_SUMMARY: '/admin/system-summary',
-    ADMIN_GRAPH_SYNC_STATUS: '/admin/graph-sync-status',
     ADMIN_RAG_DIAGNOSTICS: '/admin/rag-diagnostics/latest',
     ADMIN_GRAPH_VECTOR_SYNC: '/admin/graph-vector-sync',
     ADMIN_SESSIONS: '/admin/sessions',
@@ -51,9 +50,14 @@ export const STORAGE_KEYS = {
   TOKEN: 'auth_token',
   USER: 'user_info',
   SELECTED_LLM_MODEL: 'selected_llm_model',
+  SELECTED_LLM_MODEL_SOURCE: 'selected_llm_model_source',
   SESSIONS: 'chat_sessions',
   THEME: 'app_theme',
   PREFERENCES: 'app_preferences',
+};
+
+export const SESSION_KEYS = {
+  FRESH_CHAT_NOTICE: 'chat_fresh_notice',
 };
 
 // ===== 애플리케이션 상수 =====

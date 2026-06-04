@@ -73,7 +73,11 @@ async def chat_stream(
             system_prompt = SYSTEM_PROMPT
             doc_filter = None
             if chat_request.mode == "quickcode":
-                chunks, sources, prompt, system_prompt = await prepare_quickcode_context(chat_request.query)
+                chunks, sources, prompt, system_prompt, doc_filter = await prepare_quickcode_context(
+                    pipeline,
+                    chat_request.query,
+                    chat_request.filters,
+                )
             elif chat_request.mode == "formal":
                 chunks, sources, prompt, doc_filter = await prepare_formal_context(
                     pipeline,
@@ -89,10 +93,15 @@ async def chat_stream(
                     chat_request.query,
                     chat_request.top_k,
                     history,
-                    chat_request.clarification,
+                    chat_request.filters,
                 )
             yield _sse("sources", sources)
             if graph_payload is not None:
+                logger.info(
+                    "chat graph payload review_paths=%s exclusions=%s",
+                    [path.get("path_type") for path in graph_payload.get("graph_review_paths", [])],
+                    [path.get("exclusion_reasons") for path in graph_payload.get("graph_review_paths", [])],
+                )
                 yield _sse("graph", graph_payload)
             for warning in warnings:
                 yield _sse("warning", warning)
@@ -115,14 +124,21 @@ async def chat_stream(
                     "code": "EMPTY_LLM_OUTPUT",
                     "message": "모델 응답 본문이 비어 있어 답변을 생성하지 못했습니다.",
                 }
-                warnings.append(empty_warning)
                 yield _sse("warning", empty_warning)
                 answer = "모델 응답 본문이 비어 있어 답변을 생성하지 못했습니다. 검색 근거를 다시 확인해 주세요."
             else:
                 answer = finalize_answer_for_question(chat_request.query, raw_answer, chunks)
             yield _sse("final", {"answer": answer})
             yield _sse("done", {"session_id": chat_session.id, "answer": answer})
-            await _persist_turn(db, chat_session.id, chat_request.query, answer, sources)
+            await _persist_turn(
+                db,
+                chat_session.id,
+                chat_request.query,
+                answer,
+                sources,
+                graph_payload=graph_payload,
+                warnings=warnings,
+            )
             await log_audit_event(
                 db,
                 "CHAT_QUERY",
@@ -131,11 +147,15 @@ async def chat_stream(
                 detail={
                     "model": selected_model,
                     "mode": chat_request.mode,
+                    "search_type": (
+                        (chat_request.filters or {}).get("search_type")
+                        if chat_request.mode == "formal"
+                        else None
+                    ),
                     "top_k": chat_request.top_k,
                     "temperature": chat_request.temperature,
                     "index_mode": chat_request.index_mode,
                     "effective_index_mode": effective_index_mode,
-                    "clarification": chat_request.clarification,
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
                     "session_id": chat_session.id,
                     "source_count": len(sources),
@@ -159,26 +179,6 @@ async def chat_stream(
             raise
         except Exception as exc:
             await _close_stream(llm_stream)
-            await log_audit_event(
-                db,
-                "CHAT_QUERY_FAILED",
-                user_id=user.username,
-                ip_address=_client_ip(request),
-                detail={
-                    "model": selected_model,
-                    "mode": chat_request.mode,
-                    "top_k": chat_request.top_k,
-                    "temperature": chat_request.temperature,
-                    "index_mode": chat_request.index_mode,
-                    "effective_index_mode": effective_index_mode,
-                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
-                    "session_id": chat_session.id,
-                    "query_preview": chat_request.query.strip()[:200],
-                    "error_code": "CHAT_STREAM_FAILED",
-                    "error_message": str(exc),
-                    "request_id": getattr(getattr(request, "state", None), "request_id", None),
-                },
-            )
             yield _sse("error", {"code": "CHAT_STREAM_FAILED", "message": str(exc)})
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -355,11 +355,22 @@ async def _persist_turn(
     query: str,
     answer: str,
     sources: list[dict],
+    graph_payload: dict | None = None,
+    warnings: list[dict] | None = None,
 ) -> None:
+    persisted_sources = list(sources)
+    if graph_payload is not None or warnings:
+        persisted_sources.append(
+            {
+                "__kind": "assistant_meta",
+                "graph_result": graph_payload,
+                "warnings": warnings or [],
+            }
+        )
     db.add_all(
         [
             ChatMessage(session_id=session_id, role="user", content=query, sources=None),
-            ChatMessage(session_id=session_id, role="assistant", content=answer, sources=sources),
+            ChatMessage(session_id=session_id, role="assistant", content=answer, sources=persisted_sources),
         ]
     )
     await db.commit()

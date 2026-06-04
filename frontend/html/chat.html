@@ -63,6 +63,15 @@
           <span class="range-val">0.3</span>
         </div>
       </div>
+      <div class="s-divider"></div>
+      <div class="model-badge-wrap" id="active-model-badge" aria-live="polite">
+        <span class="model-badge-label">활성 모델</span>
+        <span class="model-badge-value" id="active-model-label">확인 중...</span>
+      </div>
+      <div class="model-switcher-wrap" id="model-switcher-wrap">
+        <label class="model-switcher-label" for="active-model-select">모델 변경</label>
+        <select class="model-switcher-select" id="active-model-select" aria-label="활성 모델 변경"></select>
+      </div>
       <div class="export-wrap">
         <button class="export-btn" type="button" data-action="toggle-export">
           <svg width="12" height="12" fill="none" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -86,12 +95,12 @@
 
     <div class="ocr-index-bar">
       <span class="mode-label">OCR 인덱스</span>
-      <label class="radio-pill" style="display: none;">
-        <input type="radio" name="ocr-index" value="default">
+      <label class="radio-pill">
+        <input type="radio" name="ocr-index" value="default" checked>
         <span>기본 운영 인덱스</span>
       </label>
       <label class="radio-pill">
-        <input type="radio" name="ocr-index" value="v2_only" checked>
+        <input type="radio" name="ocr-index" value="v2_only">
         <span>보정본 OCR만</span>
       </label>
       <label class="radio-pill">
@@ -107,8 +116,8 @@
           <input class="p-input" type="text" placeholder="예: 백내장 / Q15.0 / 수정체유화술"/>
         </div>
         <div style="padding-bottom:2px;">
-          <label class="check-item"><input type="checkbox" checked> 분류.점수.산정지침 요약</label>
-          <label class="check-item"><input type="checkbox" checked> 실손 약관 기준 보상가능 여부 검색</label>
+          <label class="check-item"><input id="quick-include-summary" type="checkbox" checked> 분류.점수.산정지침 요약</label>
+          <label class="check-item"><input id="quick-include-coverage" type="checkbox" checked> 실손 약관 기준 보상가능 여부 검색</label>
         </div>
         <button class="btn-sm" type="button" data-action="send-quick">검색</button>
       </div>
@@ -122,9 +131,9 @@
         <div class="scenario-chip" data-toggle-active="true">암보험</div>
       </div>
       <div class="formal-radios">
-        <label class="radio-item"><input type="radio" name="ftype" checked> 보상가능 여부 판정</label>
-        <label class="radio-item"><input type="radio" name="ftype"> 약관 조문 검색</label>
-        <label class="radio-item"><input type="radio" name="ftype"> 키워드/시술명 검색</label>
+        <label class="radio-item"><input type="radio" name="ftype" value="보상가능 여부 판정" checked> 보상가능 여부 판정</label>
+        <label class="radio-item"><input type="radio" name="ftype" value="약관 조문 검색"> 약관 조문 검색</label>
+        <label class="radio-item"><input type="radio" name="ftype" value="키워드/시술명 검색"> 키워드/시술명 검색</label>
       </div>
       <div class="panel-row">
         <div class="p-field" style="max-width:200px;">
@@ -189,7 +198,6 @@
                 <option value="3대비급여">3대비급여</option>
                 <option value="중증비급여">5세대 중증 비급여</option>
                 <option value="비중증비급여">5세대 비중증 비급여</option>
-                <option value="처방약">처방약(약제비)</option>
               </select>
             </div>
             <button class="btn-sm claim-remove-line" type="button" data-action="remove-claim-line" aria-label="청구 항목 삭제">삭제</button>
@@ -225,12 +233,12 @@
     <div class="input-area">
       <div class="doc-scope">
         <span class="scope-label">문서 범위</span>
-        <div class="scope-chip active" data-action="toggle-scope">전체</div>
-        <div class="scope-chip" data-action="toggle-scope">실손 약관</div>
-        <div class="scope-chip" data-action="toggle-scope">3대비급여</div>
-        <div class="scope-chip" data-action="toggle-scope">급여/비급여</div>
-        <div class="scope-chip" data-action="toggle-scope">분류점수산정</div>
-        <div class="scope-chip" data-action="toggle-scope">판례/심사례</div>
+        <div class="scope-chip active" data-action="toggle-scope" data-scope="전체">전체</div>
+        <div class="scope-chip" data-action="toggle-scope" data-scope="실손 약관">실손 약관</div>
+        <div class="scope-chip" data-action="toggle-scope" data-scope="3대비급여">3대비급여</div>
+        <div class="scope-chip" data-action="toggle-scope" data-scope="급여/비급여">급여/비급여</div>
+        <div class="scope-chip" data-action="toggle-scope" data-scope="분류점수산정">분류점수산정</div>
+        <div class="scope-chip" data-action="toggle-scope" data-scope="판례/심사례">판례/심사례</div>
       </div>
       <div class="input-row">
         <textarea class="chat-ta" id="chat-input" placeholder="보상 관련 질문을 입력하세요... (Shift+Enter 줄바꿈)" rows="1"></textarea>

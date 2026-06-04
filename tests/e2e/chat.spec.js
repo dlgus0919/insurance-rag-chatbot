@@ -253,6 +253,24 @@ test.describe('채팅 플로우', () => {
     );
   });
 
+  test('명확화 UX는 버튼으로 제공된 확인 항목을 질문 목록에 중복 노출하지 않는다', async ({ page }) => {
+    const graphPayload = {
+      plan: {
+        ambiguous_terms: ["상품/특약"],
+        clarification_questions: ["어떤 상품 또는 특약 가입 여부를 기준으로 볼지 확인해 주세요."]
+      }
+    };
+    await mockChatStream(page, graphPayload);
+
+    await page.fill('#chat-input', '합병증 특약 보상이 되나요?');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('#typing')).toBeHidden({ timeout: 10000 });
+
+    const clarification = page.locator('.msg-clarifications').last();
+    await expect(clarification.locator('.clarify-section', { hasText: '상품/특약' })).toBeVisible();
+    await expect(clarification).not.toContainText('어떤 상품 또는 특약 가입 여부를 기준으로 볼지 확인해 주세요.');
+  });
+
   test('명확화 UX는 화면에 없는 조건을 프리셋으로 합성하지 않는다', async ({ page }) => {
     const graphPayload = {
       plan: {

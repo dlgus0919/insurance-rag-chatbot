@@ -134,3 +134,157 @@ def test_graph_retriever_builds_coordination_and_generation_rule_paths(tmp_path:
     assert any(path.path_type == "generation_rule_review" for path in generation.review_paths)
     assert any("5세대 실손 적용 규칙" in path.generation_rules for path in generation.review_paths)
     assert any("도수치료 횟수 한도" in path.benefit_limits for path in generation.review_paths)
+
+
+def test_graph_retriever_keeps_diagnosis_review_rules_scoped_to_current_context(tmp_path: Path) -> None:
+    db_path = tmp_path / "graph.sqlite"
+    store = GraphStore(db_path)
+    chunks_path = tmp_path / "chunks.jsonl"
+    chunks = [
+        {
+            "id": "약관_ch_0001",
+            "text": (
+                "제5조 N39.3 요실금은 보상하지 않는다. "
+                "자동차보험으로 이미 보상받은 치료비는 실손에서 조정한다. "
+                "5세대 실손 통원은 공제와 한도를 적용한다."
+            ),
+            "metadata": {
+                "doc_short": "약관",
+                "doc_name": "실손 약관",
+                "pdf_filename": "medical.pdf",
+                "page_start": 90,
+                "page_end": 90,
+                "section": "제5조(보상하지 않는 사항)",
+                "codes": ["N39.3"],
+            },
+        },
+    ]
+    chunks_path.write_text("".join(json.dumps(chunk, ensure_ascii=False) + "\n" for chunk in chunks), encoding="utf-8")
+    PolicyReviewExtractor(store).extract(chunks_path)
+    store.close()
+
+    retriever = GraphRetriever(db_path)
+    result = retriever.retrieve("N39.3 진단코드로 보상 가능 여부 알려주세요")
+
+    diagnosis_path = next(path for path in result.review_paths if path.path_type == "diagnosis_review")
+    assert diagnosis_path.exclusion_reasons
+    assert diagnosis_path.exclusion_reasons == ["약관상 보상제외 치료"]
+    assert diagnosis_path.coordination_rules == []
+    assert diagnosis_path.generation_rules == []
+    assert diagnosis_path.deductible_rules == []
+    assert diagnosis_path.benefit_limits == []
+
+    result_with_broad_topic = retriever.retrieve("N39.3 진단코드로 실손 보상 가능 여부 알려주세요")
+    broad_topic_path = next(path for path in result_with_broad_topic.review_paths if path.path_type == "diagnosis_review")
+    assert broad_topic_path.exclusion_reasons == ["약관상 보상제외 치료"]
+    assert broad_topic_path.coordination_rules == []
+    assert broad_topic_path.generation_rules == []
+    assert broad_topic_path.deductible_rules == []
+    assert broad_topic_path.benefit_limits == []
+
+
+def test_graph_retriever_keeps_diagnosis_coordination_exclusion_only_when_query_has_context(tmp_path: Path) -> None:
+    db_path = tmp_path / "graph.sqlite"
+    store = GraphStore(db_path)
+    chunks_path = tmp_path / "chunks.jsonl"
+    chunks = [
+        {
+            "id": "약관_ch_0001",
+            "text": (
+                "제5조 N39.3 요실금은 보상하지 않는다. "
+                "자동차보험으로 이미 보상받은 치료비는 실손에서 조정한다."
+            ),
+            "metadata": {
+                "doc_short": "약관",
+                "doc_name": "실손 약관",
+                "pdf_filename": "medical.pdf",
+                "page_start": 90,
+                "page_end": 90,
+                "section": "제5조(보상하지 않는 사항)",
+                "codes": ["N39.3"],
+            },
+        },
+    ]
+    chunks_path.write_text("".join(json.dumps(chunk, ensure_ascii=False) + "\n" for chunk in chunks), encoding="utf-8")
+    PolicyReviewExtractor(store).extract(chunks_path)
+    store.close()
+
+    retriever = GraphRetriever(db_path)
+    result = retriever.retrieve("자동차보험으로 처리된 N39.3 진단코드 치료비도 보상 가능 여부 알려주세요")
+
+    diagnosis_path = next(path for path in result.review_paths if path.path_type == "diagnosis_review")
+    assert "약관상 보상제외 치료" in diagnosis_path.exclusion_reasons
+    assert "자동차보험 처리 대상" in diagnosis_path.exclusion_reasons
+
+
+def test_graph_retriever_keeps_general_diagnosis_exclusions_without_coordination_context(tmp_path: Path) -> None:
+    db_path = tmp_path / "graph.sqlite"
+    store = GraphStore(db_path)
+    chunks_path = tmp_path / "chunks.jsonl"
+    chunks = [
+        {
+            "id": "약관_ch_0001",
+            "text": (
+                "제5조 N39.3 요실금은 보상하지 않는다. "
+                "고의 또는 중대한 과실로 생긴 손해와 전쟁, 폭동, 소요, 사변으로 생긴 손해는 보상하지 않는다. "
+                "자동차보험으로 이미 보상받은 치료비는 실손에서 조정한다."
+            ),
+            "metadata": {
+                "doc_short": "약관",
+                "doc_name": "실손 약관",
+                "pdf_filename": "medical.pdf",
+                "page_start": 91,
+                "page_end": 91,
+                "section": "제5조(보상하지 않는 사항)",
+                "codes": ["N39.3"],
+            },
+        },
+    ]
+    chunks_path.write_text("".join(json.dumps(chunk, ensure_ascii=False) + "\n" for chunk in chunks), encoding="utf-8")
+    PolicyReviewExtractor(store).extract(chunks_path)
+    store.close()
+
+    retriever = GraphRetriever(db_path)
+    result = retriever.retrieve("N39.3 진단코드로 보상 가능 여부 알려주세요")
+
+    diagnosis_path = next(path for path in result.review_paths if path.path_type == "diagnosis_review")
+    assert "약관상 보상제외 치료" in diagnosis_path.exclusion_reasons
+    assert "고의 또는 중대한 과실" in diagnosis_path.exclusion_reasons
+    assert "전쟁/폭동 등 일반 면책" in diagnosis_path.exclusion_reasons
+    assert "자동차보험 처리 대상" not in diagnosis_path.exclusion_reasons
+
+
+def test_graph_retriever_reintroduces_coordination_exclusion_when_query_has_context(tmp_path: Path) -> None:
+    db_path = tmp_path / "graph.sqlite"
+    store = GraphStore(db_path)
+    chunks_path = tmp_path / "chunks.jsonl"
+    chunks = [
+        {
+            "id": "약관_ch_0001",
+            "text": (
+                "제5조 N39.3 요실금은 보상하지 않는다. "
+                "고의 또는 중대한 과실로 생긴 손해는 보상하지 않는다. "
+                "자동차보험으로 이미 보상받은 치료비는 실손에서 조정한다."
+            ),
+            "metadata": {
+                "doc_short": "약관",
+                "doc_name": "실손 약관",
+                "pdf_filename": "medical.pdf",
+                "page_start": 92,
+                "page_end": 92,
+                "section": "제5조(보상하지 않는 사항)",
+                "codes": ["N39.3"],
+            },
+        },
+    ]
+    chunks_path.write_text("".join(json.dumps(chunk, ensure_ascii=False) + "\n" for chunk in chunks), encoding="utf-8")
+    PolicyReviewExtractor(store).extract(chunks_path)
+    store.close()
+
+    retriever = GraphRetriever(db_path)
+    result = retriever.retrieve("자동차보험으로 처리된 N39.3 진단코드 치료비도 보상 가능 여부 알려주세요")
+
+    diagnosis_path = next(path for path in result.review_paths if path.path_type == "diagnosis_review")
+    assert "약관상 보상제외 치료" in diagnosis_path.exclusion_reasons
+    assert "고의 또는 중대한 과실" in diagnosis_path.exclusion_reasons
+    assert "자동차보험 처리 대상" in diagnosis_path.exclusion_reasons

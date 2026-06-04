@@ -188,10 +188,10 @@
   <div class="modal-card">
     <div class="modal-ttl">사용자 추가</div>
     <div class="modal-desc">신규 챗봇 사용자 계정을 생성합니다.</div>
-    <div class="form-group"><label class="form-label">아이디 (사번)</label><input class="form-input" id="add-user-id" placeholder="예: user004"/></div>
-    <div class="form-group"><label class="form-label">이름</label><input class="form-input" id="add-user-name" placeholder="예: 홍길동"/></div>
-    <div class="form-group"><label class="form-label">이메일</label><input class="form-input" id="add-user-email" placeholder="예: hong@shinhan.co.kr"/></div>
-    <div class="form-group"><label class="form-label">임시 비밀번호</label><input class="form-input" id="add-user-password" type="password" placeholder="8자 이상"/></div>
+    <div class="form-group"><label class="form-label">아이디 (사번)</label><input class="form-input" id="add-user-id" name="new-user-id" placeholder="예: user004" autocomplete="off" autocapitalize="off" spellcheck="false"/></div>
+    <div class="form-group"><label class="form-label">이름</label><input class="form-input" id="add-user-name" name="new-user-name" placeholder="예: 홍길동" autocomplete="off" spellcheck="false"/></div>
+    <div class="form-group"><label class="form-label">이메일</label><input class="form-input" id="add-user-email" name="new-user-email" placeholder="예: hong@shinhan.co.kr" autocomplete="off" autocapitalize="off" spellcheck="false"/></div>
+    <div class="form-group"><label class="form-label">임시 비밀번호</label><input class="form-input" id="add-user-password" name="new-user-password" type="password" placeholder="8자 이상" autocomplete="new-password"/></div>
     <div class="form-group"><label class="form-label">역할</label><select class="form-input" id="add-user-role"><option value="user">사용자 (user)</option><option value="admin">관리자 (admin)</option><option value="viewer">열람자 (viewer)</option></select></div>
     <div class="modal-acts">
       <button class="mbtn" type="button" data-admin-action="close-add-user">취소</button>

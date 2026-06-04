@@ -9,14 +9,14 @@ from typing import Any
 
 from src import config
 from src.api.models import ChatMessage
-from src.graph.context import build_graph_context, build_graph_summary
+from src.graph.context import build_graph_context
 from src.llm.factory import build_llm
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.rag.evidence import append_evidence_validation_warning
 from src.rag.pipeline import RagPipeline, _deterministic_guard_answer, _hit_to_chunk
+from src.rag.quick_code import build_quick_code_prompt, retrieve_quick_code_chunks
 from src.rag.table_store import TableStore
 from src.retrieval.bm25 import BM25Index
-from src.retrieval.chunk_lookup import ChunkLookupRef
 from src.retrieval.embedder import Embedder
 from src.retrieval.index_mode import INDEX_MODES, resolve_effective_index_mode, resolve_index_paths
 from src.retrieval.reranker import build_reranker
@@ -41,21 +41,41 @@ _PRODUCT_DOC_FILTERS = {
     "health": ["자사_SOL건강"],
     "standard": ["표준약관"],
 }
+_FORMAL_CATEGORY_DOC_FILTERS = {
+    "실손": ["약관", "표준약관"],
+    "3대비급여": ["약관", "표준약관"],
+    "암보험": ["자사_SOL건강"],
+}
+_EMBEDDED_REVIEW_TEMPLATE_MARKERS = (
+    "■ 섹션 1",
+    "섹션 1️⃣",
+    "【확정 근거】",
+)
+_EMBEDDED_REVIEW_SECTION_PATTERN = re.compile(r"^\s*■\s*섹션\s*\d")
+_EMBEDDED_REVIEW_HEADING_PATTERN = re.compile(r"^\s*【[^】]+】\s*$")
+_EMBEDDED_REVIEW_BULLET_PATTERN = re.compile(r"^\s*(?:[-*•]\s+|☐\s*|→\s*\d+\.\s*|→\s*)")
+_SOURCE_CITATION_LINE_PATTERN = re.compile(r"^\s*\[출처:\s*.+\]\s*$")
+_TRAILING_SOURCE_NOTE_PATTERN = re.compile(r"^\s*\(참고:\s*.+\)\s*$")
+
+
+@lru_cache(maxsize=1)
+def _load_shared_retrieval_components():
+    embedder = Embedder(config.EMBEDDING_MODEL, allow_remote_download=config.HF_MODEL_DOWNLOAD)
+    reranker = build_reranker(enabled=config.RERANKER_ENABLED)
+    return embedder, reranker
 
 
 @lru_cache(maxsize=4)
-def _load_heavy_components(index_mode: str):
+def _load_index_retrieval_components(index_mode: str):
     bm25_path, chroma_dir = _resolve_index_paths(index_mode)
     if not bm25_path.exists():
         raise RuntimeError(
             f"BM25 인덱스가 없습니다: {bm25_path}. "
             "`python scripts/ingest.py --stage index`를 먼저 실행하세요."
         )
-    embedder = Embedder(config.EMBEDDING_MODEL, allow_remote_download=config.HF_MODEL_DOWNLOAD)
     vector_store = VectorStore(chroma_dir)
     bm25 = BM25Index.load(bm25_path)
-    reranker = build_reranker(enabled=config.RERANKER_ENABLED)
-    return embedder, vector_store, bm25, reranker
+    return vector_store, bm25
 
 
 @lru_cache(maxsize=16)
@@ -66,7 +86,8 @@ def get_rag_pipeline(
 ) -> RagPipeline:
     """Build a cached RAG pipeline for API requests."""
 
-    embedder, vector_store, bm25, reranker = _load_heavy_components(index_mode)
+    embedder, reranker = _load_shared_retrieval_components()
+    vector_store, bm25 = _load_index_retrieval_components(index_mode)
     llm = build_llm(model)
     return RagPipeline(
         embedder=embedder,
@@ -141,7 +162,7 @@ async def prepare_retrieved_context(
     question: str,
     top_k: int,
     history: list[ChatMessage],
-    clarification: dict | None = None,
+    filters: dict | None = None,
 ):
     """Retrieve chunks, GraphDB facts, source metadata, and a prompt for generation."""
 
@@ -152,21 +173,18 @@ async def prepare_retrieved_context(
 
     if getattr(pipeline, "graph_enabled", False) and getattr(pipeline, "graph_retriever", None):
         try:
-            graph_result = pipeline.graph_retriever.retrieve(question, clarification=clarification)
+            graph_result = pipeline.graph_retriever.retrieve(question)
             graph_context = build_graph_context(graph_result)
             source_chunk_ids = getattr(graph_result, "source_chunk_ids", []) or []
-            source_chunk_refs = getattr(graph_result, "source_chunk_refs", []) or []
-            if source_chunk_refs:
-                graph_hits = pipeline.vector_store.get_by_refs(source_chunk_refs)
-            elif source_chunk_ids:
+            if source_chunk_ids:
                 graph_hits = pipeline.vector_store.get_by_ids(source_chunk_ids)
-            found_ids = {hit.id for hit in graph_hits}
-            missing_ids = [chunk_id for chunk_id in source_chunk_ids if chunk_id not in found_ids]
-            if missing_ids:
-                logger.info(
-                    "GraphDB source chunks are not present in current VectorStore: %s",
-                    ", ".join(missing_ids[:5]),
-                )
+                found_ids = {hit.id for hit in graph_hits}
+                missing_ids = [chunk_id for chunk_id in source_chunk_ids if chunk_id not in found_ids]
+                if missing_ids:
+                    logger.info(
+                        "GraphDB source chunks are not present in current VectorStore: %s",
+                        ", ".join(missing_ids[:5]),
+                    )
         except Exception as exc:  # pragma: no cover - runtime fallback
             logger.warning("Graph retrieval failed in API path: %s", exc, exc_info=True)
             warnings.append({
@@ -177,7 +195,14 @@ async def prepare_retrieved_context(
             graph_context = ""
             graph_hits = []
 
-    hits, debug = pipeline.retrieve_hits(question, top_k=top_k, graph_hits=graph_hits, return_debug=True)
+    doc_filter = extract_doc_filter(filters)
+    hits, debug = pipeline.retrieve_hits(
+        question,
+        top_k=top_k,
+        doc_filter=doc_filter,
+        graph_hits=graph_hits,
+        return_debug=True,
+    )
     chunks = [_hit_to_chunk(hit) for hit in hits]
     sources = [chunk_to_source(chunk) for chunk in chunks]
     prompt = pipeline.build_prompt(question, chunks, graph_context=graph_context)
@@ -197,6 +222,19 @@ def extract_structured_terms(query: str) -> list[str]:
     if query.strip() not in terms:
         terms.append(query.strip())
     return [term for term in terms if term]
+
+
+def extract_doc_filter(filters: dict | None) -> list[str] | None:
+    """Normalize requested doc_short filters from frontend payloads."""
+
+    filters = filters or {}
+    explicit = filters.get("doc_filter") or filters.get("doc_short")
+    if isinstance(explicit, str):
+        explicit = [explicit]
+    if not isinstance(explicit, list):
+        return None
+    values = [str(item).strip() for item in explicit if str(item).strip()]
+    return list(dict.fromkeys(values)) or None
 
 
 def _format_table_row(row: dict, row_type: str) -> str:
@@ -239,12 +277,50 @@ def graph_review_path_type_label(path_type: str) -> str:
         "claim_calculation_review": "보험금 계산 검토",
         "coordination_review": "중복 보상 조정 검토",
         "generation_rule_review": "세대/갱신 기준 검토",
-        "one_disease_review": "하나의 질병 검토",
-        "disease_grouping_review": "질병 묶음 기준 검토",
-        "claim_unit_limit_review": "보상 단위/한도 검토",
-        "same_disease_surgery_review": "동일 질병 수술비 검토",
-        "recurrent_treatment_review": "반복/계속 치료 검토",
     }.get(path_type or "", path_type or "구조화 검토")
+
+
+_CONFIRMED_DIAGNOSIS_EXCLUSION_REASON = "약관상 보상제외 치료"
+_EXCLUSION_RESOLVED_CLARIFICATION_KEYWORDS = (
+    "실손 세대",
+    "입원/통원",
+    "처방조제",
+    "방문 구분",
+    "진료비 영수증",
+    "진료비 세부내역서",
+    "진단서",
+    "증빙",
+)
+_EXCLUSION_RESOLVED_AMBIGUOUS_TERMS = {"실손 세대", "방문 구분", "증빙 서류"}
+
+
+def _has_confirmed_diagnosis_exclusion_path(review_paths: list[dict]) -> bool:
+    for path in review_paths:
+        if path.get("path_type") != "diagnosis_review":
+            continue
+        if path.get("status") != "confirmed":
+            continue
+        if _CONFIRMED_DIAGNOSIS_EXCLUSION_REASON in (path.get("exclusion_reasons") or []):
+            return True
+    return False
+
+
+def _prune_clarification_for_confirmed_exclusion(plan_payload: dict, review_paths: list[dict]) -> None:
+    """Do not ask generation/visit/evidence follow-ups after a direct exclusion is confirmed."""
+
+    if not _has_confirmed_diagnosis_exclusion_path(review_paths):
+        return
+
+    plan_payload["clarification_questions"] = [
+        question
+        for question in plan_payload.get("clarification_questions", [])
+        if not any(keyword in question for keyword in _EXCLUSION_RESOLVED_CLARIFICATION_KEYWORDS)
+    ]
+    plan_payload["ambiguous_terms"] = [
+        term
+        for term in plan_payload.get("ambiguous_terms", [])
+        if term not in _EXCLUSION_RESOLVED_AMBIGUOUS_TERMS
+    ]
 
 
 def graph_result_to_payload(result: Any) -> dict | None:
@@ -253,9 +329,6 @@ def graph_result_to_payload(result: Any) -> dict | None:
     if result is None:
         return None
     plan = getattr(result, "plan", None)
-    source_chunk_refs = list(getattr(result, "source_chunk_refs", []) or [])
-    if not source_chunk_refs:
-        source_chunk_refs = _collect_payload_source_chunk_refs(result)
     facts = []
     review_paths = []
     session_assertions = []
@@ -269,8 +342,6 @@ def graph_result_to_payload(result: Any) -> dict | None:
                 "page_start": getattr(evidence, "page_start", None),
                 "page_end": getattr(evidence, "page_end", None),
                 "chunk_id": getattr(evidence, "chunk_id", None),
-                "canonical_chunk_id": getattr(evidence, "canonical_chunk_id", None),
-                "source_chunk_id": getattr(evidence, "source_chunk_id", None),
                 "source_version": getattr(evidence, "source_version", None),
                 "confidence": getattr(evidence, "confidence", None),
             })
@@ -303,8 +374,6 @@ def graph_result_to_payload(result: Any) -> dict | None:
                     "page_start": getattr(evidence, "page_start", None),
                     "page_end": getattr(evidence, "page_end", None),
                     "chunk_id": getattr(evidence, "chunk_id", None),
-                    "canonical_chunk_id": getattr(evidence, "canonical_chunk_id", None),
-                    "source_chunk_id": getattr(evidence, "source_chunk_id", None),
                 })
             steps.append({
                 "source": getattr(step, "source", ""),
@@ -342,151 +411,104 @@ def graph_result_to_payload(result: Any) -> dict | None:
         "generation_rules": sorted({item for path in review_paths for item in path.get("generation_rules", [])}),
     }
 
+    plan_payload = {
+        "intents": list(getattr(plan, "intents", []) or []),
+        "procedure_name": getattr(plan, "procedure_name", None),
+        "category": getattr(plan, "category", None),
+        "grade_system": getattr(plan, "grade_system", None),
+        "grade_value": getattr(plan, "grade_value", None),
+        "requested_peer_count": getattr(plan, "requested_peer_count", None),
+        "diagnosis_codes": list(getattr(plan, "diagnosis_codes", []) or []),
+        "coverage_topics": list(getattr(plan, "coverage_topics", []) or []),
+        "conditions": list(getattr(plan, "conditions", []) or []),
+        "complication_asserted": getattr(plan, "complication_asserted", False),
+        "treatment_purpose": getattr(plan, "treatment_purpose", None),
+        "evidence_tags": list(getattr(plan, "evidence_tags", []) or []),
+        "policy_generation": getattr(plan, "policy_generation", None),
+        "visit_type": getattr(plan, "visit_type", None),
+        "facility_type": getattr(plan, "facility_type", None),
+        "normalized_terms": dict(getattr(plan, "normalized_terms", {}) or {}),
+        "term_correction_candidates": list(getattr(plan, "term_correction_candidates", []) or []),
+        "ambiguous_terms": list(getattr(plan, "ambiguous_terms", []) or []),
+        "clarification_questions": list(getattr(plan, "clarification_questions", []) or []),
+    }
+    _prune_clarification_for_confirmed_exclusion(plan_payload, review_paths)
+
     return {
-        "plan": {
-            "intents": list(getattr(plan, "intents", []) or []),
-            "procedure_name": getattr(plan, "procedure_name", None),
-            "category": getattr(plan, "category", None),
-            "grade_system": getattr(plan, "grade_system", None),
-            "grade_value": getattr(plan, "grade_value", None),
-            "requested_peer_count": getattr(plan, "requested_peer_count", None),
-            "diagnosis_codes": list(getattr(plan, "diagnosis_codes", []) or []),
-            "coverage_topics": list(getattr(plan, "coverage_topics", []) or []),
-            "conditions": list(getattr(plan, "conditions", []) or []),
-            "complication_asserted": getattr(plan, "complication_asserted", False),
-            "treatment_purpose": getattr(plan, "treatment_purpose", None),
-            "evidence_tags": list(getattr(plan, "evidence_tags", []) or []),
-            "policy_generation": getattr(plan, "policy_generation", None),
-            "visit_type": getattr(plan, "visit_type", None),
-            "facility_type": getattr(plan, "facility_type", None),
-            "one_disease_terms": list(getattr(plan, "one_disease_terms", []) or []),
-            "claim_unit_terms": list(getattr(plan, "claim_unit_terms", []) or []),
-            "disease_grouping_requested": getattr(plan, "disease_grouping_requested", False),
-            "same_disease_claimed": getattr(plan, "same_disease_claimed", False),
-            "same_treatment_purpose_claimed": getattr(plan, "same_treatment_purpose_claimed", False),
-            "recurrent_or_continuing_treatment": getattr(plan, "recurrent_or_continuing_treatment", False),
-            "newly_found_disease_claimed": getattr(plan, "newly_found_disease_claimed", False),
-            "normalized_terms": dict(getattr(plan, "normalized_terms", {}) or {}),
-            "term_correction_candidates": list(getattr(plan, "term_correction_candidates", []) or []),
-            "ambiguous_terms": list(getattr(plan, "ambiguous_terms", []) or []),
-            "clarification_questions": list(getattr(plan, "clarification_questions", []) or []),
-        },
+        "plan": plan_payload,
         "facts": facts,
         "session_assertions": session_assertions,
         "graph_review_paths": review_paths,
-        "graph_summary": build_graph_summary(result),
         "required_evidence": list(getattr(result, "required_evidence", []) or []),
         "review_actions": list(getattr(result, "review_actions", []) or []),
         **rule_payload,
         "source_chunk_ids": list(getattr(result, "source_chunk_ids", []) or []),
-        "source_chunk_refs": [
-            {
-                "requested_id": getattr(ref, "requested_id", ""),
-                "canonical_chunk_id": getattr(ref, "canonical_chunk_id", None),
-                "source_chunk_id": getattr(ref, "source_chunk_id", None),
-                "doc_short": getattr(ref, "doc_short", None),
-                "page_start": getattr(ref, "page_start", None),
-                "page_end": getattr(ref, "page_end", None),
-            }
-            for ref in source_chunk_refs
-        ],
         "warnings": list(getattr(result, "warnings", []) or []),
     }
 
 
-def _collect_payload_source_chunk_refs(result: Any) -> list[ChunkLookupRef]:
-    refs: list[ChunkLookupRef] = []
-    seen: set[tuple[str, str | None, str | None, str | None, int | None, int | None]] = set()
+async def prepare_quickcode_context(
+    pipeline: RagPipeline,
+    query: str,
+    filters: dict | None = None,
+):
+    """Build quick-code retrieval context from UI options and requested scope."""
 
-    def _append(evidence: Any) -> None:
-        requested_id = getattr(evidence, "chunk_id", None)
-        if not requested_id:
-            return
-        ref = ChunkLookupRef(
-            requested_id=requested_id,
-            canonical_chunk_id=getattr(evidence, "canonical_chunk_id", None),
-            source_chunk_id=getattr(evidence, "source_chunk_id", None),
-            doc_short=getattr(evidence, "doc_short", None),
-            page_start=getattr(evidence, "page_start", None),
-            page_end=getattr(evidence, "page_end", None),
-        )
-        key = (
-            ref.requested_id,
-            ref.canonical_chunk_id,
-            ref.source_chunk_id,
-            ref.doc_short,
-            ref.page_start,
-            ref.page_end,
-        )
-        if key in seen:
-            return
-        seen.add(key)
-        refs.append(ref)
+    filters = filters or {}
+    include_summary = bool(filters.get("include_summary", True))
+    include_coverage = bool(filters.get("include_coverage", True))
+    selected_docs = extract_doc_filter(filters)
 
-    for fact in getattr(result, "facts", []) or []:
-        for evidence in getattr(fact, "evidence", []) or []:
-            _append(evidence)
-    for path in getattr(result, "review_paths", []) or []:
-        for step in getattr(path, "steps", []) or []:
-            for evidence in getattr(step, "evidence", []) or []:
-                _append(evidence)
-    return refs
-
-
-async def prepare_quickcode_context(query: str):
-    """Build strict table-backed context for quickcode mode."""
-
-    matched_row: dict | None = None
-    row_type = "not_found"
-    for term in extract_structured_terms(query):
-        matched_row = _TABLE_STORE.lookup_surgery_grade(term)
-        if matched_row:
-            row_type = "surgery_grade"
-            break
-        matched_row = _TABLE_STORE.lookup_disability_rate(term)
-        if matched_row:
-            row_type = "disability_rate"
-            break
-
-    if not matched_row:
-        prompt = (
-            "[정형 매핑 데이터]\n"
-            "일치하는 수술종수 또는 장해율 정형 테이블 행을 찾지 못했습니다.\n\n"
-            f"[사용자 질문]\n{query}"
-        )
-        return [], [], prompt, QUICKCODE_SYSTEM_PROMPT
-
-    table_context = _format_table_row(matched_row, row_type)
-    source = {
-        "filename": matched_row.get("source_file") or "정형 테이블",
-        "doc_short": "정형테이블",
-        "page": matched_row.get("source_page_label"),
-        "chunk_id": f"structured-{row_type}",
-        "snippet": table_context[:180],
-        "table_type": row_type,
-    }
-    prompt = (
-        f"{table_context}\n\n"
-        f"[사용자 질문]\n{query}\n\n"
-        "위 표의 수치와 조건을 그대로 사용해 답변하세요. 표에 없는 값은 추측하지 마세요."
+    chunks, applied_doc_filter = retrieve_quick_code_chunks(
+        pipeline,
+        query,
+        include_coverage=include_coverage,
+        selected_docs=selected_docs,
     )
-    return [], [source], prompt, QUICKCODE_SYSTEM_PROMPT
+    sources = [chunk_to_source(chunk) for chunk in chunks]
+    system_prompt, prompt = build_quick_code_prompt(
+        query,
+        chunks,
+        include_summary=include_summary,
+        include_coverage=include_coverage,
+    )
+    if applied_doc_filter:
+        prompt = f"[적용 문서 필터] {', '.join(applied_doc_filter)}\n\n{prompt}"
+    return chunks, sources, prompt, system_prompt, applied_doc_filter
 
 
 def formal_doc_filter(filters: dict | None) -> list[str] | None:
     """Translate formal-mode filters into doc_short filters."""
 
     filters = filters or {}
-    explicit = filters.get("doc_filter") or filters.get("doc_short")
-    if isinstance(explicit, str):
-        return [explicit]
-    if isinstance(explicit, list):
-        return [str(item) for item in explicit if item]
+    merged: list[str] = []
+    explicit = extract_doc_filter(filters)
+    if explicit:
+        merged.extend(explicit)
 
     category = filters.get("product_category")
-    if category is None:
-        return ["약관"]
-    return _PRODUCT_DOC_FILTERS.get(str(category), ["약관"])
+    categories = category if isinstance(category, list) else [category] if category else []
+    for item in categories:
+        merged.extend(_FORMAL_CATEGORY_DOC_FILTERS.get(str(item), _PRODUCT_DOC_FILTERS.get(str(item), [])))
+
+    return list(dict.fromkeys(merged or ["약관"]))
+
+
+def build_formal_retrieval_query(question: str, filters: dict | None) -> str:
+    """Shape the retrieval query to reflect the formal search intent."""
+
+    search_type = ((filters or {}).get("search_type") or "").strip()
+    normalized_question = question.strip()
+    if not search_type or not normalized_question:
+        return normalized_question
+
+    if search_type == "약관 조문 검색":
+        hint = "약관 조문 별표 보상내용 보상하지 않는 사항 보험금 지급"
+    elif search_type == "키워드/시술명 검색":
+        hint = "키워드 시술명 수술명 치료명 검사명"
+    else:
+        hint = "보상 가능 여부 판단 약관 기준 지급 제외"
+    return f"{normalized_question}\n{hint}"
 
 
 async def prepare_formal_context(
@@ -500,12 +522,26 @@ async def prepare_formal_context(
     """Build formal-mode context with a forced metadata/doc filter."""
 
     doc_filter = formal_doc_filter(filters)
-    hits, _ = pipeline.retrieve_hits(question, top_k=top_k, doc_filter=doc_filter)
+    retrieval_query = build_formal_retrieval_query(question, filters)
+    hits, _ = pipeline.retrieve_hits(retrieval_query, top_k=top_k, doc_filter=doc_filter)
     chunks = [_hit_to_chunk(hit) for hit in hits]
     sources = [chunk_to_source(chunk) for chunk in chunks]
-    prompt_question = question
+    prompt_blocks: list[str] = []
+    search_type = (filters or {}).get("search_type")
+    if search_type:
+        prompt_blocks.append(f"[검색 유형]\n{search_type}")
+    product_category = (filters or {}).get("product_category")
+    if product_category:
+        if isinstance(product_category, list):
+            names = ", ".join(str(item) for item in product_category if item)
+        else:
+            names = str(product_category)
+        if names:
+            prompt_blocks.append(f"[선택 시나리오]\n{names}")
+    prompt_blocks.append(question)
+    prompt_question = "\n\n".join(prompt_blocks)
     if memo:
-        prompt_question = f"{question}\n\n[상황 메모]\n{memo.strip()}"
+        prompt_question = f"{prompt_question}\n\n[상황 메모]\n{memo.strip()}"
     prompt = pipeline.build_prompt(prompt_question, chunks)
     history_context = build_history_context(history)
     if history_context:
@@ -519,11 +555,108 @@ def finalize_answer(raw_answer: str, chunks: list) -> str:
     return finalize_answer_for_question("", raw_answer, chunks)
 
 
+def strip_embedded_review_template(raw_answer: str) -> str:
+    """Remove model-written review template blocks so frontend can render authoritative panels."""
+
+    text = raw_answer.strip()
+    if not text:
+        return ""
+
+    cut_positions = [text.find(marker) for marker in _EMBEDDED_REVIEW_TEMPLATE_MARKERS if text.find(marker) >= 0]
+    if not cut_positions:
+        return text
+
+    cut_index = min(cut_positions)
+    leading = text[:cut_index].rstrip()
+    if not leading:
+        answer_marker = text.find("[답변]")
+        if answer_marker >= 0:
+            extracted = text[answer_marker + len("[답변]"):].strip()
+            return extracted or text
+        return _summarize_embedded_review_template(text)
+    return leading
+
+
+def _summarize_embedded_review_template(text: str) -> str:
+    """Collapse a pure review-template body into a concise user-facing summary."""
+
+    candidates: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.replace("\u00a0", " ").strip()
+        if not line:
+            continue
+        if line.startswith("[출처:"):
+            continue
+        if _EMBEDDED_REVIEW_SECTION_PATTERN.match(line):
+            continue
+        if _EMBEDDED_REVIEW_HEADING_PATTERN.match(line):
+            continue
+        if line == "해당 없음":
+            continue
+        if "Graph review path" in line:
+            continue
+        if line.startswith("⚠️"):
+            continue
+        if line.startswith("➜"):
+            continue
+        if "현황:" in line and "중요도:" in line:
+            continue
+
+        cleaned = _EMBEDDED_REVIEW_BULLET_PATTERN.sub("", line).strip()
+        if not cleaned:
+            continue
+        if cleaned not in candidates:
+            candidates.append(cleaned)
+
+    if not candidates:
+        return "제공된 구조화 검토 경로 기준으로 추가 확인이 필요합니다."
+
+    summary = " ".join(candidates[:3]).strip()
+    summary = re.sub(r"\s+", " ", summary)
+    if summary and summary[-1] not in ".!?":
+        summary += "."
+    return summary
+
+
+def strip_trailing_source_citation_lines(text: str) -> str:
+    """Remove only trailing source-only blocks rendered separately by the UI/export."""
+
+    lines = text.strip().splitlines()
+    if not lines:
+        return ""
+
+    end = len(lines)
+    note_removed = False
+    while end > 0:
+        line = lines[end - 1].strip()
+        if not line:
+            end -= 1
+            continue
+        if _SOURCE_CITATION_LINE_PATTERN.match(line):
+            end -= 1
+            continue
+        if not note_removed and _TRAILING_SOURCE_NOTE_PATTERN.match(line):
+            note_removed = True
+            end -= 1
+            continue
+        break
+
+    cleaned = "\n".join(line.rstrip() for line in lines[:end]).strip()
+    return cleaned or text.strip()
+
+
+def normalize_assistant_answer_for_display(text: str) -> str:
+    """Normalize stored/generated assistant text for UI and export display."""
+
+    return strip_trailing_source_citation_lines(strip_embedded_review_template(text))
+
+
 def finalize_answer_for_question(question: str, raw_answer: str, chunks: list) -> str:
     """Apply source citations and evidence validation warnings to a generated answer."""
 
-    answer = append_retrieved_source_citations(raw_answer.strip(), chunks)
-    return append_evidence_validation_warning(answer, question, chunks)
+    answer = append_retrieved_source_citations(strip_embedded_review_template(raw_answer), chunks)
+    answer = append_evidence_validation_warning(answer, question, chunks)
+    return normalize_assistant_answer_for_display(answer)
 
 
 __all__ = [
@@ -535,9 +668,11 @@ __all__ = [
     "formal_doc_filter",
     "graph_result_to_payload",
     "get_rag_pipeline",
+    "normalize_assistant_answer_for_display",
     "build_history_context",
     "prepare_formal_context",
     "prepare_quickcode_context",
     "prepare_retrieved_context",
+    "strip_embedded_review_template",
     "summarize_legacy_messages",
 ]
