@@ -5,7 +5,7 @@ import { toast } from './modules/ui.js';
 import { apiFetch } from './utils.js';
 import { STORAGE_KEYS } from './config.js';
 import { initLoginCanvas, initLoginPage } from './pages/login.js?v=20260602_model_sync_fix1';
-import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260603_chat_model_switch_fix1';
+import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260605_qwen_reasoning_toggle';
 import { initAdminPage } from './pages/admin.js?v=20260602_claim_reset_fix1';
 
 const PAGES = {

@@ -32,7 +32,7 @@ def test_payload_disables_nemotron_thinking_for_vllm() -> None:
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_payload_disables_qwen_thinking_for_sglang() -> None:
+def test_payload_qwen_thinking_reasoning_off_disables_template_thinking() -> None:
     client = OpenAICompatibleClient(
         "qwen3-next-80b-a3b-thinking-fp8",
         base_url="http://localhost:30000/v1",
@@ -40,10 +40,23 @@ def test_payload_disables_qwen_thinking_for_sglang() -> None:
         provider="sglang",
     )
 
-    payload = client._payload("질문", "시스템", 0.1, stream=True)
+    payload = client._payload("질문", "시스템", 0.1, stream=True, reasoning_mode="off")
 
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert "reasoning_effort" not in payload
+
+
+def test_payload_qwen_thinking_reasoning_on_enables_template_thinking() -> None:
+    client = OpenAICompatibleClient(
+        "qwen3-next-80b-a3b-thinking-fp8",
+        base_url="http://localhost:30000/v1",
+        api_key="EMPTY",
+        provider="sglang",
+    )
+
+    payload = client._payload("질문", "시스템", 0.1, stream=True, reasoning_mode="on")
+
+    assert payload["chat_template_kwargs"] == {"enable_thinking": True}
 
 
 def test_generate_reports_connection_error(monkeypatch) -> None:
@@ -74,6 +87,14 @@ def test_extract_visible_content_removes_thinking_block() -> None:
     assert _extract_visible_content("reasoning only", require_think_end=True) == ""
     assert (
         _extract_visible_content("Okay, I should think first.", require_think_end=True, fallback_on_hidden=True)
+        == THINKING_EMPTY_FINAL_FALLBACK
+    )
+    assert (
+        _extract_visible_content(
+            'The user asks me to answer "정상 사용 가능합니다." in Korean, so I should provide that.',
+            require_think_end=True,
+            fallback_on_hidden=True,
+        )
         == THINKING_EMPTY_FINAL_FALLBACK
     )
 
@@ -215,7 +236,9 @@ def test_generate_qwen_thinking_without_end_token_returns_fallback(monkeypatch) 
         ),
     )
 
-    assert client.generate("질문") == THINKING_EMPTY_FINAL_FALLBACK
+    assert client.generate("질문", reasoning_mode="on") == THINKING_EMPTY_FINAL_FALLBACK
+    assert client.last_safety_warnings[0]["code"] == "THINKING_ONLY_OUTPUT"
+    assert client.last_reasoning_filtered is True
 
 
 def test_generate_stream_retries_after_429(monkeypatch) -> None:
@@ -240,7 +263,7 @@ def test_generate_stream_retries_after_429(monkeypatch) -> None:
     assert "".join(client.generate_stream("질문")) == "최종 답변"
 
 
-def test_generate_stream_qwen_thinking_gates_until_final(monkeypatch) -> None:
+def test_generate_stream_qwen_thinking_on_gates_until_final(monkeypatch) -> None:
     client = OpenAICompatibleClient(
         "qwen3-next-80b-a3b-thinking-fp8",
         base_url="http://localhost:30000/v1",
@@ -264,7 +287,8 @@ def test_generate_stream_qwen_thinking_gates_until_final(monkeypatch) -> None:
 
     monkeypatch.setattr("requests.post", lambda *args, **kwargs: next(responses))
 
-    assert "".join(client.generate_stream("질문")) == "정상입니다."
+    assert "".join(client.generate_stream("질문", reasoning_mode="on")) == "정상입니다."
+    assert client.last_reasoning_filtered is True
 
 
 def test_generate_stream_qwen_thinking_with_disabled_template_final_text(monkeypatch) -> None:
@@ -290,7 +314,7 @@ def test_generate_stream_qwen_thinking_with_disabled_template_final_text(monkeyp
 
     monkeypatch.setattr("requests.post", lambda *args, **kwargs: next(responses))
 
-    assert "".join(client.generate_stream("질문")) == "N39.3은 약관상 보상 제외입니다."
+    assert "".join(client.generate_stream("질문", reasoning_mode="off")) == "N39.3은 약관상 보상 제외입니다."
 
 
 def test_generate_stream_qwen_thinking_without_end_token_returns_fallback(monkeypatch) -> None:
@@ -316,7 +340,40 @@ def test_generate_stream_qwen_thinking_without_end_token_returns_fallback(monkey
 
     monkeypatch.setattr("requests.post", lambda *args, **kwargs: next(responses))
 
-    result = "".join(client.generate_stream("질문"))
+    result = "".join(client.generate_stream("질문", reasoning_mode="on"))
     assert result == THINKING_EMPTY_FINAL_FALLBACK
+    assert client.last_safety_warnings[0]["code"] == "THINKING_ONLY_OUTPUT"
+    assert client.last_reasoning_filtered is True
     assert "Okay" not in result
     assert "tackle" not in result
+
+
+def test_generate_stream_qwen_thinking_does_not_emit_reasoning_with_quoted_korean(monkeypatch) -> None:
+    client = OpenAICompatibleClient(
+        "qwen3-next-80b-a3b-thinking-fp8",
+        base_url="http://localhost:30000/v1",
+        api_key="EMPTY",
+        provider="sglang",
+    )
+
+    responses = iter(
+        [
+            DummyResponse(
+                200,
+                [
+                    b'data: {"choices":[{"delta":{"content":"The user asks me to answer "}}]}',
+                    'data: {"choices":[{"delta":{"content":"\\"정상 사용 가능합니다.\\""}}]}'.encode("utf-8"),
+                    b'data: {"choices":[{"delta":{"content":" in Korean, so I should provide that."}}]}',
+                    b'data: [DONE]',
+                ],
+            ),
+        ]
+    )
+
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: next(responses))
+
+    result = "".join(client.generate_stream("질문", reasoning_mode="on"))
+    assert result == THINKING_EMPTY_FINAL_FALLBACK
+    assert client.last_safety_warnings[0]["code"] == "THINKING_ONLY_OUTPUT"
+    assert "The user asks" not in result
+    assert "I should" not in result

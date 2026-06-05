@@ -215,6 +215,18 @@ function setupSettingsHandlers() {
       document.getElementById('exp-menu')?.classList.remove('open');
     });
   }
+
+  const reasoningToggle = document.getElementById('reasoning-mode-toggle');
+  if (reasoningToggle && !reasoningToggle.dataset.reasoningBound) {
+    reasoningToggle.dataset.reasoningBound = 'true';
+    reasoningToggle.addEventListener('change', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.QWEN_REASONING_MODE,
+        reasoningToggle.checked ? 'on' : 'off'
+      );
+    });
+  }
+  updateReasoningToggleVisibility();
 }
 
 function syncCurrentSessionFromActiveHistory() {
@@ -247,6 +259,7 @@ function applySelectedModelLabel() {
   const label = document.getElementById('active-model-label');
   if (!label) return;
   label.textContent = formatSelectedModelLabel(getSelectedModel());
+  updateReasoningToggleVisibility();
 }
 
 async function setupModelSwitcher() {
@@ -294,6 +307,7 @@ async function setupModelSwitcher() {
         localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, nextModel);
         localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE, 'explicit');
         applySelectedModelLabel();
+        updateReasoningToggleVisibility();
         toast(`활성 모델을 ${formatSelectedModelLabel(nextModel)}로 변경했습니다.`, 'success');
       });
     }
@@ -686,6 +700,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
       session_id: currentSession,
       mode,
       model: getSelectedModel(),
+      reasoning_mode: getReasoningMode(),
       top_k: getTopK(),
       temperature: getTemperature(),
       filters,
@@ -1236,6 +1251,26 @@ async function exportChat(format) {
 
 function getSelectedModel() {
   return localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'ollama:exaone3.5:7.8b';
+}
+
+function isReasoningSupportedModel(modelId) {
+  return String(modelId || '').toLowerCase().includes('qwen3-next-80b-a3b-thinking-fp8');
+}
+
+function getReasoningMode() {
+  if (!isReasoningSupportedModel(getSelectedModel())) return 'off';
+  return localStorage.getItem(STORAGE_KEYS.QWEN_REASONING_MODE) === 'on' ? 'on' : 'off';
+}
+
+function updateReasoningToggleVisibility() {
+  const wrap = document.getElementById('reasoning-toggle-wrap');
+  const toggle = document.getElementById('reasoning-mode-toggle');
+  if (!wrap || !toggle) return;
+
+  const supported = isReasoningSupportedModel(getSelectedModel());
+  wrap.classList.toggle('hidden', !supported);
+  toggle.disabled = !supported;
+  toggle.checked = supported && getReasoningMode() === 'on';
 }
 
 function formatSelectedModelLabel(modelId) {

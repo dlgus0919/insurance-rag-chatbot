@@ -4,6 +4,13 @@ set -euo pipefail
 
 AI_OPS_ROOT="${AI_OPS_ROOT:-/srv/ai-ops}"
 MODEL_ROOT="${LLM_MODEL_ROOT:-$AI_OPS_ROOT/llm/models}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="${INSURANCE_RAG_PROJECT_DIR:-/srv/shared/projects/insurance-rag-chatbot}"
+if [[ ! -d "$PROJECT_DIR/ops/templates" ]]; then
+  PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+fi
+QWEN_THINKING_MODEL="qwen3-next-80b-a3b-thinking-fp8"
+QWEN_SWITCHABLE_TEMPLATE="$PROJECT_DIR/ops/templates/qwen3_thinking_switchable.jinja"
 
 log() {
   printf '[llm-assets] %s\n' "$*"
@@ -12,6 +19,15 @@ log() {
 if [[ ! -d "$MODEL_ROOT" ]]; then
   echo "model root is missing: $MODEL_ROOT" >&2
   exit 3
+fi
+
+if [[ -d "$MODEL_ROOT/$QWEN_THINKING_MODEL" ]]; then
+  if [[ ! -f "$QWEN_SWITCHABLE_TEMPLATE" ]]; then
+    echo "Qwen switchable template is missing: $QWEN_SWITCHABLE_TEMPLATE" >&2
+    exit 3
+  fi
+  install -m 0644 "$QWEN_SWITCHABLE_TEMPLATE" "$MODEL_ROOT/$QWEN_THINKING_MODEL/chat_template.jinja"
+  log "installed switchable Qwen Thinking template: $MODEL_ROOT/$QWEN_THINKING_MODEL/chat_template.jinja"
 fi
 
 python3 - "$MODEL_ROOT" <<'PY'

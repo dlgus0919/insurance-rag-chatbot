@@ -142,6 +142,35 @@
     opacity:0.65;
     background:var(--soft-bg);
   }
+  .reasoning-toggle{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    min-height:32px;
+    padding:5px 9px;
+    border:1px solid var(--border);
+    border-radius:8px;
+    background:#fff;
+    color:var(--navy);
+    cursor:pointer;
+  }
+  .reasoning-toggle.hidden{display:none;}
+  .reasoning-toggle input{
+    width:14px;
+    height:14px;
+    accent-color:var(--primary);
+    cursor:pointer;
+  }
+  .reasoning-toggle-text{
+    font-size:12px;
+    font-weight:800;
+    white-space:nowrap;
+  }
+  .reasoning-toggle-note{
+    font-size:11px;
+    color:var(--gray);
+    white-space:nowrap;
+  }
   .export-wrap{position:relative;margin-left:auto;}
   .export-btn{
     display:flex;align-items:center;gap:6px;padding:6px 12px;

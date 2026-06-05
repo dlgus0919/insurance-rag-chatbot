@@ -112,11 +112,20 @@ async def chat_stream(
                     yield _sse("token", {"t": token})
                     await asyncio.sleep(0)
             else:
-                llm_stream = pipeline.llm.generate_stream(prompt, system=system_prompt, temperature=chat_request.temperature)
+                llm_stream = _generate_llm_stream(
+                    pipeline.llm,
+                    prompt,
+                    system_prompt,
+                    chat_request.temperature,
+                    chat_request.reasoning_mode,
+                )
                 for token in llm_stream:
                     tokens.append(token)
                     yield _sse("token", {"t": token})
                     await asyncio.sleep(0)
+                for warning in _llm_safety_warnings(pipeline.llm):
+                    warnings.append(warning)
+                    yield _sse("warning", warning)
 
             raw_answer = "".join(tokens).strip()
             if not raw_answer:
@@ -154,6 +163,10 @@ async def chat_stream(
                     ),
                     "top_k": chat_request.top_k,
                     "temperature": chat_request.temperature,
+                    "reasoning_mode": chat_request.reasoning_mode,
+                    "reasoning_supported": bool(getattr(pipeline.llm, "last_reasoning_supported", False)),
+                    "reasoning_filtered": bool(getattr(pipeline.llm, "last_reasoning_filtered", False)),
+                    "warning_codes": [warning.get("code") for warning in warnings if warning.get("code")],
                     "index_mode": chat_request.index_mode,
                     "effective_index_mode": effective_index_mode,
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
@@ -222,6 +235,36 @@ def _get_pipeline(model: str, top_k: int, index_mode: str):
     if index_mode == "default":
         return get_rag_pipeline(model, top_k)
     return get_rag_pipeline(model, top_k, index_mode)
+
+
+def _llm_safety_warnings(llm) -> list[dict]:
+    warnings = getattr(llm, "last_safety_warnings", None)
+    if not isinstance(warnings, list):
+        return []
+    normalized: list[dict] = []
+    seen: set[str] = set()
+    for warning in warnings:
+        if not isinstance(warning, dict):
+            continue
+        code = str(warning.get("code") or "")
+        if code and code in seen:
+            continue
+        if code:
+            seen.add(code)
+        normalized.append(warning)
+    return normalized
+
+
+def _generate_llm_stream(llm, prompt: str, system_prompt: str, temperature: float, reasoning_mode: str):
+    signature = inspect.signature(llm.generate_stream)
+    if "reasoning_mode" in signature.parameters:
+        return llm.generate_stream(
+            prompt,
+            system=system_prompt,
+            temperature=temperature,
+            reasoning_mode=reasoning_mode,
+        )
+    return llm.generate_stream(prompt, system=system_prompt, temperature=temperature)
 
 
 def _client_ip(request: Request | None) -> str | None:

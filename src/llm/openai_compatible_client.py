@@ -17,7 +17,10 @@ FINAL_MARKER_RE = re.compile(r"<\|channel\|>final<\|message\|>")
 HARMONY_TOKEN_RE = re.compile(r"<\|(?:channel|message|end|start|return)\|>|<pad>")
 THINK_END_TOKEN_RE = re.compile(r"</\s*think\s*>", re.IGNORECASE)
 THINK_TOKEN_RE = re.compile(r"<\s*/?\s*think\s*>", re.IGNORECASE)
-FINAL_ANSWER_MARKER_RE = re.compile(r"(?:\[답변\]|최종\s*답변\s*[:：]?|답변\s*[:：]|결론\s*[:：]|final\s+answer\s*[:：])", re.IGNORECASE)
+FINAL_ANSWER_MARKER_RE = re.compile(
+    r"(?:\[답변\]|(?:^|[\r\n])\s*(?:최종\s*답변|답변|결론)\s*[:：]|final\s+answer\s*[:：])",
+    re.IGNORECASE,
+)
 HANGUL_RE = re.compile(r"[가-힣]")
 REASONING_PREFIX_RE = re.compile(
     r"^\s*(?:"
@@ -32,6 +35,10 @@ THINKING_EMPTY_FINAL_FALLBACK = (
     "모델이 내부 추론만 반환하고 최종 답변을 제공하지 않았습니다. "
     "검색 근거를 다시 확인하거나 다른 검증된 모델로 재시도해 주세요."
 )
+THINKING_ONLY_WARNING = {
+    "code": "THINKING_ONLY_OUTPUT",
+    "message": "모델이 내부 추론만 반환하고 최종 답변을 제공하지 않아 안전 fallback을 표시합니다.",
+}
 RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 
 
@@ -56,6 +63,19 @@ def _uses_think_stream(model: str, provider: str) -> bool:
 
     name = model.lower()
     return "thinking" in name or "reasoning" in name
+
+
+def _normalize_reasoning_mode(reasoning_mode: str | None) -> str:
+    """Return a supported per-request reasoning mode."""
+
+    return "on" if str(reasoning_mode or "off").lower() == "on" else "off"
+
+
+def _supports_reasoning_mode(model: str, provider: str) -> bool:
+    """Return whether this model exposes an app-level reasoning toggle."""
+
+    name = model.lower()
+    return provider == "sglang" and "qwen" in name and _uses_think_stream(model, provider)
 
 
 def _split_after_last_think_end(content: str) -> tuple[bool, str]:
@@ -87,7 +107,13 @@ def _looks_like_visible_answer(content: str, *, allow_short: bool = False) -> bo
         return True
     if REASONING_PREFIX_RE.search(text):
         return False
-    if not HANGUL_RE.search(text):
+    hangul_match = HANGUL_RE.search(text)
+    if not hangul_match:
+        return False
+    prefix = text[: hangul_match.start()]
+    if re.search(r"[a-z]{2,}", prefix):
+        return False
+    if len(prefix.strip()) > 16 and re.search(r"[A-Za-z]", prefix):
         return False
     compact = re.sub(r"\s+", "", text)
     return allow_short or len(compact) >= 8 or "\n" in text
@@ -127,13 +153,13 @@ def _clean_stream_token(token: str) -> str:
     return token
 
 
-def _should_disable_thinking(model: str, provider: str) -> bool:
+def _should_disable_thinking(model: str, provider: str, reasoning_mode: str = "off") -> bool:
     """Return whether the serving template should emit final content directly."""
 
     name = model.lower()
     if provider == "vllm" and "nemotron" in name:
         return True
-    return provider == "sglang" and "qwen" in name and _uses_think_stream(model, provider)
+    return _supports_reasoning_mode(model, provider) and _normalize_reasoning_mode(reasoning_mode) == "off"
 
 
 def _retry_delay_seconds(response: requests.Response | None, attempt: int) -> float:
@@ -168,6 +194,22 @@ class OpenAICompatibleClient:
         self.max_tokens = max_tokens or config.OPENAI_MAX_TOKENS
         self.provider = provider
         self.last_usage: dict | None = None
+        self.last_safety_warnings: list[dict] = []
+        self.last_reasoning_filtered: bool = False
+        self.last_reasoning_supported: bool = _supports_reasoning_mode(self.model, self.provider)
+
+    def _reset_safety_state(self) -> None:
+        self.last_safety_warnings = []
+        self.last_reasoning_filtered = False
+        self.last_reasoning_supported = _supports_reasoning_mode(self.model, self.provider)
+
+    def _mark_reasoning_filtered(self) -> None:
+        self.last_reasoning_filtered = True
+
+    def _mark_thinking_only_fallback(self) -> None:
+        self._mark_reasoning_filtered()
+        if not any(warning.get("code") == THINKING_ONLY_WARNING["code"] for warning in self.last_safety_warnings):
+            self.last_safety_warnings.append(dict(THINKING_ONLY_WARNING))
 
     def _headers(self) -> dict:
         return {
@@ -175,7 +217,14 @@ class OpenAICompatibleClient:
             "Content-Type": "application/json",
         }
 
-    def _payload(self, prompt: str, system: str, temperature: float, stream: bool) -> dict:
+    def _payload(
+        self,
+        prompt: str,
+        system: str,
+        temperature: float,
+        stream: bool,
+        reasoning_mode: str = "off",
+    ) -> dict:
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -187,9 +236,13 @@ class OpenAICompatibleClient:
             "max_tokens": self.max_tokens,
             "stream": stream,
         }
-        disable_thinking = _should_disable_thinking(self.model, self.provider)
+        normalized_reasoning_mode = _normalize_reasoning_mode(reasoning_mode)
+        reasoning_supported = _supports_reasoning_mode(self.model, self.provider)
+        disable_thinking = _should_disable_thinking(self.model, self.provider, normalized_reasoning_mode)
         if self.provider == "sglang" and config.SGLANG_REASONING_EFFORT and not disable_thinking:
             payload["reasoning_effort"] = config.SGLANG_REASONING_EFFORT
+        if reasoning_supported:
+            payload["chat_template_kwargs"] = {"enable_thinking": normalized_reasoning_mode == "on"}
         if disable_thinking:
             payload["chat_template_kwargs"] = {"enable_thinking": False}
         return payload
@@ -200,16 +253,19 @@ class OpenAICompatibleClient:
         system: str = "",
         temperature: float = 0.2,
         num_ctx: int | None = None,
+        reasoning_mode: str = "off",
     ) -> str:
         """Generate a non-streaming answer. num_ctx is ignored by OpenAI-compatible APIs."""
 
+        self._reset_safety_state()
+        normalized_reasoning_mode = _normalize_reasoning_mode(reasoning_mode)
         response: requests.Response | None = None
         for attempt in range(MAX_RETRIES + 1):
             try:
                 response = requests.post(
                     f"{self.base_url}/chat/completions",
                     headers=self._headers(),
-                    json=self._payload(prompt, system, temperature, stream=False),
+                    json=self._payload(prompt, system, temperature, stream=False, reasoning_mode=normalized_reasoning_mode),
                     timeout=DEFAULT_TIMEOUT,
                 )
             except requests.RequestException as exc:
@@ -232,21 +288,34 @@ class OpenAICompatibleClient:
         if _uses_harmony_stream(self.model, self.provider):
             return _extract_final_content(content)
         content = HARMONY_TOKEN_RE.sub("", content)
-        return _extract_visible_content(
+        if THINK_TOKEN_RE.search(content):
+            self._mark_reasoning_filtered()
+        visible = _extract_visible_content(
             content,
             require_think_end=_uses_think_stream(self.model, self.provider),
             fallback_on_hidden=_uses_think_stream(self.model, self.provider),
         )
+        if visible == THINKING_EMPTY_FINAL_FALLBACK:
+            self._mark_thinking_only_fallback()
+        return visible
 
-    def generate_stream(self, prompt: str, system: str = "", temperature: float = 0.2) -> Iterator[str]:
+    def generate_stream(
+        self,
+        prompt: str,
+        system: str = "",
+        temperature: float = 0.2,
+        reasoning_mode: str = "off",
+    ) -> Iterator[str]:
         """Yield streaming answer tokens."""
 
+        self._reset_safety_state()
+        normalized_reasoning_mode = _normalize_reasoning_mode(reasoning_mode)
         for attempt in range(MAX_RETRIES + 1):
             try:
                 with requests.post(
                     f"{self.base_url}/chat/completions",
                     headers=self._headers(),
-                    json=self._payload(prompt, system, temperature, stream=True),
+                    json=self._payload(prompt, system, temperature, stream=True, reasoning_mode=normalized_reasoning_mode),
                     stream=True,
                     timeout=DEFAULT_TIMEOUT,
                 ) as response:
@@ -263,6 +332,7 @@ class OpenAICompatibleClient:
                     think_buffer = ""
                     think_emitting = not think_mode
                     visible_yielded = False
+                    strict_think_end = _supports_reasoning_mode(self.model, self.provider) and normalized_reasoning_mode == "on"
 
                     for raw in response.iter_lines():
                         if not raw:
@@ -285,13 +355,17 @@ class OpenAICompatibleClient:
                         if not harmony_mode:
                             if not think_emitting:
                                 think_buffer += token
+                                if THINK_TOKEN_RE.search(token):
+                                    self._mark_reasoning_filtered()
                                 if THINK_END_TOKEN_RE.search(think_buffer):
                                     think_emitting = True
                                     cleaned = _extract_visible_content(think_buffer, require_think_end=True)
                                     if cleaned:
                                         visible_yielded = True
                                         yield cleaned
-                                elif _extract_marked_final_content(think_buffer) or _looks_like_visible_answer(think_buffer):
+                                elif not strict_think_end and (
+                                    _extract_marked_final_content(think_buffer) or _looks_like_visible_answer(think_buffer)
+                                ):
                                     think_emitting = True
                                     cleaned = _extract_visible_content(think_buffer, require_think_end=True)
                                     if cleaned:
@@ -321,6 +395,7 @@ class OpenAICompatibleClient:
                                 visible_yielded = True
                                 yield cleaned
                     if think_mode and not visible_yielded and think_buffer.strip():
+                        self._mark_thinking_only_fallback()
                         fallback = _extract_visible_content(
                             think_buffer,
                             require_think_end=True,

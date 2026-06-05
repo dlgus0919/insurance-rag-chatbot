@@ -47,6 +47,20 @@ class FakeLLM:
         yield "답변"
 
 
+class ReasoningFakeLLM:
+    def __init__(self):
+        self.reasoning_modes: list[str] = []
+        self.last_safety_warnings = [
+            {"code": "THINKING_ONLY_OUTPUT", "message": "모델이 내부 추론만 반환했습니다."}
+        ]
+        self.last_reasoning_supported = True
+        self.last_reasoning_filtered = True
+
+    def generate_stream(self, prompt, system="", temperature=0.2, reasoning_mode="off"):
+        self.reasoning_modes.append(reasoning_mode)
+        yield "fallback 답변"
+
+
 class FakePipeline:
     def __init__(self):
         self.llm = FakeLLM()
@@ -129,6 +143,12 @@ class FakeGraphPipeline(FakePipeline):
         self.vector_store = FakeVectorStore()
 
 
+class ReasoningFakePipeline(FakePipeline):
+    def __init__(self):
+        super().__init__()
+        self.llm = ReasoningFakeLLM()
+
+
 def _user(username: str = "employee01") -> User:
     return User(
         username=username,
@@ -172,7 +192,45 @@ async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkey
     audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
     audit_entry = audit_result.scalar_one()
     assert audit_entry.detail["model"] == "gemma3:4b"
+    assert audit_entry.detail["reasoning_mode"] == "off"
+    assert audit_entry.detail["reasoning_supported"] is False
+    assert audit_entry.detail["reasoning_filtered"] is False
     assert audit_entry.detail["rag_diagnostics"]["steps"][-1]["label"] == "LLM 답변 생성"
+
+
+@pytest.mark.anyio
+async def test_chat_stream_passes_reasoning_mode_and_records_audit(db_session, monkeypatch) -> None:
+    pipeline = ReasoningFakePipeline()
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: pipeline)
+    created = await sessions.create_session(SessionCreateRequest(title="Qwen"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="Qwen 추론 모드 테스트",
+            session_id=created.id,
+            model="sglang:qwen3-next-80b-a3b-thinking-fp8",
+            reasoning_mode="on",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+    stream = "".join(chunks)
+
+    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
+    audit_entry = audit_result.scalar_one()
+
+    assert pipeline.llm.reasoning_modes == ["on"]
+    assert "event: warning" in stream
+    assert "THINKING_ONLY_OUTPUT" in stream
+    assert audit_entry.detail["model"] == "sglang:qwen3-next-80b-a3b-thinking-fp8"
+    assert audit_entry.detail["reasoning_mode"] == "on"
+    assert audit_entry.detail["reasoning_supported"] is True
+    assert audit_entry.detail["reasoning_filtered"] is True
+    assert "THINKING_ONLY_OUTPUT" in audit_entry.detail["warning_codes"]
 
 
 @pytest.mark.anyio

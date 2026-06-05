@@ -72,6 +72,11 @@
         <label class="model-switcher-label" for="active-model-select">모델 변경</label>
         <select class="model-switcher-select" id="active-model-select" aria-label="활성 모델 변경"></select>
       </div>
+      <label class="reasoning-toggle hidden" id="reasoning-toggle-wrap" title="내부 추론 문장은 화면에 표시하지 않습니다.">
+        <input type="checkbox" id="reasoning-mode-toggle">
+        <span class="reasoning-toggle-text">추론 모드</span>
+        <span class="reasoning-toggle-note">내부 추론 문장은 표시하지 않습니다.</span>
+      </label>
       <div class="export-wrap">
         <button class="export-btn" type="button" data-action="toggle-export">
           <svg width="12" height="12" fill="none" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>

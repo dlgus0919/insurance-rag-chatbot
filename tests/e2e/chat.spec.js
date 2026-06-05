@@ -366,3 +366,88 @@ test.describe('채팅 플로우', () => {
     );
   });
 });
+
+test.describe('Qwen Thinking 추론 모드 토글', () => {
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/api/auth/login', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          user: {
+            username: 'user',
+            id: 'user',
+            role: 'user',
+            display_name: '사용자',
+            created_at: '2026-06-05T00:00:00+09:00',
+            password_updated_at: '2026-06-05T00:00:00+09:00',
+          },
+          access_expires_in: 900,
+        }),
+      });
+    });
+    await page.route('**/api/auth/me', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          username: 'user',
+          id: 'user',
+          role: 'user',
+          display_name: '사용자',
+          created_at: '2026-06-05T00:00:00+09:00',
+          password_updated_at: '2026-06-05T00:00:00+09:00',
+        }),
+      });
+    });
+    await page.route('**/api/system/models', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          providers: {
+            local: [
+              {
+                provider: 'local',
+                id: 'sglang:qwen3-next-80b-a3b-thinking-fp8',
+                label: 'Local · SGLang · Qwen3 Next Thinking',
+              },
+              {
+                provider: 'local',
+                id: 'sglang:gpt-oss-20b',
+                label: 'Local · SGLang · GPT-OSS 20B',
+              },
+            ],
+            openai: [],
+          },
+          defaults: { local: 'sglang:qwen3-next-80b-a3b-thinking-fp8', openai: null },
+        }),
+      });
+    });
+    await page.route('**/api/sessions', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+  });
+
+  test('토글 on/off가 채팅 payload에 반영되고 다른 모델에서는 숨겨짐', async ({ page }) => {
+    const payloads = await mockChatStream(page, null, '추론 토글 테스트 답변', 0);
+
+    await page.goto('/login');
+    await page.fill('#lid', 'user');
+    await page.fill('#lpw', 'user1234');
+    await page.click('#login-submit-btn');
+    await expect(page).toHaveURL('/chat');
+
+    await expect(page.locator('#reasoning-toggle-wrap')).toBeVisible();
+    await page.check('#reasoning-mode-toggle');
+    await page.fill('#chat-input', '추론 모드 payload 테스트');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => payloads.length).toBeGreaterThan(0);
+
+    expect(payloads[0].model).toBe('sglang:qwen3-next-80b-a3b-thinking-fp8');
+    expect(payloads[0].reasoning_mode).toBe('on');
+
+    await page.selectOption('#active-model-select', 'sglang:gpt-oss-20b');
+    await expect(page.locator('#reasoning-toggle-wrap')).toHaveClass(/hidden/);
+  });
+});
