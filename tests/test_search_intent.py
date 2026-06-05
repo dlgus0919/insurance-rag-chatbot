@@ -1,13 +1,48 @@
 from src.rag.search_intent import classify_search_intent
 
 
-def test_exact_code_lookup_prioritizes_bm25_and_skips_dense() -> None:
+def test_exact_code_lookup_prioritizes_bm25_but_preserves_dense_filter() -> None:
     plan = classify_search_intent("N39.3 코드 보상돼?")
 
-    assert plan.intent == "exact_code_lookup"
-    assert plan.skip_dense is True
+    assert plan.intent == "exact_code_compound_lookup"
+    assert plan.skip_dense is False
+    assert plan.skip_general_dense is False
     assert plan.bm25_weight > plan.dense_weight
     assert plan.exact_terms == ["N39.3"]
+    assert plan.has_exact_code is True
+    assert plan.requires_coverage_judgment is True
+
+
+def test_pure_exact_code_lookup_can_plan_general_dense_skip_only() -> None:
+    plan = classify_search_intent("AA157 코드")
+
+    assert plan.intent == "exact_code_lookup"
+    assert plan.skip_dense is False
+    assert plan.skip_general_dense is True
+    assert plan.exact_terms == ["AA157"]
+
+
+def test_numeric_standard_code_is_detected_with_code_context() -> None:
+    plan = classify_search_intent("도수치료 표준코드 51040의 면책 여부")
+
+    assert "51040" in plan.exact_terms
+    assert plan.has_exact_code is True
+
+
+def test_numeric_amount_is_not_detected_as_code() -> None:
+    plan = classify_search_intent("도수치료 100000원 청구하면 얼마 보상돼?")
+
+    assert plan.exact_terms == []
+    assert plan.intent == "coverage_judgment"
+
+
+def test_compound_code_clause_query_keeps_semantic_search() -> None:
+    plan = classify_search_intent("N39.3 약관 근거와 보상 조건을 알려줘")
+
+    assert plan.intent == "exact_code_compound_lookup"
+    assert plan.skip_general_dense is False
+    assert plan.requires_clause_lookup is True
+    assert plan.requires_coverage_judgment is True
 
 
 def test_clause_lookup_prioritizes_keyword_search() -> None:

@@ -7,12 +7,13 @@ import time
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.parser.chunker import Chunk
 from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context, detect_retrieval_conflicts
-from src.rag.search_intent import SearchIntentPlan, classify_search_intent
+from src.rag.search_intent import SearchIntentPlan, classify_search_intent, extract_code_terms
 from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
@@ -214,7 +215,40 @@ class DebugInfo:
     rrf_hits: list[StageHit]
     final_hits: list[StageHit]
     search_intent: SearchIntentPlan | None = None
+    retrieval_execution: "RetrievalExecutionInfo | None" = None
     graph_result: Any = None
+
+
+@dataclass
+class RetrievalExecutionInfo:
+    """검색 의도 계획이 실제 검색 단계에 어떻게 적용됐는지 기록한다."""
+
+    dynamic_rrf_enabled: bool
+    dynamic_rrf_mode: str
+    applied_dense_weight: float
+    applied_bm25_weight: float
+    applied_top_k_dense: int
+    applied_top_k_bm25: int
+    dense_filtered_executed: bool = False
+    dense_general_executed: bool = False
+    bm25_executed: bool = False
+    skipped_general_dense: bool = False
+    fallback_reason: str = ""
+
+    def to_payload(self) -> dict:
+        return {
+            "dynamic_rrf_enabled": self.dynamic_rrf_enabled,
+            "dynamic_rrf_mode": self.dynamic_rrf_mode,
+            "applied_dense_weight": round(float(self.applied_dense_weight), 3),
+            "applied_bm25_weight": round(float(self.applied_bm25_weight), 3),
+            "applied_top_k_dense": self.applied_top_k_dense,
+            "applied_top_k_bm25": self.applied_top_k_bm25,
+            "dense_filtered_executed": self.dense_filtered_executed,
+            "dense_general_executed": self.dense_general_executed,
+            "bm25_executed": self.bm25_executed,
+            "skipped_general_dense": self.skipped_general_dense,
+            "fallback_reason": self.fallback_reason,
+        }
 
 
 @dataclass
@@ -252,13 +286,7 @@ def _hits_to_stage(hits: list[Hit]) -> list[StageHit]:
 def _extract_query_codes(question: str) -> list[str]:
     """질문에서 의료 코드 패턴을 추출하고 순서를 보존해 중복 제거한다."""
 
-    codes: list[str] = []
-    seen: set[str] = set()
-    for match in _CODE_PATTERN.findall(question.upper()):
-        if match not in seen:
-            seen.add(match)
-            codes.append(match)
-    return codes
+    return extract_code_terms(question)
 
 
 def _expand_retrieval_query(question: str) -> str:
@@ -910,30 +938,80 @@ class RagPipeline:
         bm25_hits: list[Hit] = []
         query_embedding = None
 
-        if not search_intent.skip_dense or enforce_doc_coverage:
+        dynamic_enabled = config.DYNAMIC_RRF_ENABLED
+        dynamic_mode = config.DYNAMIC_RRF_MODE if config.DYNAMIC_RRF_MODE in {"observe", "weighted", "optimized"} else "observe"
+        if not dynamic_enabled:
+            dynamic_mode = "observe"
+
+        if dynamic_enabled and dynamic_mode in {"weighted", "optimized"}:
+            applied_dense_weight = search_intent.dense_weight
+            applied_bm25_weight = search_intent.bm25_weight
+            dense_top_k = max(1, search_intent.top_k_dense)
+            bm25_top_k = max(1, search_intent.top_k_bm25)
+            fallback_reason = ""
+        else:
+            applied_dense_weight = 1.0
+            applied_bm25_weight = 1.0
+            dense_top_k = max(1, self.top_k_dense)
+            bm25_top_k = max(1, self.top_k_bm25)
+            fallback_reason = "dynamic RRF observe/disabled: fixed baseline retrieval applied"
+
+        can_skip_general_dense_candidate = (
+            dynamic_enabled
+            and dynamic_mode == "optimized"
+            and config.DYNAMIC_RRF_SKIP_GENERAL_DENSE
+            and search_intent.skip_general_dense
+            and query_codes
+            and not enforce_doc_coverage
+            and not search_intent.requires_coverage_judgment
+            and not search_intent.requires_clause_lookup
+            and not search_intent.requires_cross_document
+        )
+
+        should_run_filtered_dense = bool(query_codes and hasattr(self.vector_store, "query_with_filter"))
+        should_run_general_dense = True
+
+        if should_run_filtered_dense or should_run_general_dense or enforce_doc_coverage:
             query_embedding = self.embedder.embed_query(retrieval_query)
 
-        if not search_intent.skip_dense and query_embedding is not None:
-            dense_top_k = max(1, search_intent.top_k_dense)
-            if query_codes and hasattr(self.vector_store, "query_with_filter"):
-                half_k = max(1, dense_top_k // 2)
-                code_hits = self.vector_store.query_with_filter(
-                    query_embedding,
-                    filter_codes=query_codes,
-                    top_k=half_k,
-                    prefer_non_table=True,
-                    doc_filter=doc_filter,
-                )
-                general_top_k = half_k if code_hits else dense_top_k
-                general_hits = self.vector_store.query(query_embedding, general_top_k, doc_filter=doc_filter)
-                seen = {hit.id for hit in code_hits}
-                dense_hits = code_hits + [hit for hit in general_hits if hit.id not in seen]
+        if should_run_filtered_dense and query_embedding is not None:
+            half_k = max(1, dense_top_k // 2)
+            code_hits = self.vector_store.query_with_filter(
+                query_embedding,
+                filter_codes=query_codes,
+                top_k=half_k,
+                prefer_non_table=True,
+                doc_filter=doc_filter,
+            )
+
+        should_run_general_dense = not (can_skip_general_dense_candidate and bool(code_hits))
+        if should_run_general_dense and query_embedding is not None:
+            if query_codes and code_hits:
+                general_top_k = max(1, dense_top_k // 2)
             else:
-                dense_hits = self.vector_store.query(query_embedding, dense_top_k, doc_filter=doc_filter)
+                general_top_k = dense_top_k
+            general_hits = self.vector_store.query(query_embedding, general_top_k, doc_filter=doc_filter)
+            seen = {hit.id for hit in code_hits}
+            dense_hits = code_hits + [hit for hit in general_hits if hit.id not in seen]
+        else:
+            dense_hits = list(code_hits)
 
         if not search_intent.skip_bm25:
-            bm25_hits = self.bm25.query(retrieval_query, max(1, search_intent.top_k_bm25))
+            bm25_hits = self.bm25.query(retrieval_query, bm25_top_k)
             bm25_hits = _filter_hits_by_doc(bm25_hits, doc_filter)
+        execution_info = RetrievalExecutionInfo(
+            dynamic_rrf_enabled=dynamic_enabled,
+            dynamic_rrf_mode=dynamic_mode,
+            applied_dense_weight=applied_dense_weight,
+            applied_bm25_weight=applied_bm25_weight,
+            applied_top_k_dense=dense_top_k,
+            applied_top_k_bm25=bm25_top_k,
+            dense_filtered_executed=bool(should_run_filtered_dense and query_embedding is not None),
+            dense_general_executed=bool(should_run_general_dense and query_embedding is not None),
+            bm25_executed=not search_intent.skip_bm25,
+            skipped_general_dense=bool(not should_run_general_dense),
+            fallback_reason=fallback_reason,
+        )
         debug_dense = list(dense_hits)
         debug_bm25 = list(bm25_hits)
         dense_hits = [hit for hit in dense_hits if not _is_low_value_wide_range(hit)]
@@ -952,8 +1030,8 @@ class RagPipeline:
             bm25_hits,
             top_k=rrf_top_k,
             rrf_k=self.rrf_k,
-            dense_weight=search_intent.dense_weight,
-            bm25_weight=search_intent.bm25_weight,
+            dense_weight=applied_dense_weight,
+            bm25_weight=applied_bm25_weight,
         )
         debug_rrf = list(fused_hits)
         if enforce_doc_coverage and query_embedding is not None:
@@ -993,6 +1071,7 @@ class RagPipeline:
                 rrf_hits=_hits_to_stage(debug_rrf),
                 final_hits=_hits_to_stage(final_hits),
                 search_intent=search_intent,
+                retrieval_execution=execution_info,
             )
             if return_debug
             else None

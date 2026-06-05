@@ -327,15 +327,28 @@ def _tab_search_diagnostics(_log) -> None:
         rrf_hits=debug.rrf_hits,
         final_hits=debug.final_hits,
         search_intent=getattr(debug, "search_intent", None),
+        retrieval_execution=getattr(debug, "retrieval_execution", None),
         graph_result=getattr(debug, "graph_result", None),
     )
     if debug.search_intent is not None:
         intent = debug.search_intent
-        st.info(
-            "검색 의도: "
-            f"{intent.intent} · BM25 {intent.bm25_weight:.2f} / Chroma {intent.dense_weight:.2f} · "
-            f"dense 생략: {'예' if intent.skip_dense else '아니오'}"
-        )
+        execution = debug.retrieval_execution
+        if execution is not None:
+            st.info(
+                "검색 의도: "
+                f"{intent.intent} · 적용 BM25 {execution.applied_bm25_weight:.2f} / "
+                f"Chroma {execution.applied_dense_weight:.2f} · "
+                f"코드필터: {'실행' if execution.dense_filtered_executed else '미실행'} · "
+                f"일반벡터: {'실행' if execution.dense_general_executed else '생략'}"
+            )
+            if execution.fallback_reason:
+                st.caption(execution.fallback_reason)
+        else:
+            st.info(
+                "검색 의도: "
+                f"{intent.intent} · BM25 {intent.bm25_weight:.2f} / Chroma {intent.dense_weight:.2f} · "
+                f"일반 dense 생략 계획: {'예' if intent.skip_general_dense else '아니오'}"
+            )
         if intent.reason:
             st.caption(intent.reason)
     for stage_name, stage_hits in [

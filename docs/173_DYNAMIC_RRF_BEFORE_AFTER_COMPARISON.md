@@ -1,5 +1,10 @@
 # 동적 RRF / 검색 의도 분류 적용 전후 비교 리포트
 
+> 참고: 이 문서는 팀원 브랜치의 최초 동적 RRF 실험 결과를 보존한 기록입니다.
+> 이후 안전 편입 패치에서는 정확 코드 질의의 Chroma 코드 필터 검색을 항상 보존하고,
+> 동적 가중치는 기본 비활성/observe 모드로 운영하도록 변경했습니다.
+> 현재 편입 기준은 `docs/175_DYNAMIC_RRF_SAFE_INTEGRATION_REPORT.md`를 우선합니다.
+
 - 작성일: 2026-06-04 14:45:01
 - 수정 전 커밋: `f861f6f`
 - 수정 후 임시 커밋: `9d04a8e` (`temp: add dynamic search intent routing`)

@@ -199,7 +199,7 @@ def test_pipeline_builds_prompt_and_returns_sources() -> None:
     assert "AA157은 무엇인가요?" in llm.prompt
     assert "[컨텍스트 1:" in llm.prompt
     assert result.answer.startswith("재진 진찰료")
-    assert result.chunks[0].id == "dense"
+    assert result.chunks[0].id == "code"
     assert result.timing["total_ms"] >= 0
 
 
@@ -514,7 +514,7 @@ def test_merge_hits_preserving_order_deduplicates_and_limits() -> None:
     assert merged[0].document == "A"
 
 
-def test_exact_code_query_skips_dense_and_prioritizes_bm25() -> None:
+def test_exact_code_query_preserves_filtered_dense_and_prioritizes_code_hit() -> None:
     embedder = DummyEmbedder()
     vector_store = DummyVectorStore()
     pipeline = RagPipeline(
@@ -529,10 +529,11 @@ def test_exact_code_query_skips_dense_and_prioritizes_bm25() -> None:
 
     hits, _ = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=8)
 
-    assert embedder.calls == []
-    assert vector_store.filter_calls == []
-    assert vector_store.query_calls == []
-    assert hits[0].id == "dense"
+    assert embedder.calls
+    assert vector_store.filter_calls
+    assert vector_store.filter_calls[0][0] == ["AA157"]
+    assert vector_store.query_calls
+    assert hits[0].id == "code"
 
 
 def test_doc_filter_flows_to_vector_store_and_filters_bm25() -> None:
@@ -603,6 +604,95 @@ def test_retrieve_hits_can_return_debug_info() -> None:
     assert debug.bm25_hits[0].chunk_id == "dense"
     assert debug.rrf_hits
     assert debug.final_hits
+
+
+def test_exact_code_retrieval_preserves_filtered_vector_hit() -> None:
+    vector_store = DummyVectorStore()
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        vector_store,
+        DummyBM25(),
+        DummyLLM(),
+        top_k_final=2,
+        reranker_enabled=False,
+    )
+
+    hits, debug = pipeline.retrieve_hits("AA157은 무엇인가요?", top_k=2, return_debug=True)
+
+    assert vector_store.filter_calls
+    assert vector_store.filter_calls[0][0] == ["AA157"]
+    assert hits[0].id == "code"
+    assert isinstance(debug, DebugInfo)
+    assert debug.search_intent is not None
+    assert debug.search_intent.has_exact_code is True
+    assert debug.retrieval_execution is not None
+    assert debug.retrieval_execution.dense_filtered_executed is True
+    assert debug.retrieval_execution.dense_general_executed is True
+    assert debug.retrieval_execution.applied_dense_weight == 1.0
+    assert debug.retrieval_execution.applied_bm25_weight == 1.0
+
+
+def test_optimized_exact_code_can_skip_general_dense_after_filter_hit(monkeypatch) -> None:
+    monkeypatch.setattr(pipeline_module.config, "DYNAMIC_RRF_ENABLED", True)
+    monkeypatch.setattr(pipeline_module.config, "DYNAMIC_RRF_MODE", "optimized")
+    monkeypatch.setattr(pipeline_module.config, "DYNAMIC_RRF_SKIP_GENERAL_DENSE", True)
+    vector_store = DummyVectorStore()
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        vector_store,
+        DummyBM25(),
+        DummyLLM(),
+        top_k_final=2,
+        reranker_enabled=False,
+    )
+
+    hits, debug = pipeline.retrieve_hits("AA157 코드", top_k=2, return_debug=True)
+
+    assert hits[0].id == "code"
+    assert vector_store.filter_calls
+    assert vector_store.query_calls == []
+    assert debug is not None
+    assert debug.retrieval_execution is not None
+    assert debug.retrieval_execution.dense_filtered_executed is True
+    assert debug.retrieval_execution.dense_general_executed is False
+    assert debug.retrieval_execution.skipped_general_dense is True
+
+
+def test_optimized_exact_code_falls_back_to_general_dense_when_filter_misses(monkeypatch) -> None:
+    class EmptyFilterVectorStore(DummyVectorStore):
+        def query_with_filter(
+            self,
+            query_embedding,
+            filter_codes: list[str],
+            top_k: int,
+            prefer_non_table: bool = True,
+            doc_filter: list[str] | None = None,
+        ):
+            self.filter_calls.append((filter_codes, top_k, prefer_non_table, doc_filter))
+            return []
+
+    monkeypatch.setattr(pipeline_module.config, "DYNAMIC_RRF_ENABLED", True)
+    monkeypatch.setattr(pipeline_module.config, "DYNAMIC_RRF_MODE", "optimized")
+    monkeypatch.setattr(pipeline_module.config, "DYNAMIC_RRF_SKIP_GENERAL_DENSE", True)
+    vector_store = EmptyFilterVectorStore()
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        vector_store,
+        DummyBM25(),
+        DummyLLM(),
+        top_k_final=2,
+        reranker_enabled=False,
+    )
+
+    _, debug = pipeline.retrieve_hits("AA157 코드", top_k=2, return_debug=True)
+
+    assert vector_store.filter_calls
+    assert vector_store.query_calls
+    assert debug is not None
+    assert debug.retrieval_execution is not None
+    assert debug.retrieval_execution.dense_filtered_executed is True
+    assert debug.retrieval_execution.dense_general_executed is True
+    assert debug.retrieval_execution.skipped_general_dense is False
 
 
 def test_hits_to_stage_rounds_score_and_preview() -> None:
