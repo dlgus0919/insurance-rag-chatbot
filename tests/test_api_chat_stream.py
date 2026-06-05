@@ -171,6 +171,7 @@ async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkey
     assert messages[1].sources[0]["filename"] == "약관.pdf"
     audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
     audit_entry = audit_result.scalar_one()
+    assert audit_entry.detail["model"] == "gemma3:4b"
     assert audit_entry.detail["rag_diagnostics"]["steps"][-1]["label"] == "LLM 답변 생성"
 
 

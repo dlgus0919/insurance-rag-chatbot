@@ -15,8 +15,23 @@ DEFAULT_TIMEOUT = 120
 MAX_RETRIES = 3
 FINAL_MARKER_RE = re.compile(r"<\|channel\|>final<\|message\|>")
 HARMONY_TOKEN_RE = re.compile(r"<\|(?:channel|message|end|start|return)\|>|<pad>")
-THINK_END_TOKEN = "</think>"
-THINK_TOKEN_RE = re.compile(r"</?think>", re.IGNORECASE)
+THINK_END_TOKEN_RE = re.compile(r"</\s*think\s*>", re.IGNORECASE)
+THINK_TOKEN_RE = re.compile(r"<\s*/?\s*think\s*>", re.IGNORECASE)
+FINAL_ANSWER_MARKER_RE = re.compile(r"(?:\[답변\]|최종\s*답변\s*[:：]?|답변\s*[:：]|결론\s*[:：]|final\s+answer\s*[:：])", re.IGNORECASE)
+HANGUL_RE = re.compile(r"[가-힣]")
+REASONING_PREFIX_RE = re.compile(
+    r"^\s*(?:"
+    r"okay\b|let'?s\b|we\s+need\b|i\s+(?:need|should|will)\b|"
+    r"the\s+question\b|need\s+to\b|first[,.\s]|to\s+answer\b|"
+    r"(?:먼저|우선).{0,20}(?:분석|살펴|검토|생각)|"
+    r"질문을\s*(?:분석|살펴)|생각해|추론|검토해보"
+    r")",
+    re.IGNORECASE,
+)
+THINKING_EMPTY_FINAL_FALLBACK = (
+    "모델이 내부 추론만 반환하고 최종 답변을 제공하지 않았습니다. "
+    "검색 근거를 다시 확인하거나 다른 검증된 모델로 재시도해 주세요."
+)
 RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 
 
@@ -43,12 +58,63 @@ def _uses_think_stream(model: str, provider: str) -> bool:
     return "thinking" in name or "reasoning" in name
 
 
-def _extract_visible_content(content: str, *, require_think_end: bool = False) -> str:
+def _split_after_last_think_end(content: str) -> tuple[bool, str]:
+    """Return text after the last think-end token, if one exists."""
+
+    matches = list(THINK_END_TOKEN_RE.finditer(content))
+    if not matches:
+        return False, content
+    return True, content[matches[-1].end() :]
+
+
+def _extract_marked_final_content(content: str) -> str:
+    """Extract Korean final-answer text after an explicit answer marker."""
+
+    for marker in FINAL_ANSWER_MARKER_RE.finditer(content):
+        candidate = THINK_TOKEN_RE.sub("", content[marker.end():]).strip()
+        if HANGUL_RE.search(candidate):
+            return candidate
+    return ""
+
+
+def _looks_like_visible_answer(content: str, *, allow_short: bool = False) -> bool:
+    """Return whether buffered thinking-model text appears to be final Korean text."""
+
+    text = THINK_TOKEN_RE.sub("", content).strip()
+    if not text:
+        return False
+    if _extract_marked_final_content(text):
+        return True
+    if REASONING_PREFIX_RE.search(text):
+        return False
+    if not HANGUL_RE.search(text):
+        return False
+    compact = re.sub(r"\s+", "", text)
+    return allow_short or len(compact) >= 8 or "\n" in text
+
+
+def _extract_visible_content(
+    content: str,
+    *,
+    require_think_end: bool = False,
+    fallback_on_hidden: bool = False,
+) -> str:
     """Remove hidden think blocks and return user-visible final text."""
 
-    if THINK_END_TOKEN in content:
-        content = content.rsplit(THINK_END_TOKEN, 1)[-1]
-    elif require_think_end or content.lstrip().lower().startswith("<think>"):
+    has_think_end, visible = _split_after_last_think_end(content)
+    if has_think_end:
+        return THINK_TOKEN_RE.sub("", visible).strip()
+
+    marked = _extract_marked_final_content(content)
+    if marked:
+        return marked
+
+    if require_think_end:
+        if _looks_like_visible_answer(content, allow_short=True):
+            return THINK_TOKEN_RE.sub("", content).strip()
+        return THINKING_EMPTY_FINAL_FALLBACK if fallback_on_hidden and content.strip() else ""
+
+    if THINK_TOKEN_RE.match(content.lstrip()):
         return ""
     return THINK_TOKEN_RE.sub("", content).strip()
 
@@ -56,7 +122,7 @@ def _extract_visible_content(content: str, *, require_think_end: bool = False) -
 def _clean_stream_token(token: str) -> str:
     """Clean a visible stream token without dropping ordinary spacing."""
 
-    if "<think" in token.lower() or THINK_END_TOKEN in token:
+    if "<think" in token.lower() or THINK_END_TOKEN_RE.search(token):
         return _extract_visible_content(token)
     return token
 
@@ -65,7 +131,9 @@ def _should_disable_thinking(model: str, provider: str) -> bool:
     """Return whether the serving template should emit final content directly."""
 
     name = model.lower()
-    return provider == "vllm" and "nemotron" in name
+    if provider == "vllm" and "nemotron" in name:
+        return True
+    return provider == "sglang" and "qwen" in name and _uses_think_stream(model, provider)
 
 
 def _retry_delay_seconds(response: requests.Response | None, attempt: int) -> float:
@@ -119,9 +187,10 @@ class OpenAICompatibleClient:
             "max_tokens": self.max_tokens,
             "stream": stream,
         }
-        if self.provider == "sglang" and config.SGLANG_REASONING_EFFORT:
+        disable_thinking = _should_disable_thinking(self.model, self.provider)
+        if self.provider == "sglang" and config.SGLANG_REASONING_EFFORT and not disable_thinking:
             payload["reasoning_effort"] = config.SGLANG_REASONING_EFFORT
-        if _should_disable_thinking(self.model, self.provider):
+        if disable_thinking:
             payload["chat_template_kwargs"] = {"enable_thinking": False}
         return payload
 
@@ -166,6 +235,7 @@ class OpenAICompatibleClient:
         return _extract_visible_content(
             content,
             require_think_end=_uses_think_stream(self.model, self.provider),
+            fallback_on_hidden=_uses_think_stream(self.model, self.provider),
         )
 
     def generate_stream(self, prompt: str, system: str = "", temperature: float = 0.2) -> Iterator[str]:
@@ -192,6 +262,7 @@ class OpenAICompatibleClient:
                     emitting = not harmony_mode
                     think_buffer = ""
                     think_emitting = not think_mode
+                    visible_yielded = False
 
                     for raw in response.iter_lines():
                         if not raw:
@@ -214,15 +285,23 @@ class OpenAICompatibleClient:
                         if not harmony_mode:
                             if not think_emitting:
                                 think_buffer += token
-                                if THINK_END_TOKEN in think_buffer:
+                                if THINK_END_TOKEN_RE.search(think_buffer):
                                     think_emitting = True
                                     cleaned = _extract_visible_content(think_buffer, require_think_end=True)
                                     if cleaned:
+                                        visible_yielded = True
+                                        yield cleaned
+                                elif _extract_marked_final_content(think_buffer) or _looks_like_visible_answer(think_buffer):
+                                    think_emitting = True
+                                    cleaned = _extract_visible_content(think_buffer, require_think_end=True)
+                                    if cleaned:
+                                        visible_yielded = True
                                         yield cleaned
                                 continue
                             cleaned = HARMONY_TOKEN_RE.sub("", token)
                             cleaned = _clean_stream_token(cleaned)
                             if cleaned:
+                                visible_yielded = True
                                 yield cleaned
                             continue
 
@@ -230,6 +309,7 @@ class OpenAICompatibleClient:
                             cleaned = HARMONY_TOKEN_RE.sub("", token.replace("<|return|>", "").replace("<|end|>", ""))
                             cleaned = _clean_stream_token(cleaned)
                             if cleaned:
+                                visible_yielded = True
                                 yield cleaned
                             continue
                         buffer += token
@@ -238,7 +318,16 @@ class OpenAICompatibleClient:
                             emitting = True
                             cleaned = _extract_final_content(buffer)
                             if cleaned:
+                                visible_yielded = True
                                 yield cleaned
+                    if think_mode and not visible_yielded and think_buffer.strip():
+                        fallback = _extract_visible_content(
+                            think_buffer,
+                            require_think_end=True,
+                            fallback_on_hidden=True,
+                        )
+                        if fallback:
+                            yield fallback
                     return
             except requests.RequestException as exc:
                 if attempt < MAX_RETRIES:
