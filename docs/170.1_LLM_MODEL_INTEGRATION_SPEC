@@ -1,0 +1,842 @@
+# LLM 모델 신규 편입 및 구현 제안 명세서
+
+## 0. 문서 목적
+
+본 문서는 `insurance-rag-chatbot` 프로젝트의 DGX Spark 128GB 환경에서 신규 로컬 LLM 모델을 편입하기 위한 개발 명세서이다. 기존 논의와 현재 메인 저장소의 모델 구성 상황을 바탕으로, 이미 존재하거나 유사한 모델을 제외하고 추가 편입 가치가 있는 모델을 선별하며, 각 모델의 메모리 최적화 전략, 서버 구성, 코드 구현 범위, 평가 기준, 롤백 방안을 정의한다.
+
+본 제안의 핵심은 “가장 큰 모델을 무리하게 올리는 것”이 아니라, 보험 RAG 보상 어시스턴트의 목적에 맞게 다음 원칙을 만족하는 모델 운영 체계를 만드는 것이다.
+
+- 약관, HIRA 코드, 상담 사례집, GraphDB Review Path 기반의 근거 중심 답변 유지
+- 실손보험 계산 로직은 LLM이 임의 계산하지 않고 `src/claim_calculation/` 결정론적 파이프라인 우선 사용
+- BM25 + Chroma + GraphDB 검색/근거 구성은 유지하고, LLM은 최종 설명 생성기로 제한
+- DGX Spark 128GB 메모리 한계 안에서 모델별 서버를 안전하게 분리 운영
+- 모델 추가 후 `pytest -q`, retrieval 평가, 인덱스 정합성 점검을 통해 회귀 방지
+
+---
+
+## 1. 현재 프로젝트 기술 상황 요약
+
+### 1.1 인프라 및 저장소
+
+- GitHub 저장소: `koreaben777/insurance-rag-chatbot`
+- DGX 공용 프로젝트 경로: `/srv/shared/projects/insurance-rag-chatbot`
+- 주요 실행 환경: DGX Spark, unified memory 128GB
+- 백엔드/API: FastAPI, Python 3.10+
+- 프론트엔드: HTML / Vanilla JS / CSS SPA 구조 또는 Streamlit 기반 검증 경로
+- 검색/DB:
+  - SQLite: GraphDB, 앱 DB, 표준코드
+  - ChromaDB: vector DB
+  - BM25 + Chroma hybrid retrieval
+- LLM 인터페이스:
+  - `src/llm/base.py`: `LLMClient` 프로토콜 존재
+  - 기존 Ollama client 경로 존재
+  - 향후 vLLM / SGLang / llama.cpp server의 OpenAI-compatible endpoint 연결 필요
+
+### 1.2 현재 RAG 데이터 및 기준 상태
+
+현재 알려진 정상 기준은 다음과 같다.
+
+- `chunks.jsonl`: 7,825건
+- Chroma count: 7,825건
+- `eval.py --ocr` retrieval recall@8: 1.000 확인 이력 있음
+- Streamlit + Ollama 기반 답변 생성 확인 이력 있음
+- 현재 로컬 LLM 기준: `exaone3.5:7.8b`
+
+모델 신규 편입은 retrieval 구조를 바꾸는 작업이 아니라, 기존 검색/근거 구성의 최종 생성 모델을 교체·확장하는 작업으로 간주한다.
+
+---
+
+## 2. 현재 메인 저장소 기준 이용 가능한 대형 LLM
+
+사용자가 제공한 현재 메인 저장소 기준 모델 목록은 다음과 같다.
+
+### 2.1 SGLang 서빙 모델
+
+```text
+- gpt-oss-20b                     # 현재 SGLang 기본 모델
+- qwen3-30b-a3b-instruct-2507-fp8
+- qwen3-next-80b-a3b-instruct-fp8
+- qwen3-next-80b-a3b-thinking-fp8
+```
+
+참고로 다음 모델은 SGLang 네이티브 스택에서 `<pad>` 토큰 무한 반복 이슈가 있어 현재 SGLang 경로에서는 비활성화되어 있다.
+
+```text
+- gemma-4-26b-a4b-nvfp4
+- nemotron-3-nano-30b-a3b-nvfp4
+```
+
+### 2.2 vLLM 서빙 모델
+
+```text
+- gemma-4-26b-a4b-nvfp4            # 현재 vLLM 기본 모델
+- gemma-4-31b-it-nvfp4
+- nemotron-3-nano-30b-a3b-nvfp4
+```
+
+---
+
+## 3. 신규 편입 후보 필터링 결과
+
+이미 존재하거나 너무 유사한 모델을 제외한 신규 편입 후보는 다음과 같다.
+
+```text
+1. EXAONE 4.0 32B
+2. Llama 3.3 70B Instruct Q4/IQ4
+4. GPT-OSS-120B
+```
+
+직전 논의에서 3순위였던 Qwen2.5/Qwen3 72B dense 계열은 이미 `qwen3-next-80b-a3b-*`가 존재하므로 우선 편입 대상에서 제외하거나 후순위로 둔다. Qwen 계열은 현재 저장소에 이미 충분히 존재하므로 신규 모델 추가보다는 기존 Qwen 모델 평가가 우선이다.
+
+---
+
+## 4. 모델별 편입 판단
+
+### 4.1 EXAONE 4.0 32B
+
+#### 편입 목적
+
+한국어 보험 문서 기반 RAG 답변 품질을 높이기 위한 주력 후보이다. 현재 프로젝트가 한국어 약관, 상담 사례집, 보상 실무 문서 중심이고 기존 운영 모델이 EXAONE 3.5 계열이므로, EXAONE 4.0 32B는 기존 프롬프트 스타일과 자연스럽게 연결될 가능성이 높다.
+
+#### 추천 포맷
+
+우선순위는 다음과 같다.
+
+```text
+1. EXAONE-4.0-32B-AWQ
+2. EXAONE-4.0-32B-GPTQ
+3. EXAONE-4.0-32B-FP8
+```
+
+가능하면 공식 배포된 양자화 모델을 사용한다. 직접 변환은 호환성 이슈가 생길 수 있으므로 초기 편입 단계에서는 피한다.
+
+#### 메모리 최적화 필요도
+
+```text
+필수 수준: 권장
+```
+
+DGX Spark 128GB 기준에서 32B급은 가장 현실적인 신규 후보이다. 단, RAG 서버, Chroma, embedding model, 기타 Python 프로세스가 함께 상주하므로 AWQ/GPTQ/FP8 등 최적화 포맷 사용은 권장된다.
+
+#### 권장 런타임
+
+```text
+vLLM OpenAI-compatible server
+```
+
+#### 초기 제한값
+
+```text
+max_model_len: 4096 또는 8192부터 시작
+concurrency: 1
+max_tokens: 512~1024
+RAG top-k: 4~6
+reasoning mode: 기본 비활성 또는 제한적 사용
+```
+
+#### 프로젝트 내 역할
+
+```text
+한국어 보험 RAG 주력 후보
+```
+
+---
+
+### 4.2 Llama 3.3 70B Instruct Q4/IQ4
+
+#### 편입 목적
+
+속도를 포기하더라도 고품질 답변을 얻기 위한 dense 70B 기준선 모델이다. 기존 `qwen3-next-80b-a3b-*`는 MoE 계열이므로, dense 70B 모델과의 비교 가치가 있다.
+
+#### 추천 포맷
+
+```text
+1. IQ4_XS
+2. Q4_K_M
+3. Q5_K_M    # 품질 우선 실험용, 메모리 여유 확인 후 사용
+```
+
+F16, Q8_0는 DGX Spark 128GB에서 RAG 서버와 함께 운용하기에 비현실적이므로 제외한다.
+
+#### 메모리 최적화 필요도
+
+```text
+필수 수준: 필수
+```
+
+70B dense 모델은 모델 파일 크기 외에도 KV cache, context length, batch, 런타임 오버헤드가 커서 메모리 최적화 없이는 안정 운용이 어렵다.
+
+#### 권장 런타임
+
+초기 실험은 다음 중 하나를 권장한다.
+
+```text
+1. llama.cpp server
+2. Ollama GGUF 경로
+```
+
+vLLM 경로도 가능하지만, DGX Spark 128GB에서 70B dense를 안정적으로 올리는 데에는 GGUF 기반의 llama.cpp/Ollama가 더 단순하고 제어가 쉽다.
+
+#### 초기 제한값
+
+```text
+context: 4096부터 시작, 안정화 후 8192 검토
+concurrency: 1
+batch: 작게 시작
+max_tokens: 512~1024
+RAG top-k: 4 이하부터 시작
+```
+
+#### 프로젝트 내 역할
+
+```text
+slow-high-quality 검토 모드
+```
+
+일반 사용자 기본 모델로 바로 쓰기보다는, 관리자 또는 보상 담당자가 “고난도 검토” 버튼을 눌렀을 때 호출하는 고품질 모델로 편입하는 것이 안전하다.
+
+---
+
+### 4.3 GPT-OSS-120B
+
+#### 편입 목적
+
+DGX Spark 128GB에서 가능한 최고 체급 모델을 검증하기 위한 한계 테스트 후보이다. 실서비스 주력 모델이 아니라 별도 실험 경로에서 생존성, 메모리, 지연 시간을 먼저 검증해야 한다.
+
+#### 추천 포맷
+
+```text
+MXFP4 공식 포맷 또는 GPT-OSS 전용 optimized recipe
+```
+
+일반적인 Ollama pull 또는 단순 변환 경로는 권장하지 않는다.
+
+#### 메모리 최적화 필요도
+
+```text
+필수 수준: 매우 필수
+```
+
+현재 `gpt-oss-20b`도 메모리를 크게 점유하는 상황이 관찰되었으므로, `gpt-oss-120b`는 기존 RAG 서버 위에 직접 올리는 방식으로 접근해서는 안 된다.
+
+#### 권장 런타임
+
+```text
+1. SGLang GPT-OSS 전용 recipe
+2. vLLM GPT-OSS 전용 recipe
+```
+
+#### 초기 제한값
+
+```text
+max_model_len: 4096 이하부터 시작
+concurrency: 1
+batch: 최소
+RAG 미연결 상태에서 단독 서버 부팅 검증
+embedding / Chroma / Streamlit / 기존 LLM 서버와 분리
+```
+
+#### 프로젝트 내 역할
+
+```text
+한계 테스트 / 최고성능 실험 후보
+```
+
+성공하더라도 운영 모델이 아니라 별도 endpoint로 연결하는 실험 모델로 둔다.
+
+---
+
+## 5. 메모리 최적화가 필수인 모델
+
+### 5.1 필수 모델
+
+다음 두 모델은 메모리 최적화 없이는 편입을 진행하지 않는다.
+
+```text
+- Llama 3.3 70B Instruct Q4/IQ4
+- GPT-OSS-120B
+```
+
+### 5.2 권장 모델
+
+다음 모델은 메모리 최적화가 필수는 아니지만, 안정 운용을 위해 양자화 포맷을 사용한다.
+
+```text
+- EXAONE 4.0 32B
+```
+
+---
+
+## 6. 공통 메모리 최적화 전략
+
+### 6.1 모델별 서버 분리
+
+모델 서버는 기존 RAG 앱과 분리한다.
+
+권장 구조는 다음과 같다.
+
+```text
+/srv/shared/projects/insurance-rag-chatbot
+  - 기존 RAG 애플리케이션
+  - BM25 / Chroma / GraphDB / SQLite
+  - claim_calculation
+  - eval.py
+
+/srv/shared/model-servers/
+  - exaone-4-32b/
+  - llama-3.3-70b/
+  - gpt-oss-120b/
+```
+
+RAG 앱은 직접 모델을 로드하지 않고 OpenAI-compatible endpoint를 호출한다.
+
+```text
+RAG App
+→ retrieval / GraphDB Review Path / claim_calculation
+→ prompt assembly
+→ LLM endpoint
+→ grounded answer
+```
+
+### 6.2 단일 상주 모델 원칙
+
+DGX Spark 128GB에서는 여러 대형 모델을 동시에 상주시키지 않는다.
+
+테스트 전 반드시 확인한다.
+
+```bash
+free -h
+nvidia-smi || true
+ps aux --sort=-%mem | head -30
+ollama ps || true
+```
+
+Ollama 모델이 남아 있으면 중지한다.
+
+```bash
+ollama stop <model-name>
+```
+
+필요 시 keep-alive를 줄인다.
+
+```bash
+export OLLAMA_KEEP_ALIVE=0
+```
+
+### 6.3 context 제한
+
+대형 모델 테스트는 긴 context로 시작하지 않는다.
+
+권장 시작값은 다음과 같다.
+
+```text
+EXAONE 4.0 32B: 4096~8192
+Llama 3.3 70B: 4096
+GPT-OSS-120B: 4096 이하
+```
+
+RAG에서 검색 결과를 무제한으로 넣지 않고, 근거 수를 제한한다.
+
+```text
+초기 RAG top-k: 4
+안정화 후: 6~8
+```
+
+### 6.4 KV cache와 batch 제한
+
+대형 모델은 KV cache가 메모리 사용량에 큰 영향을 준다. 초기 테스트에서는 다음 원칙을 적용한다.
+
+```text
+- concurrency = 1
+- batch size 최소화
+- max_tokens 512~1024
+- streaming 우선 사용
+- 긴 답변 생성 금지
+```
+
+vLLM/SGLang에서는 GPU memory utilization, max model len, max running requests, max total tokens 등의 옵션을 명시적으로 낮게 시작한다.
+
+### 6.5 RAG 프롬프트 압축
+
+보험 RAG에서는 LLM에게 긴 문서를 통째로 넣는 대신, 기존 검색 구조가 근거를 선별해야 한다.
+
+권장 방식은 다음과 같다.
+
+```text
+1. BM25 + Chroma로 후보 검색
+2. GraphDB Review Path로 약관/사례/코드 연결 근거 확인
+3. 중복 chunk 제거
+4. 지급/면책 판단에 필요한 근거만 4~6개 선정
+5. 계산 질의는 src/claim_calculation/ 결과를 먼저 생성
+6. LLM에는 “근거 목록 + 계산 결과 + 답변 지침”만 전달
+```
+
+이 방식은 메모리 최적화이면서 동시에 할루시네이션 방지 장치이다.
+
+---
+
+## 7. 코드 구현 제안
+
+### 7.1 LLM provider 추상화 확장
+
+현재 `src/llm/base.py`에 `LLMClient` 프로토콜이 있으므로, 신규 모델을 모델별 코드로 직접 분기하지 않고 endpoint 기반 provider로 추가한다.
+
+권장 파일 구조:
+
+```text
+src/llm/
+  base.py
+  ollama_client.py
+  openai_compatible_client.py       # 신규
+  model_registry.py                 # 신규 또는 config 기반 대체
+```
+
+### 7.2 OpenAI-compatible client 추가
+
+vLLM, SGLang, llama.cpp server는 OpenAI-compatible API를 제공할 수 있으므로 공통 client를 만든다.
+
+예시 설정:
+
+```env
+LLM_PROVIDER=openai_compatible
+LLM_ENDPOINT=http://127.0.0.1:18080/v1
+LLM_MODEL=exaone-4.0-32b-awq
+LLM_TIMEOUT_SECONDS=180
+LLM_MAX_TOKENS=1024
+LLM_TEMPERATURE=0.2
+```
+
+모델별 endpoint 예시:
+
+```env
+# EXAONE 4.0 32B
+LLM_ENDPOINT=http://127.0.0.1:18080/v1
+LLM_MODEL=exaone-4.0-32b-awq
+
+# Llama 3.3 70B slow mode
+LLM_ENDPOINT=http://127.0.0.1:18081/v1
+LLM_MODEL=llama-3.3-70b-instruct-q4
+
+# GPT-OSS-120B experimental mode
+LLM_ENDPOINT=http://127.0.0.1:18082/v1
+LLM_MODEL=gpt-oss-120b-mxfp4
+```
+
+### 7.3 모델 프로파일 설정
+
+모델별로 `quality`, `slow`, `experimental` 프로파일을 나눈다.
+
+예시:
+
+```yaml
+models:
+  exaone_4_32b:
+    provider: openai_compatible
+    endpoint: http://127.0.0.1:18080/v1
+    model: exaone-4.0-32b-awq
+    mode: default_korean_quality
+    max_context: 8192
+    max_tokens: 1024
+    temperature: 0.2
+    rag_top_k: 6
+
+  llama_3_3_70b:
+    provider: openai_compatible
+    endpoint: http://127.0.0.1:18081/v1
+    model: llama-3.3-70b-instruct-q4
+    mode: slow_high_quality
+    max_context: 4096
+    max_tokens: 1024
+    temperature: 0.2
+    rag_top_k: 4
+
+  gpt_oss_120b:
+    provider: openai_compatible
+    endpoint: http://127.0.0.1:18082/v1
+    model: gpt-oss-120b-mxfp4
+    mode: experimental
+    max_context: 4096
+    max_tokens: 512
+    temperature: 0.2
+    rag_top_k: 3
+```
+
+### 7.4 UI/API 노출 방식
+
+초기에는 모든 모델을 일반 사용자에게 노출하지 않는다.
+
+권장 노출 단계:
+
+```text
+1. 관리자 전용 모델 선택 옵션
+2. 내부 평가 페이지 또는 CLI benchmark
+3. 검증 통과 후 일반 사용자 기본/고급 모드로 제한 노출
+```
+
+UI 모드 예시:
+
+```text
+- 기본 모드: 현재 안정 모델 또는 EXAONE 4.0 32B
+- 고품질 검토 모드: Llama 3.3 70B
+- 실험 모드: GPT-OSS-120B, 관리자만 접근
+```
+
+### 7.5 guardrail 유지
+
+모델 변경 시에도 다음 규칙은 변하지 않는다.
+
+```text
+- 비급여 수술, 도수치료 등 계산 질의는 LLM 임의 계산 금지
+- src/claim_calculation/ 결정론적 결과 우선
+- 근거 없는 의학적 추론 금지
+- 약관/상담사례/GraphDB Review Path에 없는 판단은 “근거 부족”으로 답변
+- 검색 결과와 계산 결과를 분리하여 프롬프트에 명시
+```
+
+---
+
+## 8. 서버 실행 제안
+
+아래 명령은 개발자가 실제 환경에 맞게 모델명, 포트, 옵션을 조정해야 한다. 정확한 스크립트명은 프로젝트의 `docs/`와 `AGENTS.md` 명세를 우선한다.
+
+### 8.1 EXAONE 4.0 32B vLLM 예시
+
+```bash
+cd /srv/shared/model-servers/exaone-4-32b
+
+python -m vllm.entrypoints.openai.api_server \
+  --model LGAI-EXAONE/EXAONE-4.0-32B-AWQ \
+  --host 127.0.0.1 \
+  --port 18080 \
+  --max-model-len 8192 \
+  --gpu-memory-utilization 0.80 \
+  --max-num-seqs 1
+```
+
+초기 실패 시 `--max-model-len 4096`, `--gpu-memory-utilization 0.70`으로 낮춘다.
+
+### 8.2 Llama 3.3 70B llama.cpp server 예시
+
+```bash
+cd /srv/shared/model-servers/llama-3.3-70b
+
+./llama-server \
+  -m /srv/models/Llama-3.3-70B-Instruct-Q4_K_M.gguf \
+  --host 127.0.0.1 \
+  --port 18081 \
+  -c 4096 \
+  -np 1
+```
+
+메모리 여유가 부족하면 IQ4_XS 또는 더 낮은 quant로 전환한다.
+
+### 8.3 GPT-OSS-120B 실험 서버 예시
+
+```bash
+cd /srv/shared/model-servers/gpt-oss-120b
+
+# 실제 실행 명령은 vLLM/SGLang의 GPT-OSS 전용 recipe 기준으로 작성한다.
+# 일반 Ollama 경로가 아니라 MXFP4 최적화 경로를 사용한다.
+```
+
+GPT-OSS-120B는 다음 조건을 충족하기 전까지 RAG 앱에 연결하지 않는다.
+
+```text
+- 단독 서버 부팅 성공
+- 짧은 한국어 프롬프트 응답 성공
+- 2K/4K context 응답 성공
+- 연속 5회 요청에서 메모리 증가/누수 없음
+- RAG 근거 3개 입력 테스트 성공
+```
+
+## 9. 평가 및 검증 계획
+
+### 9.1 공통 검증 명령
+
+모델 편입 전후로 다음을 실행한다.
+
+```bash
+cd /srv/shared/projects/insurance-rag-chatbot
+
+# 인덱스/데이터 정합성 점검
+# 실제 스크립트명은 docs/와 AGENTS.md 기준으로 확인
+python scripts/check_index_sync.py || true
+
+# retrieval 평가
+python eval.py --ocr
+
+# 단위 테스트
+pytest -q
+```
+
+`check_index_sync.py`가 실제로 존재하지 않는 경우, 프로젝트 문서의 인덱스 동기화 점검 스크립트명으로 대체한다.
+
+### 9.2 모델 품질 평가 항목
+
+각 모델에 대해 동일한 질의 세트를 사용한다.
+
+```text
+1. 약관 근거 질의
+2. 상담 사례집 기반 지급/면책 판단
+3. HIRA 코드 또는 표준코드 관련 질의
+4. 실손 계산 질의
+5. 근거가 부족한 질의
+6. 긴 문서 근거 4~6개를 요구하는 질의
+7. 한국어 실무 문체 평가
+```
+
+### 9.3 보험 도메인 guardrail 평가
+
+각 답변은 다음 기준으로 평가한다.
+
+```text
+- 근거 문서가 없는 내용을 단정하지 않는가
+- 약관 근거와 상담 사례 근거를 구분하는가
+- 계산 질의에서 LLM이 임의 계산하지 않는가
+- src/claim_calculation/ 결과와 충돌하지 않는가
+- 지급/면책 판단을 지나치게 확정적으로 말하지 않는가
+- 보상 담당자가 검토할 수 있는 형태로 근거를 제시하는가
+```
+
+### 9.4 성능/메모리 평가 항목
+
+각 모델별로 다음 로그를 남긴다.
+
+```text
+- 서버 부팅 성공 여부
+- idle memory
+- 1회 질의 peak memory
+- 연속 5회 질의 후 memory
+- 평균 latency
+- 첫 토큰 latency
+- tokens/sec
+- context 4K/8K에서의 안정성
+- OOM 여부
+```
+
+권장 로그 위치:
+
+```text
+/srv/ai-ops/logs/model-benchmarks/
+```
+
+---
+
+## 10. 편입 우선순위 및 마일스톤
+
+### Phase 1: 기존 모델 평가
+
+먼저 이미 저장소에 존재하는 모델을 평가한다.
+
+```text
+1. qwen3-next-80b-a3b-instruct-fp8
+2. qwen3-next-80b-a3b-thinking-fp8
+3. gemma-4-31b-it-nvfp4
+4. nemotron-3-nano-30b-a3b-nvfp4
+5. qwen3-30b-a3b-instruct-2507-fp8
+6. gpt-oss-20b
+```
+
+### Phase 2: EXAONE 4.0 32B 편입
+
+목표:
+
+```text
+한국어 보험 RAG 주력 후보 검증
+```
+
+작업:
+
+```text
+- 공식 AWQ/GPTQ/FP8 모델 중 1개 선택
+- vLLM OpenAI-compatible endpoint 구성
+- LLMClient 연결
+- 관리자 전용 모델 선택 옵션 추가
+- 평가 질의 세트 수행
+```
+
+### Phase 3: Llama 3.3 70B 편입
+
+목표:
+
+```text
+slow-high-quality 검토 모드 검증
+```
+
+작업:
+
+```text
+- Q4_K_M 또는 IQ4_XS GGUF 확보
+- llama.cpp server 또는 Ollama 경로 구성
+- context 4096으로 단독 테스트
+- RAG top-k 4 제한으로 연결
+- 관리자/고급 모드로만 노출
+```
+
+### Phase 4: GPT-OSS-120B 한계 테스트
+
+목표:
+
+```text
+DGX Spark 128GB에서 120B급 모델의 실사용 가능성 검증
+```
+
+작업:
+
+```text
+- 별도 model server 디렉터리 구성
+- vLLM/SGLang GPT-OSS 전용 recipe 확인
+- MXFP4 최적화 경로로 단독 부팅
+- 2K/4K context 테스트
+- 연속 질의 메모리 안정성 확인
+- 성공 시에만 RAG endpoint 후보로 등록
+```
+
+---
+
+## 11. 롤백 및 안전장치
+
+### 11.1 기본 롤백 전략
+
+신규 모델 편입은 기존 기본 모델을 대체하지 않고 옵션으로 추가한다.
+
+```text
+기본 모델: 현재 안정 모델 유지
+신규 모델: 관리자 전용 옵션으로 추가
+문제 발생 시: 환경변수 또는 config에서 기본 모델로 즉시 복귀
+```
+
+### 11.2 실패 시 조치
+
+모델 서버가 OOM 또는 응답 지연으로 실패할 경우 다음 순서로 낮춘다.
+
+```text
+1. max_model_len 감소
+2. max_tokens 감소
+3. concurrency 1 고정
+4. RAG top-k 감소
+5. 더 낮은 quant로 변경
+6. 해당 모델을 experimental로 강등
+7. 기본 모델에서 제외
+```
+
+### 11.3 운영 보호
+
+GPT-OSS-120B 및 Llama 70B는 초기에는 일반 사용자에게 노출하지 않는다.
+
+```text
+- 관리자 역할만 접근
+- timeout 강제
+- 요청 큐 제한
+- 동시 실행 제한
+- 로그 마스킹
+- secret 출력 금지
+```
+
+---
+
+## 12. 개발자에게 요청하는 구현 범위
+
+### 필수 구현
+
+```text
+1. OpenAI-compatible LLMClient 추가
+2. 모델 프로파일 config 추가
+3. 관리자 전용 모델 선택 옵션 추가
+4. 모델별 timeout/max_tokens/rag_top_k 분리
+5. 모델 benchmark 스크립트 또는 runbook 추가
+6. 인덱스 정합성/eval/pytest 확인 절차 문서화
+```
+
+### 권장 구현
+
+```text
+1. 모델별 health check endpoint
+2. 모델별 latency/memory 로그
+3. slow-high-quality 모드 UI 추가
+4. experimental 모델 접근 권한 제한
+5. 답변 평가용 golden question set 구축
+```
+
+### 보류 구현
+
+```text
+1. GPT-OSS-120B 일반 사용자 노출
+2. 여러 대형 모델 동시 상주
+3. RAG context 16K 이상 기본 사용
+4. LLM 기반 보험금 임의 계산
+```
+
+---
+
+## 13. 최종 제안
+
+우선순위 기준 1, 2, 4위 모델을 프로젝트에 편입한다면 다음 전략을 권장한다.
+
+```text
+1. EXAONE 4.0 32B
+   - 한국어 보험 RAG 주력 후보
+   - AWQ/GPTQ/FP8 공식 배포본 사용
+   - vLLM endpoint로 연결
+
+2. Llama 3.3 70B Instruct Q4/IQ4
+   - slow-high-quality 검토 모드
+   - llama.cpp server 또는 Ollama GGUF 경로 사용
+   - context 4096, top-k 4, concurrency 1로 시작
+
+4. GPT-OSS-120B
+   - 실서비스 후보가 아니라 한계 테스트 후보
+   - 기존 RAG 서버와 분리
+   - MXFP4 + vLLM/SGLang 전용 recipe 사용
+   - 단독 생존성 검증 후 endpoint 등록 여부 판단
+```
+
+현재 앱에는 OpenAI-compatible endpoint 연결이 이미 구현되어 있다. 따라서 가장 먼저 구현할 작업은 **신규 모델별 단독 부팅 검증과 기존 모델 전환 allowlist·앱 후보 설정 등록**이다. 검증을 통과한 모델만 동일한 RAG 파이프라인 위에서 평가하고 프론트엔드에 단계적으로 노출한다.
+
+---
+
+## 14. 2026-06-04 DGX 실환경 검토 및 다운로드 판정
+
+이 절은 문서 앞부분의 제안을 DGX 현재 상태와 실제 앱 구동 로직으로 재검토한 결과이며, 상충하는 기존 설명보다 우선한다.
+
+### 14.1 현재 환경 및 앱 연결성
+
+- DGX 저장 공간은 약 `326GiB`가 남아 있으며, 아래 선택 파일 약 `117.3GiB`를 모두 저장할 수 있다.
+- 현재 앱과 `gpt-oss-20b` 서버가 함께 실행될 때 가용 메모리는 약 `10GiB` 수준이므로, 신규 대형 모델은 **기존 대형 모델을 종료한 단일 상주 방식**으로만 서빙한다.
+- 앱에는 이미 SGLang/vLLM의 OpenAI-compatible endpoint 탐색 및 Ollama 연결 로직이 존재한다. 따라서 공통 client를 새로 만드는 것이 우선 과제는 아니다.
+- 다만 신규 모델은 현재 모델 전환 스크립트 allowlist와 앱 후보 설정에 등록되어 있지 않다. 다운로드만으로 프론트엔드에서 즉시 선택할 수 없으며, 모델별 실행 프로파일·전환 스크립트·상태 API 등록과 부팅 smoke test가 필요하다.
+
+### 14.2 후보별 실사용 판정
+
+| 모델 | 실사용 판정 | 선택 다운로드 | 앱 편입 전 필수 작업 |
+|---|---|---:|---|
+| `LGAI-EXAONE/EXAONE-4.0-32B-AWQ` | **가능, 우선 편입 후보**. 약 32B AWQ라 DGX에서 단일 상주 서빙 여유가 있고 한국어 보험 질의 평가 가치가 높다. | 약 `16.94GiB` | vLLM 또는 SGLang 부팅 검증, 모델 전환 allowlist/앱 후보 등록, EXAONE 라이선스 검토 |
+| `unsloth/Llama-3.3-70B-Instruct-Q4_K_M.gguf` | **조건부 가능, 저속 고품질 검토용**. 파일은 적재 가능하지만 현재 DGX에 `llama-server`가 없으므로 Ollama import 경로가 현실적이다. | 약 `39.60GiB` | Ollama import 및 단독 메모리/지연 측정, 앱 후보 등록, 커뮤니티 양자화 및 원 모델 라이선스 검토 |
+| `openai/gpt-oss-120b` | **조건부 가능, 관리자 전용 실험 모델**. 공식 MXFP4 계열은 단일 80GB급 GPU 실행을 목표로 하지만, DGX에서는 다른 대형 서버 종료와 낮은 context/concurrency가 필수다. | root 표준 파일 약 `60.79GiB` | SGLang/vLLM 단독 부팅, 2K/4K context 및 연속 요청 안정성 검증, 전환 프로파일/앱 후보 등록 |
+
+판정상 세 모델 모두 다운로드 대상에는 포함할 수 있다. 그러나 **즉시 운영 가능한 모델은 없으며**, EXAONE부터 단계적으로 서빙 검증을 통과시킨 뒤 앱에 노출한다.
+
+### 14.3 다운로드 범위 및 실행 상태
+
+전체 저장소 중 실제 서빙에 필요한 파일만 순차 다운로드한다.
+
+1. EXAONE 4.0 32B AWQ 전체 모델
+2. Llama 3.3 70B의 `Q4_K_M.gguf` 단일 파일
+3. GPT-OSS-120B의 root 표준 safetensors/MXFP4 파일만 다운로드하며 `original/`, `metal/` 중복 파일은 제외
+
+DGX 실행 정보:
+
+```text
+tmux session: llm-model-download-1701
+log: /srv/ai-ops/logs/model-download/llm-model-download-1701.log
+model root: /srv/ai-ops/llm/models
+download order: EXAONE -> Llama -> GPT-OSS-120B
+```
+
+2026-06-04 기준 DGX 프로젝트 `.env`의 Hugging Face 토큰을 값 노출 없이 로그인 저장소에 등록하고 인증 다운로드 세션으로 재시작했다. 기존 부분 다운로드 경로를 그대로 사용하므로 완료된 파일과 다운로드 중인 파일을 이어받는다.
+
+검토한 모델 배포 페이지:
+
+- <https://huggingface.co/LGAI-EXAONE/EXAONE-4.0-32B-AWQ>
+- <https://huggingface.co/unsloth/Llama-3.3-70B-Instruct-GGUF>
+- <https://huggingface.co/openai/gpt-oss-120b>

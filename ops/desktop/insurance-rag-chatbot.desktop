@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=신한EZ손해보험 보상지원 AI 챗봇
+Comment=LLM 모델을 선택하고 보험 RAG 챗봇을 실행합니다
+Exec=/srv/ai-ops/bin/insurance-rag-desktop-launcher
+Icon=applications-internet
+Terminal=false
+Categories=Utility;
+StartupNotify=true

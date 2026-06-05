@@ -1,0 +1,49 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+AI_OPS_ROOT="${AI_OPS_ROOT:-/srv/ai-ops}"
+MODEL_ROOT="${LLM_MODEL_ROOT:-$AI_OPS_ROOT/llm/models}"
+
+log() {
+  printf '[llm-assets] %s\n' "$*"
+}
+
+if [[ ! -d "$MODEL_ROOT" ]]; then
+  echo "model root is missing: $MODEL_ROOT" >&2
+  exit 3
+fi
+
+python3 - "$MODEL_ROOT" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+updated = 0
+skipped = 0
+
+for model_dir in sorted(path for path in root.iterdir() if path.is_dir()):
+    config_path = model_dir / "config.json"
+    tokenizer_path = model_dir / "tokenizer_config.json"
+    template_path = model_dir / "chat_template.jinja"
+    if not config_path.exists() or not tokenizer_path.exists() or template_path.exists():
+        skipped += 1
+        continue
+    try:
+        tokenizer_config = json.loads(tokenizer_path.read_text(encoding="utf-8"))
+    except Exception:
+        skipped += 1
+        continue
+    template = tokenizer_config.get("chat_template")
+    if not isinstance(template, str) or not template.strip():
+        skipped += 1
+        continue
+    template_path.write_text(template.rstrip() + "\n", encoding="utf-8")
+    updated += 1
+    print(f"created: {template_path}")
+
+print(f"summary: created={updated} skipped={skipped}")
+PY
+
+log "model assets ready under $MODEL_ROOT"

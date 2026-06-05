@@ -45,6 +45,12 @@ LOCAL_LARGE_MODEL_INFO: dict[str, dict[str, str]] = {
         "status": "staged",
         "use_case": "vLLM 신규 비교 모델",
     },
+    "exaone-4.0-32b-awq": {
+        "family": "EXAONE 4.0",
+        "size": "32B AWQ",
+        "status": "staged",
+        "use_case": "vLLM 한국어 비교 모델",
+    },
 }
 
 SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
@@ -53,6 +59,12 @@ SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
         "size": "20B",
         "status": "validated",
         "use_case": "기본 로컬 답변",
+    },
+    "gpt-oss-120b": {
+        "family": "GPT-OSS",
+        "size": "120B MXFP4",
+        "status": "staged",
+        "use_case": "SGLang 대형 비교 모델",
     },
     "gemma-4-26b-a4b-nvfp4": {
         "family": "Gemma 4",
@@ -202,7 +214,6 @@ def _runtime_available_vllm_models() -> list[str]:
     return _ordered_unique(available)
 
 
-
 def list_startup_large_models() -> list[tuple[str, str]]:
     """Return provider/model pairs that can be loaded as the login-time large model."""
 
@@ -213,8 +224,6 @@ def _available_sglang_models() -> list[str]:
     """Return SGLang models that should be exposed in the UI."""
 
     candidates = _configured_sglang_models()
-    if config.OFFLINE_MODE and not config.SGLANG_STRICT_AVAILABLE_MODELS:
-        return candidates
     endpoints = [config.SGLANG_BASE_URL, *config.SGLANG_MODEL_ENDPOINTS.values(), *[config.sglang_base_url_for_model(model) for model in candidates]]
     served_by_endpoint = _served_models_by_endpoint(endpoints, api_key=config.SGLANG_API_KEY)
     served_models = _ordered_unique(
@@ -236,7 +245,6 @@ def _available_sglang_models() -> list[str]:
         if model in served:
             available.append(model)
     return _ordered_unique(available)
-
 
 
 def _runtime_available_sglang_models() -> list[str]:
@@ -402,7 +410,6 @@ def list_runtime_available_models() -> dict[str, list[str]]:
     if is_cloud_allowed() and os.getenv("OPENAI_API_KEY", ""):
         grouped["openai"] = list(config.OPENAI_CANDIDATE_MODELS)
     return grouped
-
 
 
 def build_llm(model: str, provider: str | None = None) -> LLMClient:

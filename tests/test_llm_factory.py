@@ -84,14 +84,42 @@ def test_list_available_models_hides_cloud_in_offline_mode(monkeypatch) -> None:
     monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
     monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint, api_key=None: [])
 
-    assert factory.list_available_models() == {
+    grouped = factory.list_available_models()
+
+    assert grouped["sglang"] == ["gpt-oss-20b"]
+    assert "gemma-4-26b-a4b-nvfp4" in grouped["vllm"]
+    assert grouped["ollama"] == []
+    assert grouped["openai"] == []
+
+
+def test_list_runtime_available_models_only_exposes_live_local_endpoints(monkeypatch) -> None:
+    monkeypatch.setattr(factory, "OllamaClient", FakeOllama)
+    monkeypatch.setenv("ALLOW_OLLAMA", "true")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "VLLM_DEFAULT_MODEL", "gemma-4-26b-a4b-nvfp4")
+    monkeypatch.setattr(factory.config, "VLLM_CANDIDATE_MODELS", ["gemma-4-26b-a4b-nvfp4"])
+    monkeypatch.setattr(factory.config, "VLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "VLLM_STRICT_AVAILABLE_MODELS", False)
+
+    def fake_served(endpoint, api_key=None):
+        if endpoint.endswith("30000/v1"):
+            return ["gpt-oss-20b"]
+        return []
+
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", fake_served)
+
+    grouped = factory.list_runtime_available_models()
+
+    assert grouped == {
         "sglang": ["gpt-oss-20b"],
-        "vllm": [
-            "gemma-4-26b-a4b-nvfp4",
-            "gemma-4-31b-it-nvfp4",
-            "nemotron-3-nano-30b-a3b-nvfp4",
-        ],
-        "ollama": [],
+        "vllm": [],
+        "ollama": ["gemma3:4b", "gemma3:1b"],
         "openai": [],
     }
 
@@ -169,6 +197,7 @@ def test_list_available_models_discovers_local_sglang_models(monkeypatch, tmp_pa
     monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
     monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint, api_key=None: [])
     monkeypatch.setenv("ALLOW_OLLAMA", "false")
     monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
 
@@ -189,6 +218,7 @@ def test_disabled_sglang_models_are_hidden_and_rejected(monkeypatch, tmp_path) -
     monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b", "gemma-4-26b-a4b-nvfp4"])
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
     monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", {"gemma-4-26b-a4b-nvfp4"})
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint, api_key=None: [])
     monkeypatch.setenv("ALLOW_OLLAMA", "false")
     monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
 

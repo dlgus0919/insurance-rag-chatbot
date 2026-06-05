@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+MODEL="${1:-}"
+PROJECT_DIR="${INSURANCE_RAG_PROJECT_DIR:-/srv/shared/projects/insurance-rag-chatbot}"
+AI_OPS_ROOT="${AI_OPS_ROOT:-/srv/ai-ops}"
+LOG_DIR="${SGLANG_LOG_DIR:-$AI_OPS_ROOT/logs/sglang}"
+BASE_URL="${SGLANG_BASE_URL:-http://127.0.0.1:30000/v1}"
+SGLANG_CUDA_VISIBLE_DEVICES="${SGLANG_CUDA_VISIBLE_DEVICES:-0}"
+SGLANG_WAIT_STEPS="${SGLANG_SWITCH_WAIT_STEPS:-240}"
+mkdir -p "$LOG_DIR"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  switch-sglang-model <model-id>
+
+Supported model ids:
+  gpt-oss-20b
+  gpt-oss-120b
+  qwen3-30b-a3b-instruct-2507-fp8
+  qwen3-next-80b-a3b-instruct-fp8
+  qwen3-next-80b-a3b-thinking-fp8
+  nemotron-3-nano-30b-a3b-nvfp4
+EOF
+}
+
+download_complete() {
+  local path="$1"
+  [[ -d "$path" ]] || return 1
+  [[ -f "$path/config.json" ]] || return 1
+  if find "$path" -path '*/.cache/huggingface/download/*' -name '*.incomplete' -print -quit | grep -q .; then
+    return 1
+  fi
+}
+
+if [[ -z "$MODEL" || "$MODEL" == "-h" || "$MODEL" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+# NVIDIA Gemma-4 NVFP4 currently belongs to the vLLM path. The native
+# SGLang stack loaded it during earlier tests but generated repeated pad tokens.
+if [[ "$MODEL" == gemma-4-* && "${SGLANG_ALLOW_UNVALIDATED_MODELS:-false}" != "true" ]]; then
+  echo "$MODEL is disabled for SGLang. Use the vLLM launcher entry instead." >&2
+  exit 4
+fi
+
+case "$MODEL" in
+  gpt-oss-20b)
+    MODEL_PATH="$AI_OPS_ROOT/llm/models/gpt-oss-20b"
+    CHAT_TEMPLATE="$AI_OPS_ROOT/llm/templates/gpt_oss_harmony.jinja"
+    TRUST_REMOTE_CODE="false"
+    MEM_FRACTION="${SGLANG_MEM_FRACTION_STATIC:-0.82}"
+    EXTRA_ARGS="${SGLANG_EXTRA_ARGS:-}"
+    ;;
+  gpt-oss-120b)
+    MODEL_PATH="$AI_OPS_ROOT/llm/models/gpt-oss-120b"
+    CHAT_TEMPLATE="$AI_OPS_ROOT/llm/models/gpt-oss-120b/chat_template.jinja"
+    TRUST_REMOTE_CODE="false"
+    MEM_FRACTION="${SGLANG_MEM_FRACTION_STATIC:-0.90}"
+    EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---context-length 32768 --disable-cuda-graph --disable-piecewise-cuda-graph}"
+    ;;
+  qwen3-30b-a3b-instruct-2507-fp8)
+    MODEL_PATH="$AI_OPS_ROOT/llm/models/qwen3-30b-a3b-instruct-2507-fp8"
+    CHAT_TEMPLATE="$MODEL_PATH/chat_template.jinja"
+    TRUST_REMOTE_CODE="true"
+    MEM_FRACTION="${SGLANG_MEM_FRACTION_STATIC:-0.82}"
+    EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---context-length 32768}"
+    ;;
+  qwen3-next-80b-a3b-instruct-fp8)
+    MODEL_PATH="$AI_OPS_ROOT/llm/models/qwen3-next-80b-a3b-instruct-fp8"
+    CHAT_TEMPLATE="$MODEL_PATH/chat_template.jinja"
+    TRUST_REMOTE_CODE="true"
+    MEM_FRACTION="${SGLANG_MEM_FRACTION_STATIC:-0.88}"
+    EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---context-length 32768 --disable-cuda-graph --disable-piecewise-cuda-graph}"
+    ;;
+  qwen3-next-80b-a3b-thinking-fp8)
+    MODEL_PATH="$AI_OPS_ROOT/llm/models/qwen3-next-80b-a3b-thinking-fp8"
+    CHAT_TEMPLATE="$MODEL_PATH/chat_template.jinja"
+    TRUST_REMOTE_CODE="true"
+    MEM_FRACTION="${SGLANG_MEM_FRACTION_STATIC:-0.88}"
+    EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---context-length 32768 --disable-cuda-graph --disable-piecewise-cuda-graph}"
+    ;;
+  nemotron-3-nano-30b-a3b-nvfp4)
+    MODEL_PATH="$AI_OPS_ROOT/llm/models/nemotron-3-nano-30b-a3b-nvfp4"
+    CHAT_TEMPLATE="$MODEL_PATH/chat_template.jinja"
+    TRUST_REMOTE_CODE="true"
+    MEM_FRACTION="${SGLANG_MEM_FRACTION_STATIC:-0.82}"
+    EXTRA_ARGS="${SGLANG_EXTRA_ARGS:---context-length 32768 --disable-cuda-graph --disable-piecewise-cuda-graph}"
+    ;;
+  *)
+    echo "unsupported SGLang model: $MODEL" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+if ! download_complete "$MODEL_PATH"; then
+  echo "model download is not complete or config is missing: $MODEL_PATH" >&2
+  exit 3
+fi
+if [[ ! -f "$CHAT_TEMPLATE" ]]; then
+  echo "chat template is missing: $CHAT_TEMPLATE" >&2
+  echo "run: $AI_OPS_ROOT/bin/prepare-llm-model-assets" >&2
+  exit 3
+fi
+if [[ ! -x "$PROJECT_DIR/.venv-sglang/bin/python" ]]; then
+  echo "SGLang venv is missing: $PROJECT_DIR/.venv-sglang" >&2
+  exit 3
+fi
+
+if current_json=$(curl -fsS "${BASE_URL%/}/models" 2>/dev/null); then
+  if printf '%s' "$current_json" | grep -q "\"id\":\"$MODEL\""; then
+    echo "$MODEL is already active"
+    exit 0
+  fi
+fi
+
+tmux kill-session -t sglang-local 2>/dev/null || true
+tmux kill-session -t sglang-gemma4 2>/dev/null || true
+tmux kill-session -t vllm-gemma4 2>/dev/null || true
+sleep 3
+
+cmd="export CUDA_VISIBLE_DEVICES='$SGLANG_CUDA_VISIBLE_DEVICES' && SGLANG_MODEL_PATH='$MODEL_PATH' SGLANG_SERVED_MODEL='$MODEL' SGLANG_CHAT_TEMPLATE='$CHAT_TEMPLATE' SGLANG_HOST='127.0.0.1' SGLANG_PORT='30000' SGLANG_TRUST_REMOTE_CODE='$TRUST_REMOTE_CODE' SGLANG_MEM_FRACTION_STATIC='$MEM_FRACTION' SGLANG_EXTRA_ARGS='$EXTRA_ARGS' '$AI_OPS_ROOT/bin/run-sglang-local'"
+tmux new-session -d -s sglang-local "$cmd"
+
+for _ in $(seq 1 "$SGLANG_WAIT_STEPS"); do
+  if json=$(curl -fsS "${BASE_URL%/}/models" 2>/dev/null); then
+    if printf '%s' "$json" | grep -q "\"id\":\"$MODEL\""; then
+      if curl -fsS "${BASE_URL%/}/chat/completions" \
+        -H 'Content-Type: application/json' \
+        -H 'Authorization: Bearer EMPTY' \
+        -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"테스트: 한 문장으로 응답하세요.\"}],\"max_tokens\":32,\"temperature\":0}" >/dev/null 2>&1; then
+        echo "$MODEL is active"
+        exit 0
+      fi
+    fi
+  fi
+  if ! tmux has-session -t sglang-local 2>/dev/null; then
+    echo "SGLang session exited while loading $MODEL" >&2
+    tail -160 "$LOG_DIR/sglang-local.log" >&2 || true
+    exit 1
+  fi
+  sleep 5
+done
+
+echo "timeout waiting for $MODEL" >&2
+tail -160 "$LOG_DIR/sglang-local.log" >&2 || true
+exit 1

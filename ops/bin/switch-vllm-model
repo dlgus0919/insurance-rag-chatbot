@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+MODEL="${1:-}"
+PROJECT_DIR="${INSURANCE_RAG_PROJECT_DIR:-/srv/shared/projects/insurance-rag-chatbot}"
+AI_OPS_ROOT="${AI_OPS_ROOT:-/srv/ai-ops}"
+VENV_DIR="${VLLM_VENV_DIR:-$PROJECT_DIR/.venv-vllm}"
+LOG_DIR="${VLLM_LOG_DIR:-$AI_OPS_ROOT/logs/vllm}"
+BASE_URL="${VLLM_BASE_URL:-http://127.0.0.1:30001/v1}"
+VLLM_CUDA_VISIBLE_DEVICES="${VLLM_CUDA_VISIBLE_DEVICES:-0}"
+VLLM_API_KEY="${VLLM_API_KEY:-EMPTY}"
+VLLM_WAIT_STEPS="${VLLM_SWITCH_WAIT_STEPS:-240}"
+mkdir -p "$LOG_DIR"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  switch-vllm-model <model-id>
+
+Supported model ids:
+  gemma-4-26b-a4b-nvfp4
+  gemma-4-31b-it-nvfp4
+  nemotron-3-nano-30b-a3b-nvfp4
+  exaone-4.0-32b-awq
+EOF
+}
+
+download_complete() {
+  local path="$1"
+  [[ -d "$path" ]] || return 1
+  [[ -f "$path/config.json" ]] || return 1
+  if find "$path" -path '*/.cache/huggingface/download/*' -name '*.incomplete' -print -quit | grep -q .; then
+    return 1
+  fi
+}
+
+if [[ -z "$MODEL" || "$MODEL" == "-h" || "$MODEL" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+case "$MODEL" in
+  gemma-4-26b-a4b-nvfp4)
+    MODEL_PATH="$AI_OPS_ROOT/llm/models/gemma-4-26b-a4b-nvfp4"
+    MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
+    MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-8192}"
+    GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.78}"
+    EXTRA_ARGS=(--trust-remote-code --tool-call-parser gemma4 --reasoning-parser gemma4 --enable-auto-tool-choice)
+    ;;
+  gemma-4-31b-it-nvfp4)
+    MODEL_PATH="$AI_OPS_ROOT/llm/models/gemma-4-31b-it-nvfp4"
+    MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
+    MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-8192}"
+    GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.80}"
+    EXTRA_ARGS=(--trust-remote-code --tool-call-parser gemma4 --reasoning-parser gemma4 --enable-auto-tool-choice)
+    ;;
+  nemotron-3-nano-30b-a3b-nvfp4)
+    MODEL_PATH="$AI_OPS_ROOT/llm/models/nemotron-3-nano-30b-a3b-nvfp4"
+    MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
+    MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-8192}"
+    GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.82}"
+    EXTRA_ARGS=(--trust-remote-code --reasoning-parser nemotron_v3)
+    ;;
+  exaone-4.0-32b-awq)
+    MODEL_PATH="$AI_OPS_ROOT/llm/models/exaone-4.0-32b-awq"
+    MAX_MODEL_LEN="${VLLM_MAX_MODEL_LEN:-32768}"
+    MAX_NUM_BATCHED_TOKENS="${VLLM_MAX_NUM_BATCHED_TOKENS:-8192}"
+    GPU_MEMORY_UTILIZATION="${VLLM_GPU_MEMORY_UTILIZATION:-0.80}"
+    EXTRA_ARGS=(--trust-remote-code)
+    ;;
+  *)
+    echo "unsupported vLLM model: $MODEL" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+LOG_FILE="$LOG_DIR/$MODEL.log"
+
+if [[ ! -x "$VENV_DIR/bin/python" ]]; then
+  echo "vLLM venv is missing: $VENV_DIR" >&2
+  exit 3
+fi
+if ! download_complete "$MODEL_PATH"; then
+  echo "model download is not complete or config is missing: $MODEL_PATH" >&2
+  exit 3
+fi
+
+if current_json=$(curl -fsS "${BASE_URL%/}/models" -H "Authorization: Bearer $VLLM_API_KEY" 2>/dev/null); then
+  if printf '%s' "$current_json" | grep -q "\"id\":\"$MODEL\""; then
+    echo "$MODEL is already active via vLLM"
+    exit 0
+  fi
+fi
+
+tmux kill-session -t sglang-local 2>/dev/null || true
+tmux kill-session -t sglang-gemma4 2>/dev/null || true
+tmux kill-session -t vllm-gemma4 2>/dev/null || true
+sleep 3
+
+cmd="cd '$PROJECT_DIR' && . '$VENV_DIR/bin/activate' && export CUDA_VISIBLE_DEVICES='$VLLM_CUDA_VISIBLE_DEVICES' && python -m vllm.entrypoints.openai.api_server --model '$MODEL_PATH' --served-model-name '$MODEL' --host 127.0.0.1 --port 30001 --max-model-len '$MAX_MODEL_LEN' --max-num-batched-tokens '$MAX_NUM_BATCHED_TOKENS' --gpu-memory-utilization '$GPU_MEMORY_UTILIZATION' --api-key '$VLLM_API_KEY' ${EXTRA_ARGS[*]} 2>&1 | tee -a '$LOG_FILE'"
+tmux new-session -d -s vllm-gemma4 "$cmd"
+
+for _ in $(seq 1 "$VLLM_WAIT_STEPS"); do
+  if json=$(curl -fsS "${BASE_URL%/}/models" -H "Authorization: Bearer $VLLM_API_KEY" 2>/dev/null); then
+    if printf '%s' "$json" | grep -q "\"id\":\"$MODEL\""; then
+      if curl -fsS "${BASE_URL%/}/chat/completions" \
+        -H 'Content-Type: application/json' \
+        -H "Authorization: Bearer $VLLM_API_KEY" \
+        -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"한국어로 한 문장으로 테스트 응답하세요.\"}],\"max_tokens\":48,\"temperature\":0}" \
+        | grep -vq '<pad>'; then
+        echo "$MODEL is active via vLLM"
+        exit 0
+      fi
+    fi
+  fi
+  if ! tmux has-session -t vllm-gemma4 2>/dev/null; then
+    echo "vLLM session exited while loading $MODEL" >&2
+    tail -160 "$LOG_FILE" >&2 || true
+    exit 1
+  fi
+  sleep 5
+done
+
+echo "timeout waiting for $MODEL via vLLM" >&2
+tail -160 "$LOG_FILE" >&2 || true
+exit 1

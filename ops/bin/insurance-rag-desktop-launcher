@@ -1,0 +1,392 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+AI_OPS_ROOT="${AI_OPS_ROOT:-/srv/ai-ops}"
+BIN_DIR="${AI_OPS_BIN_DIR:-$AI_OPS_ROOT/bin}"
+APP_UP="${INSURANCE_RAG_UP:-$BIN_DIR/insurance-rag-up}"
+APP_STATUS="${INSURANCE_RAG_STATUS:-$BIN_DIR/insurance-rag-status}"
+PROJECT_DIR="${INSURANCE_RAG_PROJECT_DIR:-/srv/shared/projects/insurance-rag-chatbot}"
+APP_URL="${INSURANCE_RAG_BROWSER_URL:-http://localhost:18080}"
+APP_HOST="${INSURANCE_RAG_APP_HOST:-127.0.0.1}"
+APP_PORT="${INSURANCE_RAG_APP_PORT:-18080}"
+LOG_DIR="${INSURANCE_RAG_LAUNCHER_LOG_DIR:-$PROJECT_DIR/logs}"
+SGLANG_BASE_URL="${SGLANG_BASE_URL:-http://127.0.0.1:30000/v1}"
+VLLM_BASE_URL="${VLLM_BASE_URL:-http://127.0.0.1:30001/v1}"
+OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  insurance-rag-desktop-launcher
+  insurance-rag-desktop-launcher --status
+  insurance-rag-desktop-launcher --choices
+
+Shows a DGX desktop LLM selection dialog, starts the insurance RAG app,
+and opens the browser.
+EOF
+}
+
+json_value() {
+  local expr="$1"
+  local payload="${2:-}"
+  JSON_PAYLOAD="$payload" python3 - "$expr" <<'PY'
+import json
+import os
+import sys
+
+expr = sys.argv[1]
+raw = os.environ.get("JSON_PAYLOAD", "")
+try:
+    data = json.loads(raw)
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+try:
+    if expr == "openai_first_model":
+        items = data.get("data") or []
+        print((items[0] or {}).get("id", "") if items else "")
+    elif expr == "ollama_first_model":
+        items = data.get("models") or []
+        print((items[0] or {}).get("name", "") if items else "")
+    elif expr == "status_ok":
+        print("true" if data.get("ok") is True else "false")
+    else:
+        print("")
+except Exception:
+    print("")
+PY
+}
+
+curl_json() {
+  curl -fsS --max-time 2 "$@" 2>/dev/null || true
+}
+
+detect_openai_compatible_model() {
+  local base_url="$1"
+  local api_key="${2:-EMPTY}"
+  local json
+  json="$(curl_json -H "Authorization: Bearer $api_key" "${base_url%/}/models")"
+  json_value openai_first_model "$json"
+}
+
+detect_ollama_model() {
+  local json
+  json="$(curl_json "${OLLAMA_HOST%/}/api/tags")"
+  json_value ollama_first_model "$json"
+}
+
+detect_app_health() {
+  curl -fsS --max-time 2 "http://$APP_HOST:$APP_PORT/api/health" >/dev/null 2>&1
+}
+
+model_config_ready() {
+  local model="$1"
+  [[ -f "/srv/ai-ops/llm/models/$model/config.json" ]]
+}
+
+model_download_complete() {
+  local model="$1"
+  local path="$AI_OPS_ROOT/llm/models/$model"
+  [[ -d "$path" ]] || return 1
+  [[ -f "$path/config.json" ]] || return 1
+  if find "$path" -path '*/.cache/huggingface/download/*' -name '*.incomplete' -print -quit | grep -q .; then
+    return 1
+  fi
+}
+
+sglang_model_ready() {
+  local model="$1"
+  model_download_complete "$model" || return 1
+  case "$model" in
+    gpt-oss-20b)
+      [[ -f "$AI_OPS_ROOT/llm/templates/gpt_oss_harmony.jinja" ]]
+      ;;
+    *)
+      [[ -f "$AI_OPS_ROOT/llm/models/$model/chat_template.jinja" ]]
+      ;;
+  esac
+}
+
+vllm_model_ready() {
+  local model="$1"
+  model_download_complete "$model" || return 1
+  [[ -x "$PROJECT_DIR/.venv-vllm/bin/python" ]]
+}
+
+print_status() {
+  local app="stopped"
+  detect_app_health && app="running"
+  local sglang_model
+  local vllm_model
+  local ollama_model
+  sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
+  vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
+  ollama_model="$(detect_ollama_model)"
+
+  printf 'app=%s\n' "$app"
+  printf 'sglang=%s\n' "${sglang_model:-}"
+  printf 'vllm=%s\n' "${vllm_model:-}"
+  printf 'ollama=%s\n' "${ollama_model:-}"
+}
+
+print_choices() {
+  local sglang_model
+  local vllm_model
+  local ollama_model
+  sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
+  vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
+  ollama_model="$(detect_ollama_model)"
+
+  if [[ -n "$sglang_model" ]]; then
+    printf 'current|sglang|%s\n' "$sglang_model"
+  elif [[ -n "$vllm_model" ]]; then
+    printf 'current|vllm|%s\n' "$vllm_model"
+  elif [[ -n "$ollama_model" ]]; then
+    printf 'current|ollama|%s\n' "$ollama_model"
+  fi
+
+  for model in \
+    gpt-oss-20b \
+    gpt-oss-120b \
+    qwen3-30b-a3b-instruct-2507-fp8 \
+    qwen3-next-80b-a3b-instruct-fp8 \
+    qwen3-next-80b-a3b-thinking-fp8; do
+    if sglang_model_ready "$model"; then
+      printf 'start|sglang|%s\n' "$model"
+    fi
+  done
+
+  for model in \
+    gemma-4-26b-a4b-nvfp4 \
+    gemma-4-31b-it-nvfp4 \
+    nemotron-3-nano-30b-a3b-nvfp4 \
+    exaone-4.0-32b-awq; do
+    if vllm_model_ready "$model"; then
+      printf 'start|vllm|%s\n' "$model"
+    fi
+  done
+
+  if [[ -n "$ollama_model" ]]; then
+    printf 'start|ollama|%s\n' "$ollama_model"
+  fi
+}
+
+require_gui() {
+  if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    echo "DISPLAY/WAYLAND_DISPLAY is not set. Run this from the DGX desktop session." >&2
+    exit 1
+  fi
+  command -v zenity >/dev/null 2>&1 || {
+    echo "zenity is required for the desktop launcher." >&2
+    exit 1
+  }
+  command -v xdg-open >/dev/null 2>&1 || {
+    echo "xdg-open is required to open the browser." >&2
+    exit 1
+  }
+}
+
+show_error() {
+  local title="$1"
+  local message="$2"
+  zenity --error --title="$title" --width=640 --text="$message" 2>/dev/null || true
+}
+
+show_info() {
+  local title="$1"
+  local message="$2"
+  zenity --info --title="$title" --width=640 --text="$message" 2>/dev/null || true
+}
+
+run_with_progress() {
+  local title="$1"
+  local message="$2"
+  shift 2
+  mkdir -p "$LOG_DIR"
+  local log_file="$LOG_DIR/desktop_launcher_$(date +%Y%m%d_%H%M%S).log"
+  local status_file
+  status_file="$(mktemp /tmp/insurance-rag-launcher-status.XXXXXX)"
+
+  (
+    {
+      printf '[launcher] %s\n' "$message"
+      printf '[launcher] command:'
+      printf ' %q' "$@"
+      printf '\n'
+      set +e
+      "$@"
+      local_rc="$?"
+      set -e
+      printf '[launcher] exit_code=%s\n' "$local_rc"
+    } >>"$log_file" 2>&1
+    printf '%s' "$local_rc" >"$status_file"
+  ) &
+  local cmd_pid=$!
+
+  (
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+      printf '# %s\n' "$message"
+      sleep 2
+    done
+  ) | zenity --progress \
+    --title="$title" \
+    --text="$message" \
+    --pulsate \
+    --auto-close \
+    --no-cancel \
+    --width=520 2>/dev/null || true
+
+  wait "$cmd_pid" || true
+  local rc
+  rc="$(cat "$status_file" 2>/dev/null || printf '1')"
+  rm -f "$status_file"
+
+  if [[ "$rc" != "0" ]]; then
+    show_error "앱 기동 실패" "앱을 기동하지 못했습니다.\n\n로그:\n$log_file"
+    exit "$rc"
+  fi
+  printf '%s\n' "$log_file"
+}
+
+open_browser() {
+  xdg-open "$APP_URL" >/dev/null 2>&1 &
+}
+
+choose_action() {
+  local app_running="$1"
+  local sglang_model="$2"
+  local vllm_model="$3"
+  local ollama_model="$4"
+  local rows=()
+
+  if [[ -n "$sglang_model" ]]; then
+    rows+=("TRUE" "current|sglang|$sglang_model" "현재 실행 중인 SGLang 유지" "$sglang_model")
+  elif [[ -n "$vllm_model" ]]; then
+    rows+=("TRUE" "current|vllm|$vllm_model" "현재 실행 중인 vLLM 유지" "$vllm_model")
+  elif [[ -n "$ollama_model" ]]; then
+    rows+=("TRUE" "current|ollama|$ollama_model" "현재 실행 중인 Ollama 유지" "$ollama_model")
+  fi
+
+  local default_pick="FALSE"
+  if [[ "${#rows[@]}" -eq 0 ]]; then
+    default_pick="TRUE"
+  fi
+
+  if sglang_model_ready "gpt-oss-20b"; then
+    rows+=("$default_pick" "start|sglang|gpt-oss-20b" "SGLang 서버 시작/전환" "gpt-oss-20b")
+  fi
+  if sglang_model_ready "gpt-oss-120b"; then
+    rows+=("FALSE" "start|sglang|gpt-oss-120b" "SGLang 서버 시작/전환" "gpt-oss-120b")
+  fi
+
+  if sglang_model_ready "qwen3-30b-a3b-instruct-2507-fp8"; then
+    rows+=("FALSE" "start|sglang|qwen3-30b-a3b-instruct-2507-fp8" "SGLang 서버 시작/전환" "qwen3-30b-a3b-instruct-2507-fp8")
+  fi
+  if sglang_model_ready "qwen3-next-80b-a3b-instruct-fp8"; then
+    rows+=("FALSE" "start|sglang|qwen3-next-80b-a3b-instruct-fp8" "SGLang 서버 시작/전환" "qwen3-next-80b-a3b-instruct-fp8")
+  fi
+  if sglang_model_ready "qwen3-next-80b-a3b-thinking-fp8"; then
+    rows+=("FALSE" "start|sglang|qwen3-next-80b-a3b-thinking-fp8" "SGLang 서버 시작/전환" "qwen3-next-80b-a3b-thinking-fp8")
+  fi
+  if vllm_model_ready "gemma-4-26b-a4b-nvfp4"; then
+    rows+=("FALSE" "start|vllm|gemma-4-26b-a4b-nvfp4" "vLLM 서버 시작/전환" "gemma-4-26b-a4b-nvfp4")
+  fi
+  if vllm_model_ready "gemma-4-31b-it-nvfp4"; then
+    rows+=("FALSE" "start|vllm|gemma-4-31b-it-nvfp4" "vLLM 서버 시작/전환" "gemma-4-31b-it-nvfp4")
+  fi
+  if vllm_model_ready "nemotron-3-nano-30b-a3b-nvfp4"; then
+    rows+=("FALSE" "start|vllm|nemotron-3-nano-30b-a3b-nvfp4" "vLLM 서버 시작/전환" "nemotron-3-nano-30b-a3b-nvfp4")
+  fi
+  if vllm_model_ready "exaone-4.0-32b-awq"; then
+    rows+=("FALSE" "start|vllm|exaone-4.0-32b-awq" "vLLM 서버 시작/전환" "exaone-4.0-32b-awq")
+  fi
+  if [[ -n "$ollama_model" ]]; then
+    rows+=("FALSE" "start|ollama|$ollama_model" "Ollama 모델 사용" "$ollama_model")
+  fi
+
+  local current_text
+  current_text="앱: $app_running\nSGLang: ${sglang_model:-실행 안 됨}\nvLLM: ${vllm_model:-실행 안 됨}\nOllama: ${ollama_model:-실행 안 됨}"
+
+  zenity --list \
+    --radiolist \
+    --title="신한EZ손해보험 보상지원 AI 챗봇 실행" \
+    --text="사용할 LLM 서버를 선택하세요.\n\n$current_text" \
+    --width=900 \
+    --height=430 \
+    --column="선택" \
+    --column="key" \
+    --column="동작" \
+    --column="모델" \
+    --hide-column=2 \
+    --print-column=2 \
+    "${rows[@]}"
+}
+
+main() {
+  case "${1:-}" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --status)
+      print_status
+      exit 0
+      ;;
+    --choices)
+      print_choices
+      exit 0
+      ;;
+    "")
+      ;;
+    *)
+      echo "unknown option: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+
+  require_gui
+  [[ -x "$APP_UP" ]] || {
+    show_error "설치 오류" "기동 wrapper가 없습니다.\n\n$APP_UP"
+    exit 1
+  }
+
+  local app_running="stopped"
+  detect_app_health && app_running="running"
+  local sglang_model
+  local vllm_model
+  local ollama_model
+  sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
+  vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
+  ollama_model="$(detect_ollama_model)"
+
+  local choice
+  choice="$(choose_action "$app_running" "$sglang_model" "$vllm_model" "$ollama_model")" || exit 0
+  [[ -n "$choice" ]] || exit 0
+
+  IFS='|' read -r mode provider model <<<"$choice"
+  local log_file
+  if [[ "$mode" == "current" ]]; then
+    log_file="$(run_with_progress "앱 기동 중" "현재 실행 중인 $provider 서버를 유지하고 앱을 준비합니다." "$APP_UP" --provider "$provider" --model "$model" --no-llm-switch)"
+  else
+    if ! zenity --question \
+      --title="LLM 서버 전환 확인" \
+      --width=620 \
+      --text="$provider 서버로 $model 모델을 시작/전환합니다.\n\n기존 LLM 서버 또는 앱 세션이 있으면 교체될 수 있습니다.\n계속하시겠습니까?" 2>/dev/null; then
+      exit 0
+    fi
+    log_file="$(run_with_progress "LLM 및 앱 기동 중" "$provider / $model 서버와 앱을 준비합니다." "$APP_UP" --replace --provider "$provider" --model "$model")"
+  fi
+
+  if detect_app_health; then
+    open_browser
+    show_info "앱 준비 완료" "브라우저를 열었습니다.\n\n주소: $APP_URL\n로그: $log_file"
+  else
+    show_error "앱 상태 확인 실패" "기동 명령은 끝났지만 health check가 실패했습니다.\n\n로그: $log_file"
+    exit 1
+  fi
+}
+
+main "$@"

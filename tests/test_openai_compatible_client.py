@@ -52,6 +52,14 @@ def test_extract_final_content_preserves_plain_text() -> None:
     assert _extract_final_content("테스트입니다.") == "테스트입니다."
 
 
+def test_extract_visible_content_removes_thinking_block() -> None:
+    from src.llm.openai_compatible_client import _extract_visible_content
+
+    assert _extract_visible_content("reasoning\n</think>\n\n정상입니다.") == "정상입니다."
+    assert _extract_visible_content("<think>reasoning</think>최종 답변") == "최종 답변"
+    assert _extract_visible_content("reasoning only", require_think_end=True) == ""
+
+
 class DummyResponse:
     def __init__(self, status_code, lines, text="", payload=None, headers=None):
         self.status_code = status_code
@@ -125,6 +133,58 @@ def test_generate_retries_after_429(monkeypatch) -> None:
     assert client.generate("질문") == "정상 답변"
 
 
+def test_generate_qwen_thinking_returns_only_visible_final(monkeypatch) -> None:
+    client = OpenAICompatibleClient(
+        "qwen3-next-80b-a3b-thinking-fp8",
+        base_url="http://localhost:30000/v1",
+        api_key="EMPTY",
+        provider="sglang",
+    )
+
+    def mock_post(*args, **kwargs):
+        return DummyResponse(
+            200,
+            [],
+            payload={
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                "Okay, I should think through the instruction.\n"
+                                "</think>\n\n정상입니다."
+                            )
+                        }
+                    }
+                ],
+                "usage": {},
+            },
+        )
+
+    monkeypatch.setattr("requests.post", mock_post)
+
+    assert client.generate("질문") == "정상입니다."
+
+
+def test_generate_qwen_thinking_without_end_token_returns_empty(monkeypatch) -> None:
+    client = OpenAICompatibleClient(
+        "qwen3-next-80b-a3b-thinking-fp8",
+        base_url="http://localhost:30000/v1",
+        api_key="EMPTY",
+        provider="sglang",
+    )
+
+    monkeypatch.setattr(
+        "requests.post",
+        lambda *args, **kwargs: DummyResponse(
+            200,
+            [],
+            payload={"choices": [{"message": {"content": "Okay, I should think first."}}], "usage": {}},
+        ),
+    )
+
+    assert client.generate("질문") == ""
+
+
 def test_generate_stream_retries_after_429(monkeypatch) -> None:
     client = OpenAICompatibleClient("gpt-oss-20b", base_url="http://localhost:30000/v1", api_key="EMPTY", provider="sglang")
     responses = iter(
@@ -145,3 +205,30 @@ def test_generate_stream_retries_after_429(monkeypatch) -> None:
     monkeypatch.setattr("requests.post", lambda *args, **kwargs: next(responses))
 
     assert "".join(client.generate_stream("질문")) == "최종 답변"
+
+
+def test_generate_stream_qwen_thinking_gates_until_final(monkeypatch) -> None:
+    client = OpenAICompatibleClient(
+        "qwen3-next-80b-a3b-thinking-fp8",
+        base_url="http://localhost:30000/v1",
+        api_key="EMPTY",
+        provider="sglang",
+    )
+
+    responses = iter(
+        [
+            DummyResponse(
+                200,
+                [
+                    b'data: {"choices":[{"delta":{"content":"Okay, I should reason first."}}]}',
+                    b'data: {"choices":[{"delta":{"content":"</think>\\n\\n\xec\xa0\x95\xec\x83\x81"}}]}',
+                    b'data: {"choices":[{"delta":{"content":"\xec\x9e\x85\xeb\x8b\x88\xeb\x8b\xa4."}}]}',
+                    b'data: [DONE]',
+                ],
+            ),
+        ]
+    )
+
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: next(responses))
+
+    assert "".join(client.generate_stream("질문")) == "정상입니다."

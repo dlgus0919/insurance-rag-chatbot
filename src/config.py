@@ -184,6 +184,7 @@ SGLANG_DEFAULT_MODEL: str = os.getenv("SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
 SGLANG_REASONING_EFFORT: str = os.getenv("SGLANG_REASONING_EFFORT", "low")
 SGLANG_DEFAULT_CANDIDATES = (
     "gpt-oss-20b,"
+    "gpt-oss-120b,"
     "qwen3-30b-a3b-instruct-2507-fp8,"
     "qwen3-next-80b-a3b-instruct-fp8,"
     "qwen3-next-80b-a3b-thinking-fp8"
@@ -230,7 +231,7 @@ def sglang_base_url_for_model(model: str) -> str:
 VLLM_BASE_URL: str = os.getenv("VLLM_BASE_URL", "http://127.0.0.1:30001/v1")
 VLLM_API_KEY: str = os.getenv("VLLM_API_KEY", "EMPTY")
 VLLM_DEFAULT_MODEL: str = os.getenv("VLLM_DEFAULT_MODEL", "gemma-4-26b-a4b-nvfp4")
-VLLM_DEFAULT_CANDIDATES = "gemma-4-26b-a4b-nvfp4,gemma-4-31b-it-nvfp4,nemotron-3-nano-30b-a3b-nvfp4"
+VLLM_DEFAULT_CANDIDATES = "gemma-4-26b-a4b-nvfp4,gemma-4-31b-it-nvfp4,nemotron-3-nano-30b-a3b-nvfp4,exaone-4.0-32b-awq"
 VLLM_CANDIDATE_MODELS: list[str] = _parse_csv_env("VLLM_CANDIDATE_MODELS", VLLM_DEFAULT_CANDIDATES)
 VLLM_MODEL_ENDPOINTS: dict[str, str] = _parse_sglang_model_endpoints(os.getenv("VLLM_MODEL_ENDPOINTS", ""))
 VLLM_ENABLE_APP_SWITCH: bool = os.getenv("VLLM_ENABLE_APP_SWITCH", "true").lower() == "true"

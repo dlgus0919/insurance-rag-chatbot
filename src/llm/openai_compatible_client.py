@@ -15,6 +15,8 @@ DEFAULT_TIMEOUT = 120
 MAX_RETRIES = 3
 FINAL_MARKER_RE = re.compile(r"<\|channel\|>final<\|message\|>")
 HARMONY_TOKEN_RE = re.compile(r"<\|(?:channel|message|end|start|return)\|>|<pad>")
+THINK_END_TOKEN = "</think>"
+THINK_TOKEN_RE = re.compile(r"</?think>", re.IGNORECASE)
 RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 
 
@@ -32,6 +34,31 @@ def _uses_harmony_stream(model: str, provider: str) -> bool:
     """Return whether the model uses GPT-OSS Harmony special tokens stream."""
     name = model.lower()
     return "gpt-oss" in name or "harmony" in name
+
+
+def _uses_think_stream(model: str, provider: str) -> bool:
+    """Return whether the model emits a hidden think block before final text."""
+
+    name = model.lower()
+    return "thinking" in name or "reasoning" in name
+
+
+def _extract_visible_content(content: str, *, require_think_end: bool = False) -> str:
+    """Remove hidden think blocks and return user-visible final text."""
+
+    if THINK_END_TOKEN in content:
+        content = content.rsplit(THINK_END_TOKEN, 1)[-1]
+    elif require_think_end or content.lstrip().lower().startswith("<think>"):
+        return ""
+    return THINK_TOKEN_RE.sub("", content).strip()
+
+
+def _clean_stream_token(token: str) -> str:
+    """Clean a visible stream token without dropping ordinary spacing."""
+
+    if "<think" in token.lower() or THINK_END_TOKEN in token:
+        return _extract_visible_content(token)
+    return token
 
 
 def _should_disable_thinking(model: str, provider: str) -> bool:
@@ -135,8 +162,11 @@ class OpenAICompatibleClient:
         content = message.get("content") or ""
         if _uses_harmony_stream(self.model, self.provider):
             return _extract_final_content(content)
-        else:
-            return HARMONY_TOKEN_RE.sub("", content).strip()
+        content = HARMONY_TOKEN_RE.sub("", content)
+        return _extract_visible_content(
+            content,
+            require_think_end=_uses_think_stream(self.model, self.provider),
+        )
 
     def generate_stream(self, prompt: str, system: str = "", temperature: float = 0.2) -> Iterator[str]:
         """Yield streaming answer tokens."""
@@ -157,8 +187,11 @@ class OpenAICompatibleClient:
                         raise RuntimeError(f"SGLang 스트림 오류(status={response.status_code}): {response.text[:300]}")
 
                     harmony_mode = _uses_harmony_stream(self.model, self.provider)
+                    think_mode = _uses_think_stream(self.model, self.provider)
                     buffer = ""
                     emitting = not harmony_mode
+                    think_buffer = ""
+                    think_emitting = not think_mode
 
                     for raw in response.iter_lines():
                         if not raw:
@@ -179,13 +212,23 @@ class OpenAICompatibleClient:
                             continue
 
                         if not harmony_mode:
+                            if not think_emitting:
+                                think_buffer += token
+                                if THINK_END_TOKEN in think_buffer:
+                                    think_emitting = True
+                                    cleaned = _extract_visible_content(think_buffer, require_think_end=True)
+                                    if cleaned:
+                                        yield cleaned
+                                continue
                             cleaned = HARMONY_TOKEN_RE.sub("", token)
+                            cleaned = _clean_stream_token(cleaned)
                             if cleaned:
                                 yield cleaned
                             continue
 
                         if emitting:
                             cleaned = HARMONY_TOKEN_RE.sub("", token.replace("<|return|>", "").replace("<|end|>", ""))
+                            cleaned = _clean_stream_token(cleaned)
                             if cleaned:
                                 yield cleaned
                             continue

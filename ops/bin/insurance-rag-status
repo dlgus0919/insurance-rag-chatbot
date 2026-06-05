@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=insurance-rag-common
+source "$SCRIPT_DIR/insurance-rag-common"
+
+JSON=0
+
+usage() {
+  cat <<'EOF'
+Usage:
+  insurance-rag-status [--json]
+
+Checks DGX runtime readiness for the FastAPI + SPA app.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --json)
+      JSON=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+done
+
+setup_fastapi_env
+
+ok=1
+rows=()
+
+add_row() {
+  local key="$1"
+  local status="$2"
+  local detail="$3"
+  rows+=("$key|$status|$detail")
+  case "$status" in
+    ok|warn) ;;
+    *) ok=0 ;;
+  esac
+}
+
+check_path() {
+  local key="$1"
+  local path="$2"
+  if [[ -e "$path" ]]; then
+    add_row "$key" "ok" "$path"
+  else
+    add_row "$key" "missing" "$path"
+  fi
+}
+
+add_row "host" "ok" "$(hostname)"
+if tmux has-session -t "$APP_SESSION" 2>/dev/null; then
+  add_row "app_tmux" "ok" "$APP_SESSION"
+else
+  add_row "app_tmux" "missing" "$APP_SESSION"
+fi
+
+if port_is_listening; then
+  add_row "app_port" "ok" "$APP_HOST:$APP_PORT"
+else
+  add_row "app_port" "missing" "$APP_HOST:$APP_PORT"
+fi
+
+if api_health_ok; then
+  add_row "api_health" "ok" "http://$APP_HOST:$APP_PORT/api/health"
+else
+  add_row "api_health" "fail" "http://$APP_HOST:$APP_PORT/api/health"
+fi
+
+if curl -fsS "http://$APP_HOST:$APP_PORT/api/system/models" >/tmp/insurance-rag-models.$$ 2>/dev/null; then
+  add_row "api_models" "ok" "http://$APP_HOST:$APP_PORT/api/system/models"
+else
+  add_row "api_models" "fail" "http://$APP_HOST:$APP_PORT/api/system/models"
+fi
+rm -f /tmp/insurance-rag-models.$$
+
+if curl -fsS -H "Authorization: Bearer ${SGLANG_API_KEY:-EMPTY}" "${SGLANG_BASE_URL%/}/models" >/dev/null 2>&1; then
+  add_row "sglang" "ok" "$SGLANG_BASE_URL"
+else
+  add_row "sglang" "warn" "$SGLANG_BASE_URL"
+fi
+
+if curl -fsS -H "Authorization: Bearer ${VLLM_API_KEY:-EMPTY}" "${VLLM_BASE_URL%/}/models" >/dev/null 2>&1; then
+  add_row "vllm" "ok" "$VLLM_BASE_URL"
+else
+  add_row "vllm" "warn" "$VLLM_BASE_URL"
+fi
+
+if curl -fsS "${OLLAMA_HOST%/}/api/tags" >/dev/null 2>&1; then
+  add_row "ollama" "ok" "$OLLAMA_HOST"
+else
+  add_row "ollama" "warn" "$OLLAMA_HOST"
+fi
+
+check_path "default_bm25" "data/index/bm25.pkl"
+check_path "default_chroma" "data/index/chroma/chroma.sqlite3"
+check_path "v2_bm25" "data/index_v2_manual/bm25.pkl"
+check_path "combined_bm25" "data/index_v1_v2_combined/bm25.pkl"
+check_path "graph_db" "$GRAPH_INDEX_PATH"
+check_path "standard_db" "data/index/relational/standard_codes.sqlite"
+check_path "users_json" "$USERS_JSON_PATH"
+
+if [[ "$JSON" == "1" ]]; then
+  "$PROJECT_DIR/.venv/bin/python" - "$ok" "${rows[@]}" <<'PY'
+import json
+import sys
+
+ok = sys.argv[1] == "1"
+items = []
+for raw in sys.argv[2:]:
+    key, status, detail = raw.split("|", 2)
+    items.append({"key": key, "status": status, "detail": detail})
+print(json.dumps({"ok": ok, "items": items}, ensure_ascii=False, indent=2))
+PY
+else
+  printf '%-18s %-8s %s\n' "CHECK" "STATUS" "DETAIL"
+  printf '%-18s %-8s %s\n' "-----" "------" "------"
+  for row in "${rows[@]}"; do
+    IFS='|' read -r key status detail <<< "$row"
+    printf '%-18s %-8s %s\n' "$key" "$status" "$detail"
+  done
+fi
+
+if [[ "$ok" == "1" ]]; then
+  exit 0
+fi
+exit 1

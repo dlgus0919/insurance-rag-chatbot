@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=insurance-rag-common
+source "$SCRIPT_DIR/insurance-rag-common"
+
+PROVIDER="$DEFAULT_PROVIDER"
+MODEL="$DEFAULT_MODEL"
+MODEL_SET=0
+REPLACE=0
+FOREGROUND=0
+SKIP_PREPARE=0
+NO_LLM_SWITCH=0
+
+usage() {
+  cat <<'EOF'
+Usage:
+  insurance-rag-up [options]
+
+Starts the production FastAPI + SPA app for DGX local use.
+Default target: SGLang gpt-oss-20b + http://127.0.0.1:18080
+
+Options:
+  --provider <sglang|vllm|ollama>  LLM provider. Default: sglang
+  --model <model-id>               Model id. Default: gpt-oss-20b
+  --port <port>                    FastAPI app port. Default: 18080
+  --host <host>                    FastAPI bind host. Default: 127.0.0.1
+  --replace                        Stop existing app session/listener first.
+  --skip-prepare                   Skip runtime artifact readiness check.
+  --no-llm-switch                  Do not call switch-sglang-model/switch-vllm-model.
+  --foreground                     Run uvicorn in the current shell, not tmux.
+  -h, --help                       Show this help.
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --provider)
+      PROVIDER="${2:?--provider requires a value}"
+      shift 2
+      ;;
+    --model)
+      MODEL="${2:?--model requires a value}"
+      MODEL_SET=1
+      shift 2
+      ;;
+    --port)
+      export INSURANCE_RAG_APP_PORT="${2:?--port requires a value}"
+      APP_PORT="$INSURANCE_RAG_APP_PORT"
+      shift 2
+      ;;
+    --host)
+      export INSURANCE_RAG_APP_HOST="${2:?--host requires a value}"
+      APP_HOST="$INSURANCE_RAG_APP_HOST"
+      shift 2
+      ;;
+    --replace)
+      REPLACE=1
+      shift
+      ;;
+    --skip-prepare)
+      SKIP_PREPARE=1
+      shift
+      ;;
+    --no-llm-switch)
+      NO_LLM_SWITCH=1
+      shift
+      ;;
+    --foreground)
+      FOREGROUND=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      die "unknown option: $1"
+      ;;
+  esac
+done
+
+case "$PROVIDER" in
+  sglang|vllm|ollama) ;;
+  *) die "unsupported provider: $PROVIDER" ;;
+esac
+
+if [[ "$MODEL_SET" == "0" ]]; then
+  case "$PROVIDER" in
+    sglang)
+      MODEL="${INSURANCE_RAG_MODEL:-gpt-oss-20b}"
+      ;;
+    vllm)
+      MODEL="${INSURANCE_RAG_MODEL:-gemma-4-26b-a4b-nvfp4}"
+      ;;
+    ollama)
+      MODEL="${INSURANCE_RAG_MODEL:-exaone3.5:7.8b}"
+      ;;
+  esac
+fi
+
+if [[ "$FOREGROUND" == "1" ]]; then
+  run_uvicorn_foreground
+fi
+
+setup_fastapi_env
+
+if [[ "$SKIP_PREPARE" != "1" ]]; then
+  "$SCRIPT_DIR/insurance-rag-prepare"
+fi
+
+if [[ "$NO_LLM_SWITCH" != "1" ]]; then
+  case "$PROVIDER" in
+    sglang)
+      require_file "$SGLANG_SWITCH_SCRIPT" "SGLang switch script"
+      log "switching SGLang model: $MODEL"
+      "$SGLANG_SWITCH_SCRIPT" "$MODEL"
+      export SGLANG_DEFAULT_MODEL="$MODEL"
+      export SGLANG_CANDIDATE_MODELS="$MODEL"
+      ;;
+    vllm)
+      require_file "$VLLM_SWITCH_SCRIPT" "vLLM switch script"
+      log "switching vLLM model: $MODEL"
+      "$VLLM_SWITCH_SCRIPT" "$MODEL"
+      export VLLM_DEFAULT_MODEL="$MODEL"
+      export VLLM_CANDIDATE_MODELS="$MODEL"
+      ;;
+    ollama)
+      log "using Ollama model without switch wrapper: $MODEL"
+      export OLLAMA_MODEL="$MODEL"
+      export OLLAMA_CANDIDATE_MODELS="$MODEL"
+      export SGLANG_STRICT_AVAILABLE_MODELS=false
+      export VLLM_STRICT_AVAILABLE_MODELS=false
+      ;;
+  esac
+fi
+
+if tmux has-session -t "$APP_SESSION" 2>/dev/null; then
+  if [[ "$REPLACE" == "1" ]]; then
+    log "stopping existing tmux session: $APP_SESSION"
+    tmux kill-session -t "$APP_SESSION"
+    wait_for_port_free 20 || warn "port $APP_PORT is still busy after stopping tmux session"
+  else
+    if api_health_ok; then
+      log "app is already running: http://$APP_HOST:$APP_PORT"
+      exit 0
+    fi
+    die "tmux session already exists but app health failed. Rerun with --replace."
+  fi
+fi
+
+if port_is_listening; then
+  if [[ "$REPLACE" == "1" ]]; then
+    mapfile -t pids < <(port_pids)
+    if [[ "${#pids[@]}" -eq 0 ]]; then
+      warn "port $APP_PORT is busy but listener PID could not be resolved; waiting for graceful release"
+      if wait_for_port_free 30; then
+        log "port $APP_PORT released"
+      else
+        die "port $APP_PORT is in use but listener PID could not be resolved"
+      fi
+    else
+      for pid in "${pids[@]}"; do
+        log "stopping listener PID $pid on port $APP_PORT"
+        kill "$pid"
+      done
+      wait_for_port_free 20 || warn "port $APP_PORT is still busy after stopping listener PID(s)"
+    fi
+  else
+    die "port $APP_PORT is already in use. Rerun with --replace or --port <other>."
+  fi
+fi
+
+mkdir -p "$APP_LOG_DIR"
+log_file="$APP_LOG_DIR/fastapi_$(date +%Y%m%d_%H%M%S).log"
+log "starting app tmux session: $APP_SESSION"
+
+tmux new-session -d -s "$APP_SESSION" \
+  "INSURANCE_RAG_PROJECT_DIR='$PROJECT_DIR' AI_OPS_ROOT='$AI_OPS_ROOT' INSURANCE_RAG_APP_HOST='$APP_HOST' INSURANCE_RAG_APP_PORT='$APP_PORT' INSURANCE_RAG_PROVIDER='$PROVIDER' INSURANCE_RAG_MODEL='$MODEL' '$SCRIPT_DIR/insurance-rag-up' --foreground --skip-prepare --no-llm-switch 2>&1 | tee '$log_file'"
+
+if wait_for_api 120; then
+  log "app ready: http://$APP_HOST:$APP_PORT"
+  cat <<EOF
+
+Mac tunnel:
+  ssh -N -L $APP_PORT:127.0.0.1:$APP_PORT ai-hang@100.88.5.57
+
+Browser:
+  http://localhost:$APP_PORT
+
+Status:
+  $SCRIPT_DIR/insurance-rag-status
+
+Log:
+  $log_file
+EOF
+else
+  warn "app did not become healthy within timeout"
+  warn "check log: $log_file"
+  exit 1
+fi

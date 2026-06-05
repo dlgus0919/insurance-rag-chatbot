@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PROJECT_DIR="${INSURANCE_RAG_PROJECT_DIR:-/srv/shared/projects/insurance-rag-chatbot}"
+AI_OPS_ROOT="${AI_OPS_ROOT:-/srv/ai-ops}"
+SECRETS_DIR="${INSURANCE_RAG_SECRETS_DIR:-$AI_OPS_ROOT/secrets/insurance-rag-chatbot}"
+PRIVATE_ENV_FILE="${PRIVATE_ENV_FILE:-$SECRETS_DIR/env.sh}"
+OFFLINE_ENV_FILE="${OFFLINE_ENV_FILE:-$SECRETS_DIR/offline.env}"
+APP_HOST="${INSURANCE_RAG_APP_HOST:-127.0.0.1}"
+APP_PORT="${INSURANCE_RAG_APP_PORT:-18080}"
+APP_SESSION="${INSURANCE_RAG_APP_SESSION:-insurance-rag-api}"
+DEFAULT_PROVIDER="${INSURANCE_RAG_PROVIDER:-sglang}"
+DEFAULT_MODEL="${INSURANCE_RAG_MODEL:-gpt-oss-20b}"
+APP_LOG_DIR="${INSURANCE_RAG_LOG_DIR:-$PROJECT_DIR/logs}"
+
+log() {
+  printf '[insurance-rag] %s\n' "$*"
+}
+
+warn() {
+  printf '[insurance-rag][WARN] %s\n' "$*" >&2
+}
+
+die() {
+  printf '[insurance-rag][ERROR] %s\n' "$*" >&2
+  exit 1
+}
+
+require_file() {
+  local path="$1"
+  local label="$2"
+  [[ -f "$path" ]] || die "missing $label: $path"
+}
+
+require_dir() {
+  local path="$1"
+  local label="$2"
+  [[ -d "$path" ]] || die "missing $label: $path"
+}
+
+project_cd() {
+  require_dir "$PROJECT_DIR" "project directory"
+  cd "$PROJECT_DIR"
+}
+
+require_venv() {
+  require_file "$PROJECT_DIR/.venv/bin/python" "project Python venv"
+}
+
+load_secret_env() {
+  if [[ -f "$PRIVATE_ENV_FILE" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$PRIVATE_ENV_FILE"
+    set +a
+  fi
+  if [[ -f "$OFFLINE_ENV_FILE" ]]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "$OFFLINE_ENV_FILE"
+    set +a
+  fi
+}
+
+ensure_jwt_secret() {
+  if [[ -n "${API_JWT_SECRET:-}" && "$API_JWT_SECRET" != "dev-only-change-me" ]]; then
+    return
+  fi
+  mkdir -p "$SECRETS_DIR"
+  local secret_file="$SECRETS_DIR/api_jwt_secret"
+  if [[ ! -f "$secret_file" ]]; then
+    "$PROJECT_DIR/.venv/bin/python" - <<'PY' > "$secret_file"
+import secrets
+print(secrets.token_urlsafe(32))
+PY
+    chmod 600 "$secret_file"
+  fi
+  export API_JWT_SECRET
+  API_JWT_SECRET="$(cat "$secret_file")"
+}
+
+setup_fastapi_env() {
+  project_cd
+  require_venv
+  load_secret_env
+
+  export OFFLINE_MODE="${OFFLINE_MODE:-true}"
+  export HF_MODEL_DOWNLOAD="${HF_MODEL_DOWNLOAD:-false}"
+  export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+  export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+  export EMBEDDING_MODEL="${EMBEDDING_MODEL:-$AI_OPS_ROOT/models/embedding/bge-m3}"
+  export RERANKER_MODEL="${RERANKER_MODEL:-$AI_OPS_ROOT/models/reranker/bge-reranker-v2-m3}"
+  export RERANKER_ENABLED="${RERANKER_ENABLED:-false}"
+  export GRAPH_ENABLED="${GRAPH_ENABLED:-true}"
+  export GRAPH_INDEX_PATH="${GRAPH_INDEX_PATH:-$PROJECT_DIR/data/index/graph/insurance_graph.sqlite}"
+  export GRAPH_CONTEXT_TOP_K="${GRAPH_CONTEXT_TOP_K:-20}"
+  export GRAPH_CONTEXT_MAX_CHARS="${GRAPH_CONTEXT_MAX_CHARS:-5000}"
+
+  export USERS_JSON_PATH="${USERS_JSON_PATH:-$PROJECT_DIR/users.json}"
+  export API_DATABASE_URL="${API_DATABASE_URL:-sqlite+aiosqlite:///$PROJECT_DIR/insurance_chat.db}"
+  export API_COOKIE_SECURE="${API_COOKIE_SECURE:-false}"
+  export API_CORS_ORIGINS="${API_CORS_ORIGINS:-http://localhost:$APP_PORT,http://127.0.0.1:$APP_PORT}"
+  ensure_jwt_secret
+
+  export SGLANG_BASE_URL="${SGLANG_BASE_URL:-http://127.0.0.1:30000/v1}"
+  export SGLANG_API_KEY="${SGLANG_API_KEY:-EMPTY}"
+  if [[ "$DEFAULT_PROVIDER" == "sglang" ]]; then
+    local selected_sglang_model="${INSURANCE_RAG_MODEL:-${SGLANG_DEFAULT_MODEL:-$DEFAULT_MODEL}}"
+    export SGLANG_DEFAULT_MODEL="$selected_sglang_model"
+    export SGLANG_CANDIDATE_MODELS="$selected_sglang_model"
+  else
+    export SGLANG_DEFAULT_MODEL="${SGLANG_DEFAULT_MODEL:-gpt-oss-20b}"
+    export SGLANG_CANDIDATE_MODELS="${SGLANG_CANDIDATE_MODELS:-gpt-oss-20b,gpt-oss-120b,qwen3-30b-a3b-instruct-2507-fp8,qwen3-next-80b-a3b-instruct-fp8,qwen3-next-80b-a3b-thinking-fp8}"
+  fi
+  export SGLANG_STRICT_AVAILABLE_MODELS="${SGLANG_STRICT_AVAILABLE_MODELS:-true}"
+  export SGLANG_ENABLE_APP_SWITCH="${SGLANG_ENABLE_APP_SWITCH:-true}"
+  export SGLANG_SWITCH_SCRIPT="${SGLANG_SWITCH_SCRIPT:-$AI_OPS_ROOT/bin/switch-sglang-model}"
+
+  export VLLM_BASE_URL="${VLLM_BASE_URL:-http://127.0.0.1:30001/v1}"
+  export VLLM_API_KEY="${VLLM_API_KEY:-EMPTY}"
+  if [[ "$DEFAULT_PROVIDER" == "vllm" ]]; then
+    local selected_vllm_model="${INSURANCE_RAG_MODEL:-${VLLM_DEFAULT_MODEL:-$DEFAULT_MODEL}}"
+    export VLLM_DEFAULT_MODEL="$selected_vllm_model"
+    export VLLM_CANDIDATE_MODELS="$selected_vllm_model"
+  else
+    export VLLM_DEFAULT_MODEL="${VLLM_DEFAULT_MODEL:-gemma-4-26b-a4b-nvfp4}"
+    export VLLM_CANDIDATE_MODELS="${VLLM_CANDIDATE_MODELS:-gemma-4-26b-a4b-nvfp4,gemma-4-31b-it-nvfp4,nemotron-3-nano-30b-a3b-nvfp4,exaone-4.0-32b-awq}"
+  fi
+  export VLLM_STRICT_AVAILABLE_MODELS="${VLLM_STRICT_AVAILABLE_MODELS:-true}"
+  export VLLM_ENABLE_APP_SWITCH="${VLLM_ENABLE_APP_SWITCH:-true}"
+  export VLLM_SWITCH_SCRIPT="${VLLM_SWITCH_SCRIPT:-$AI_OPS_ROOT/bin/switch-vllm-model}"
+
+  export ALLOW_OLLAMA="${ALLOW_OLLAMA:-true}"
+  export OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+  if [[ "$DEFAULT_PROVIDER" == "ollama" ]]; then
+    local selected_ollama_model="${INSURANCE_RAG_MODEL:-${OLLAMA_MODEL:-$DEFAULT_MODEL}}"
+    export OLLAMA_MODEL="$selected_ollama_model"
+    export OLLAMA_CANDIDATE_MODELS="$selected_ollama_model"
+    export SGLANG_STRICT_AVAILABLE_MODELS=false
+    export VLLM_STRICT_AVAILABLE_MODELS=false
+  else
+    export OLLAMA_MODEL="${OLLAMA_MODEL:-exaone3.5:7.8b}"
+    export OLLAMA_CANDIDATE_MODELS="${OLLAMA_CANDIDATE_MODELS:-exaone3.5:7.8b}"
+  fi
+
+  export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"
+  export TRANSFORMERS_VERBOSITY="${TRANSFORMERS_VERBOSITY:-error}"
+  if [[ "${FORCE_GPU:-0}" != "1" ]]; then
+    export CUDA_VISIBLE_DEVICES=""
+  fi
+}
+
+port_pids() {
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -tiTCP:"$APP_PORT" -sTCP:LISTEN 2>/dev/null || true
+  fi
+  if command -v fuser >/dev/null 2>&1; then
+    fuser "$APP_PORT/tcp" 2>/dev/null | tr ' ' '\n' | sed '/^$/d' || true
+  fi
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltnp "( sport = :$APP_PORT )" 2>/dev/null \
+      | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' || true
+  fi
+}
+
+port_is_listening() {
+  if command -v ss >/dev/null 2>&1; then
+    ss -ltn "( sport = :$APP_PORT )" | grep -q ":$APP_PORT"
+    return
+  fi
+  [[ -n "$(port_pids)" ]]
+}
+
+wait_for_port_free() {
+  local timeout="${1:-20}"
+  local started
+  started="$(date +%s)"
+  while true; do
+    if ! port_is_listening; then
+      return 0
+    fi
+    if (( $(date +%s) - started >= timeout )); then
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+api_health_ok() {
+  curl -fsS "http://$APP_HOST:$APP_PORT/api/health" >/dev/null 2>&1
+}
+
+wait_for_api() {
+  local timeout="${1:-90}"
+  local started
+  started="$(date +%s)"
+  while true; do
+    if api_health_ok; then
+      return 0
+    fi
+    if (( $(date +%s) - started >= timeout )); then
+      return 1
+    fi
+    sleep 2
+  done
+}
+
+check_required_runtime_files() {
+  project_cd
+  require_venv
+  require_file "$EMBEDDING_MODEL/config.json" "embedding model config"
+  require_file "$RERANKER_MODEL/config.json" "reranker model config"
+  require_file "data/processed/chunks.jsonl" "default chunks"
+  require_file "data/index/bm25.pkl" "default BM25"
+  require_file "data/index/chroma/chroma.sqlite3" "default Chroma"
+  require_file "data/index/relational/standard_codes.sqlite" "standard code DB"
+  require_file "$GRAPH_INDEX_PATH" "GraphDB SQLite"
+  require_file "data/index_v2_manual/bm25.pkl" "v2 manual BM25"
+  require_file "data/index_v2_manual/chroma/chroma.sqlite3" "v2 manual Chroma"
+  require_file "data/index_v1_v2_combined/bm25.pkl" "v1/v2 combined BM25"
+  require_file "data/index_v1_v2_combined/chroma/chroma.sqlite3" "v1/v2 combined Chroma"
+  require_file "data/mapping/v1_v2_pairs_실무가이드.jsonl" "v1/v2 silmu mapping"
+  require_file "data/mapping/v1_v2_pairs_상담사례집.jsonl" "v1/v2 sangdam mapping"
+}
+
+run_uvicorn_foreground() {
+  setup_fastapi_env
+  mkdir -p "$APP_LOG_DIR"
+  log "starting FastAPI + SPA on http://$APP_HOST:$APP_PORT"
+  exec "$PROJECT_DIR/.venv/bin/python" -m uvicorn src.api.main:app \
+    --host "$APP_HOST" \
+    --port "$APP_PORT"
+}
