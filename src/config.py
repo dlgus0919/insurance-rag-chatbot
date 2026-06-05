@@ -280,6 +280,9 @@ TOP_K_DENSE: int = int(os.getenv("TOP_K_DENSE", "12"))
 TOP_K_BM25: int = int(os.getenv("TOP_K_BM25", "12"))
 TOP_K_FINAL: int = int(os.getenv("TOP_K_FINAL", "8"))
 RRF_K: int = int(os.getenv("RRF_K", "60"))
+DYNAMIC_RRF_ENABLED: bool = os.getenv("DYNAMIC_RRF_ENABLED", "false").lower() == "true"
+DYNAMIC_RRF_MODE: str = os.getenv("DYNAMIC_RRF_MODE", "observe").lower()
+DYNAMIC_RRF_SKIP_GENERAL_DENSE: bool = os.getenv("DYNAMIC_RRF_SKIP_GENERAL_DENSE", "false").lower() == "true"
 CHUNK_TARGET_CHARS: int = int(os.getenv("CHUNK_TARGET_CHARS", "800"))
 CHUNK_OVERLAP_CHARS: int = int(os.getenv("CHUNK_OVERLAP_CHARS", "100"))
 

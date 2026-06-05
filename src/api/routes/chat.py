@@ -301,6 +301,12 @@ def _build_rag_diagnostics(
     bm25_hits = list(getattr(debug, "bm25_hits", []) or [])
     rrf_hits = list(getattr(debug, "rrf_hits", []) or [])
     final_hits = list(getattr(debug, "final_hits", []) or [])
+    search_intent = getattr(debug, "search_intent", None) if debug is not None else None
+    search_intent_payload = search_intent.to_payload() if hasattr(search_intent, "to_payload") else None
+    retrieval_execution = getattr(debug, "retrieval_execution", None) if debug is not None else None
+    retrieval_execution_payload = (
+        retrieval_execution.to_payload() if hasattr(retrieval_execution, "to_payload") else None
+    )
     graph_result = getattr(debug, "graph_result", None) if debug is not None else None
     graph_plan = getattr(graph_result, "plan", None) if graph_result is not None else None
     return {
@@ -313,6 +319,8 @@ def _build_rag_diagnostics(
         "term_correction_candidates": list(getattr(graph_plan, "term_correction_candidates", []) or []),
         "ambiguous_terms": list(getattr(graph_plan, "ambiguous_terms", []) or []),
         "clarification_questions": list(getattr(graph_plan, "clarification_questions", []) or []),
+        "search_intent": search_intent_payload,
+        "retrieval_execution": retrieval_execution_payload,
         "graph_review_path_count": len(getattr(graph_result, "review_paths", []) or []) if graph_result is not None else 0,
         "steps": [
             {
@@ -322,8 +330,28 @@ def _build_rag_diagnostics(
                 "elapsed_ms": None,
                 "status": "done",
             },
-            _build_hit_step("bm25", "BM25 키워드 검색", bm25_hits),
-            _build_hit_step("dense", "임베딩 벡터 검색", dense_hits),
+            {
+                "key": "intent_classification",
+                "label": "검색 의도 분류",
+                "result": _format_search_intent_result(search_intent_payload, retrieval_execution_payload),
+                "elapsed_ms": None,
+                "status": "done" if search_intent_payload else "empty",
+            },
+            _build_hit_step(
+                "bm25",
+                "BM25 키워드 검색",
+                bm25_hits,
+                executed=(retrieval_execution_payload or {}).get("bm25_executed"),
+            ),
+            _build_hit_step(
+                "dense",
+                "임베딩 벡터 검색",
+                dense_hits,
+                executed=(
+                    (retrieval_execution_payload or {}).get("dense_filtered_executed")
+                    or (retrieval_execution_payload or {}).get("dense_general_executed")
+                ),
+            ),
             _build_hit_step("rrf", "후보 융합", rrf_hits),
             _build_hit_step("final", "최종 검색 후보", final_hits, source_count=source_count),
             {
@@ -337,7 +365,34 @@ def _build_rag_diagnostics(
     }
 
 
-def _build_hit_step(key: str, label: str, hits: list, *, source_count: int | None = None) -> dict:
+def _format_search_intent_result(intent: dict | None, execution: dict | None = None) -> str:
+    if not intent:
+        return "결과 없음"
+    if execution:
+        fallback = execution.get("fallback_reason")
+        suffix = f" / {fallback}" if fallback else ""
+        return (
+            f"{intent.get('intent')} / "
+            f"적용 BM25 {execution.get('applied_bm25_weight')} · "
+            f"Chroma {execution.get('applied_dense_weight')} / "
+            f"filtered_dense={execution.get('dense_filtered_executed')} · "
+            f"general_dense={execution.get('dense_general_executed')}{suffix}"
+        )
+    return (
+        f"{intent.get('intent')} / "
+        f"BM25 {intent.get('bm25_weight')} · Chroma {intent.get('dense_weight')} / "
+        f"skip_general_dense={intent.get('skip_general_dense')}"
+    )
+
+
+def _build_hit_step(
+    key: str,
+    label: str,
+    hits: list,
+    *,
+    source_count: int | None = None,
+    executed: bool | None = None,
+) -> dict:
     hit_count = len(hits)
     top_score = getattr(hits[0], "score", None) if hits else None
     top_doc = getattr(hits[0], "doc_short", "") if hits else ""
@@ -351,9 +406,9 @@ def _build_hit_step(key: str, label: str, hits: list, *, source_count: int | Non
     return {
         "key": key,
         "label": label,
-        "result": result if hit_count else "결과 없음",
+        "result": result if hit_count else ("건너뜀" if executed is False else "결과 없음"),
         "elapsed_ms": None,
-        "status": "done" if hit_count else "empty",
+        "status": "done" if hit_count else ("skipped" if executed is False else "empty"),
     }
 
 
