@@ -7,7 +7,7 @@
 - DGX 메인 저장소: `/srv/shared/projects/insurance-rag-chatbot`
 - GitHub remote: `https://github.com/koreaben777/insurance-rag-chatbot.git`
 - 브랜치: `master`
-- 최신 커밋: `c18febf0897fc685516bf84c9126009423ce4103`
+- v1.0.2 릴리스 대상 커밋: `c18febf0897fc685516bf84c9126009423ce4103`
 - 태그: `v1.0.2`
 
 `git fetch origin master --tags` 후 다음 상태를 확인했다.
@@ -19,6 +19,8 @@ v1.0.2^{}   c18febf
 ```
 
 `v1.0.2`는 annotated tag이므로 tag object 해시는 별도이나, dereference한 릴리스 커밋은 `c18febf`로 일치한다.
+
+2026-06-06 보존 작업 이후 `docs/185`와 설정 예시 정렬 커밋이 `master`에 추가되었다. 따라서 현재 `master`/`origin/master`는 보존 문서 커밋을 가리킬 수 있으며, 이 경우에도 `v1.0.2^{}`가 `c18febf`를 유지하면 릴리스 태그 정합성은 보존된다.
 
 ## 인계 문서 확인
 
@@ -130,7 +132,7 @@ app ready: http://127.0.0.1:18080
 
 ## 운영 인수 판단
 
-`master`와 `v1.0.2`는 최신 릴리스 커밋 `c18febf`에 정합하다. 테스트, wrapper, 앱 기동, SPA 주요 라우트, system models 응답이 정상이다.
+`v1.0.2` 릴리스 태그는 릴리스 커밋 `c18febf`에 정합하다. `master`는 이후 인수 보존 문서 커밋을 포함할 수 있다. 테스트, wrapper, 앱 기동, SPA 주요 라우트, system models 응답이 정상이다.
 
 후속 개발은 정식 `1.0.x` 안정화 범위로 제한하고, 다음 원칙을 유지한다.
 
