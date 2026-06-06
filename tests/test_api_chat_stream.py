@@ -55,6 +55,8 @@ class ReasoningFakeLLM:
         ]
         self.last_reasoning_supported = True
         self.last_reasoning_filtered = True
+        self.last_finish_reason = "length"
+        self.last_final_retry_finish_reason = "stop"
 
     def generate_stream(self, prompt, system="", temperature=0.2, reasoning_mode="off"):
         self.reasoning_modes.append(reasoning_mode)
@@ -230,6 +232,8 @@ async def test_chat_stream_passes_reasoning_mode_and_records_audit(db_session, m
     assert audit_entry.detail["reasoning_mode"] == "on"
     assert audit_entry.detail["reasoning_supported"] is True
     assert audit_entry.detail["reasoning_filtered"] is True
+    assert audit_entry.detail["finish_reason"] == "length"
+    assert audit_entry.detail["final_retry_finish_reason"] == "stop"
     assert "THINKING_ONLY_OUTPUT" in audit_entry.detail["warning_codes"]
 
 

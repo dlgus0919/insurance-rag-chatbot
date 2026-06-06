@@ -175,7 +175,8 @@ RERANKER_ENABLED: bool = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
 LOG_DIR: str = os.getenv("LOG_DIR", "logs")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 OPENAI_DEFAULT_MODEL: str = os.getenv("OPENAI_DEFAULT_MODEL", "gpt-5.2-chat-latest")
-OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", "1500"))
+OPENAI_MAX_TOKENS: int = int(os.getenv("OPENAI_MAX_TOKENS", "1875"))
+SGLANG_REASONING_MAX_TOKENS: int = int(os.getenv("SGLANG_REASONING_MAX_TOKENS", "10240"))
 ALLOW_OLLAMA: bool = os.getenv("ALLOW_OLLAMA", "true").lower() == "true"
 CLOUD_DEPLOY: bool = os.getenv("CLOUD_DEPLOY", "false").lower() == "true"
 SGLANG_BASE_URL: str = os.getenv("SGLANG_BASE_URL", "http://127.0.0.1:30000/v1")

@@ -166,6 +166,8 @@ async def chat_stream(
                     "reasoning_mode": chat_request.reasoning_mode,
                     "reasoning_supported": bool(getattr(pipeline.llm, "last_reasoning_supported", False)),
                     "reasoning_filtered": bool(getattr(pipeline.llm, "last_reasoning_filtered", False)),
+                    "finish_reason": getattr(pipeline.llm, "last_finish_reason", None),
+                    "final_retry_finish_reason": getattr(pipeline.llm, "last_final_retry_finish_reason", None),
                     "warning_codes": [warning.get("code") for warning in warnings if warning.get("code")],
                     "index_mode": chat_request.index_mode,
                     "effective_index_mode": effective_index_mode,

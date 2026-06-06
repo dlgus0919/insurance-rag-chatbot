@@ -2,7 +2,11 @@ import json
 
 import pytest
 
-from src.llm.openai_compatible_client import OpenAICompatibleClient, THINKING_EMPTY_FINAL_FALLBACK
+from src.llm.openai_compatible_client import (
+    OpenAICompatibleClient,
+    THINKING_EMPTY_FINAL_FALLBACK,
+    THINKING_FINAL_RETRY_WARNING,
+)
 
 
 def test_payload_uses_openai_chat_completions_shape() -> None:
@@ -57,6 +61,7 @@ def test_payload_qwen_thinking_reasoning_on_enables_template_thinking() -> None:
     payload = client._payload("질문", "시스템", 0.1, stream=True, reasoning_mode="on")
 
     assert payload["chat_template_kwargs"] == {"enable_thinking": True}
+    assert payload["max_tokens"] >= 10240
 
 
 def test_generate_reports_connection_error(monkeypatch) -> None:
@@ -219,25 +224,32 @@ def test_generate_qwen_thinking_returns_only_visible_final(monkeypatch) -> None:
     assert client.generate("질문") == "정상입니다."
 
 
-def test_generate_qwen_thinking_without_end_token_returns_fallback(monkeypatch) -> None:
+def test_generate_qwen_thinking_without_end_token_retries_final_only(monkeypatch) -> None:
     client = OpenAICompatibleClient(
         "qwen3-next-80b-a3b-thinking-fp8",
         base_url="http://localhost:30000/v1",
         api_key="EMPTY",
         provider="sglang",
     )
-
-    monkeypatch.setattr(
-        "requests.post",
-        lambda *args, **kwargs: DummyResponse(
-            200,
-            [],
-            payload={"choices": [{"message": {"content": "Okay, I should think first."}}], "usage": {}},
-        ),
+    responses = iter(
+        [
+            DummyResponse(
+                200,
+                [],
+                payload={"choices": [{"message": {"content": "Okay, I should think first."}}], "usage": {}},
+            ),
+            DummyResponse(
+                200,
+                [],
+                payload={"choices": [{"message": {"content": "최종 답변입니다."}}], "usage": {}},
+            ),
+        ]
     )
 
-    assert client.generate("질문", reasoning_mode="on") == THINKING_EMPTY_FINAL_FALLBACK
-    assert client.last_safety_warnings[0]["code"] == "THINKING_ONLY_OUTPUT"
+    monkeypatch.setattr("requests.post", lambda *args, **kwargs: next(responses))
+
+    assert client.generate("질문", reasoning_mode="on") == "최종 답변입니다."
+    assert client.last_safety_warnings[0]["code"] == THINKING_FINAL_RETRY_WARNING["code"]
     assert client.last_reasoning_filtered is True
 
 
@@ -317,7 +329,7 @@ def test_generate_stream_qwen_thinking_with_disabled_template_final_text(monkeyp
     assert "".join(client.generate_stream("질문", reasoning_mode="off")) == "N39.3은 약관상 보상 제외입니다."
 
 
-def test_generate_stream_qwen_thinking_without_end_token_returns_fallback(monkeypatch) -> None:
+def test_generate_stream_qwen_thinking_without_end_token_retries_final_only(monkeypatch) -> None:
     client = OpenAICompatibleClient(
         "qwen3-next-80b-a3b-thinking-fp8",
         base_url="http://localhost:30000/v1",
@@ -332,8 +344,14 @@ def test_generate_stream_qwen_thinking_without_end_token_returns_fallback(monkey
                 [
                     b'data: {"choices":[{"delta":{"content":"Okay, let\\u0027s tackle this question."}}]}',
                     b'data: {"choices":[{"delta":{"content":" I need to inspect the policy context first."}}]}',
+                    b'data: {"choices":[{"delta":{},"finish_reason":"length"}]}',
                     b'data: [DONE]',
                 ],
+            ),
+            DummyResponse(
+                200,
+                [],
+                payload={"choices": [{"message": {"content": "최종 스트림 답변입니다."}}], "usage": {}},
             ),
         ]
     )
@@ -341,8 +359,10 @@ def test_generate_stream_qwen_thinking_without_end_token_returns_fallback(monkey
     monkeypatch.setattr("requests.post", lambda *args, **kwargs: next(responses))
 
     result = "".join(client.generate_stream("질문", reasoning_mode="on"))
-    assert result == THINKING_EMPTY_FINAL_FALLBACK
-    assert client.last_safety_warnings[0]["code"] == "THINKING_ONLY_OUTPUT"
+    assert result == "최종 스트림 답변입니다."
+    assert client.last_safety_warnings[0]["code"] == THINKING_FINAL_RETRY_WARNING["code"]
+    assert client.last_finish_reason == "length"
+    assert client.last_final_retry_finish_reason is None
     assert client.last_reasoning_filtered is True
     assert "Okay" not in result
     assert "tackle" not in result
@@ -362,11 +382,12 @@ def test_generate_stream_qwen_thinking_does_not_emit_reasoning_with_quoted_korea
                 200,
                 [
                     b'data: {"choices":[{"delta":{"content":"The user asks me to answer "}}]}',
-                    'data: {"choices":[{"delta":{"content":"\\"정상 사용 가능합니다.\\""}}]}'.encode("utf-8"),
+                    'data: {"choices":[{"delta":{"content":"\"정상 사용 가능합니다.\""}}]}'.encode("utf-8"),
                     b'data: {"choices":[{"delta":{"content":" in Korean, so I should provide that."}}]}',
                     b'data: [DONE]',
                 ],
             ),
+            DummyResponse(500, [], text="retry failed"),
         ]
     )
 

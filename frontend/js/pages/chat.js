@@ -1288,7 +1288,7 @@ function formatSelectedModelLabel(modelId) {
 }
 
 function getIndexMode() {
-  return document.querySelector('input[name="ocr-index"]:checked')?.value || 'default';
+  return document.querySelector('input[name="ocr-index"]:checked')?.value || 'v2_only';
 }
 
 function getTopK() {

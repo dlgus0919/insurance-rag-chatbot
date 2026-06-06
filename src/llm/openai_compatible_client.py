@@ -39,6 +39,10 @@ THINKING_ONLY_WARNING = {
     "code": "THINKING_ONLY_OUTPUT",
     "message": "모델이 내부 추론만 반환하고 최종 답변을 제공하지 않아 안전 fallback을 표시합니다.",
 }
+THINKING_FINAL_RETRY_WARNING = {
+    "code": "THINKING_FINAL_RETRY",
+    "message": "추론 모드가 최종 답변 없이 종료되어 최종 답변 전용 모드로 한 번 재생성했습니다.",
+}
 RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 
 
@@ -194,11 +198,15 @@ class OpenAICompatibleClient:
         self.max_tokens = max_tokens or config.OPENAI_MAX_TOKENS
         self.provider = provider
         self.last_usage: dict | None = None
+        self.last_finish_reason: str | None = None
+        self.last_final_retry_finish_reason: str | None = None
         self.last_safety_warnings: list[dict] = []
         self.last_reasoning_filtered: bool = False
         self.last_reasoning_supported: bool = _supports_reasoning_mode(self.model, self.provider)
 
     def _reset_safety_state(self) -> None:
+        self.last_finish_reason = None
+        self.last_final_retry_finish_reason = None
         self.last_safety_warnings = []
         self.last_reasoning_filtered = False
         self.last_reasoning_supported = _supports_reasoning_mode(self.model, self.provider)
@@ -210,6 +218,11 @@ class OpenAICompatibleClient:
         self._mark_reasoning_filtered()
         if not any(warning.get("code") == THINKING_ONLY_WARNING["code"] for warning in self.last_safety_warnings):
             self.last_safety_warnings.append(dict(THINKING_ONLY_WARNING))
+
+    def _mark_thinking_final_retry(self) -> None:
+        self._mark_reasoning_filtered()
+        if not any(warning.get("code") == THINKING_FINAL_RETRY_WARNING["code"] for warning in self.last_safety_warnings):
+            self.last_safety_warnings.append(dict(THINKING_FINAL_RETRY_WARNING))
 
     def _headers(self) -> dict:
         return {
@@ -241,11 +254,57 @@ class OpenAICompatibleClient:
         disable_thinking = _should_disable_thinking(self.model, self.provider, normalized_reasoning_mode)
         if self.provider == "sglang" and config.SGLANG_REASONING_EFFORT and not disable_thinking:
             payload["reasoning_effort"] = config.SGLANG_REASONING_EFFORT
+        if reasoning_supported and normalized_reasoning_mode == "on":
+            payload["max_tokens"] = max(self.max_tokens, config.SGLANG_REASONING_MAX_TOKENS)
         if reasoning_supported:
             payload["chat_template_kwargs"] = {"enable_thinking": normalized_reasoning_mode == "on"}
         if disable_thinking:
             payload["chat_template_kwargs"] = {"enable_thinking": False}
         return payload
+
+    def _generate_final_only_retry(self, prompt: str, system: str, temperature: float) -> str:
+        """Regenerate a final answer with thinking disabled after a thinking-only response."""
+
+        response: requests.Response | None = None
+        for attempt in range(MAX_RETRIES + 1):
+            try:
+                response = requests.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=self._headers(),
+                    json=self._payload(prompt, system, temperature, stream=False, reasoning_mode="off"),
+                    timeout=DEFAULT_TIMEOUT,
+                )
+            except requests.RequestException:
+                if attempt < MAX_RETRIES:
+                    time.sleep(_retry_delay_seconds(None, attempt))
+                    continue
+                return ""
+            if response.status_code not in RETRYABLE_STATUS_CODES or attempt >= MAX_RETRIES:
+                break
+            time.sleep(_retry_delay_seconds(response, attempt))
+
+        if response is None or response.status_code >= 400:
+            return ""
+        try:
+            data = response.json()
+        except ValueError:
+            return ""
+        self.last_usage = data.get("usage", self.last_usage or {})
+        choice = data.get("choices", [{}])[0]
+        self.last_final_retry_finish_reason = choice.get("finish_reason")
+        message = choice.get("message", {})
+        content = message.get("content") or ""
+        if _uses_harmony_stream(self.model, self.provider):
+            visible = _extract_final_content(content)
+        else:
+            content = HARMONY_TOKEN_RE.sub("", content)
+            if THINK_TOKEN_RE.search(content):
+                self._mark_reasoning_filtered()
+            visible = _extract_visible_content(content, require_think_end=False, fallback_on_hidden=False)
+        visible = visible.strip()
+        if not visible or visible == THINKING_EMPTY_FINAL_FALLBACK:
+            return ""
+        return visible
 
     def generate(
         self,
@@ -283,7 +342,9 @@ class OpenAICompatibleClient:
             raise RuntimeError(f"SGLang 응답 오류(status={response.status_code}): {response.text[:300]}")
         data = response.json()
         self.last_usage = data.get("usage", {})
-        message = data["choices"][0]["message"]
+        choice = data["choices"][0]
+        self.last_finish_reason = choice.get("finish_reason")
+        message = choice["message"]
         content = message.get("content") or ""
         if _uses_harmony_stream(self.model, self.provider):
             return _extract_final_content(content)
@@ -296,6 +357,11 @@ class OpenAICompatibleClient:
             fallback_on_hidden=_uses_think_stream(self.model, self.provider),
         )
         if visible == THINKING_EMPTY_FINAL_FALLBACK:
+            if _supports_reasoning_mode(self.model, self.provider) and normalized_reasoning_mode == "on":
+                retry_visible = self._generate_final_only_retry(prompt, system, temperature)
+                if retry_visible:
+                    self._mark_thinking_final_retry()
+                    return retry_visible
             self._mark_thinking_only_fallback()
         return visible
 
@@ -347,7 +413,11 @@ class OpenAICompatibleClient:
                             data = jsonlib.loads(payload)
                         except jsonlib.JSONDecodeError:
                             continue
-                        delta = data.get("choices", [{}])[0].get("delta", {})
+                        choice = data.get("choices", [{}])[0]
+                        finish_reason = choice.get("finish_reason")
+                        if finish_reason is not None:
+                            self.last_finish_reason = finish_reason
+                        delta = choice.get("delta", {})
                         token = delta.get("content") or ""
                         if not token:
                             continue
@@ -395,6 +465,12 @@ class OpenAICompatibleClient:
                                 visible_yielded = True
                                 yield cleaned
                     if think_mode and not visible_yielded and think_buffer.strip():
+                        if strict_think_end and normalized_reasoning_mode == "on":
+                            retry_visible = self._generate_final_only_retry(prompt, system, temperature)
+                            if retry_visible:
+                                self._mark_thinking_final_retry()
+                                yield retry_visible
+                                return
                         self._mark_thinking_only_fallback()
                         fallback = _extract_visible_content(
                             think_buffer,

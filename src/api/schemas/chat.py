@@ -16,8 +16,8 @@ class ChatRequest(BaseModel):
     model: str | None = None
     provider: Literal["openai", "local"] | None = None
     reasoning_mode: Literal["off", "on"] = "off"
-    top_k: int = Field(default=5, ge=1, le=20)
-    temperature: float = Field(default=0.3, ge=0.0, le=2.0)
+    top_k: int = Field(default=10, ge=1, le=20)
+    temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     filters: dict = Field(default_factory=dict)
     memo: str | None = None
     index_mode: IndexMode = "default"
