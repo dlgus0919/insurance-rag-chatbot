@@ -42,6 +42,6 @@ Qwen3 Next Thinking 모델에서 프론트엔드의 `추론 모드`를 켰을 �
 ## 2026-06-06 v1.0.2 Token Cap Policy
 
 - 로컬 모델 운용 기준에서 출력 비용보다 최종 답변 안정성과 실사용 여유를 우선해 토큰 상한을 1.25배 상향했다.
-- 일반 OpenAI-compatible/local 모델 기본 출력 상한: `OPENAI_MAX_TOKENS=1875`.
+- 일반 OpenAI-compatible/local 모델 기본 출력 상한: `OPENAI_MAX_TOKENS=4096`.
 - Qwen Thinking reasoning-on 전용 출력 상한: `SGLANG_REASONING_MAX_TOKENS=10240`.
 - OCR/Vision 파서용 `max_tokens` 값은 별도 파서 안정화 파라미터이므로 이번 일반 챗봇/LLM 응답 상한 정책에는 포함하지 않았다.

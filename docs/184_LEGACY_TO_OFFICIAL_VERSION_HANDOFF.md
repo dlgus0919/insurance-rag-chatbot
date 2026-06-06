@@ -20,7 +20,7 @@
   - stream 마지막 chunk의 `finish_reason` 수집
   - final-only retry 응답의 `finish_reason`은 `final_retry_finish_reason`으로 별도 기록
 - 토큰 상한 정책
-  - 일반 LLM 출력 상한: `OPENAI_MAX_TOKENS=1875`
+  - 일반 LLM 출력 상한: `OPENAI_MAX_TOKENS=4096`
   - Qwen Thinking reasoning-on 출력 상한: `SGLANG_REASONING_MAX_TOKENS=10240`
 
 ## Verification
@@ -38,10 +38,10 @@ timeout 1200 .venv/bin/pytest tests/ -q
 토큰 설정 확인:
 
 ```text
-OPENAI_MAX_TOKENS=1875
+OPENAI_MAX_TOKENS=4096
 SGLANG_REASONING_MAX_TOKENS=10240
 Qwen reasoning-on payload max_tokens=10240
-Qwen reasoning-off payload max_tokens=1875
+Qwen reasoning-off payload max_tokens=4096
 ```
 
 ## Operational Notes
