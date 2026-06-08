@@ -232,7 +232,9 @@ def _extract_assistant_meta(sources: list[dict]) -> dict:
 def _message_content_for_display(message: ChatMessage) -> str:
     if message.role != "assistant":
         return message.content
-    return normalize_assistant_answer_for_display(message.content)
+    meta = _extract_assistant_meta(message.sources or [])
+    graph_result = meta.get("graph_result") if isinstance(meta, dict) else None
+    return normalize_assistant_answer_for_display(message.content, graph_result)
 
 
 def _public_export_meta(sources: list[dict]) -> dict:

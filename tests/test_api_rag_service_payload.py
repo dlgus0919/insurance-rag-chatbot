@@ -6,6 +6,7 @@ from src.api.rag_service import (
     extract_doc_filter,
     finalize_answer_for_question,
     formal_doc_filter,
+    graph_payload_has_renderable_evidence,
     graph_result_to_payload,
     normalize_assistant_answer_for_display,
     strip_embedded_review_template,
@@ -105,6 +106,16 @@ def test_graph_result_to_payload_prunes_followups_after_confirmed_diagnosis_excl
     assert payload["plan"]["clarification_questions"] == []
 
 
+def test_graph_payload_has_renderable_evidence_checks_panels_and_clarifications() -> None:
+    assert graph_payload_has_renderable_evidence(None) is False
+    assert graph_payload_has_renderable_evidence({"graph_review_paths": [], "facts": [], "plan": {}}) is False
+    assert graph_payload_has_renderable_evidence({"graph_review_paths": [{"path_type": "diagnosis_review"}]}) is True
+    assert graph_payload_has_renderable_evidence({"facts": [{"subject": "N39.3"}]}) is True
+    assert graph_payload_has_renderable_evidence(
+        {"plan": {"clarification_questions": ["어느 실손 세대 기준인지 확인해 주세요."]}}
+    ) is True
+
+
 def test_extract_doc_filter_deduplicates_and_normalizes() -> None:
     filters = {"doc_filter": ["약관", "표준약관", "약관", ""]}
     assert extract_doc_filter(filters) == ["약관", "표준약관"]
@@ -188,7 +199,33 @@ def test_strip_embedded_review_template_builds_summary_from_review_only_body() -
     assert "합병증 특약 내용 확인" in cleaned
 
 
-def test_finalize_answer_for_question_strips_embedded_review_template_before_citations() -> None:
+def test_finalize_answer_for_question_keeps_embedded_review_template_when_graph_payload_is_empty() -> None:
+    raw_answer = (
+        "N39.3은 보상 제외로 판단됩니다.\n\n"
+        "■ 섹션 1️⃣ 【확정 근거】\n해당 없음\n"
+        "■ 섹션 2️⃣ 【검토 필요 사항】\n질병/상해 구분 확인\n"
+    )
+    chunks = [
+        Chunk(
+            id="chunk-1",
+            text="약관 근거",
+            metadata={"pdf_filename": "약관.pdf", "doc_short": "약관", "page_start": 12, "page_end": 12},
+        )
+    ]
+
+    finalized = finalize_answer_for_question(
+        "N39.3 진단코드로 보상 가능 여부 알려주세요",
+        raw_answer,
+        chunks,
+        {"graph_review_paths": [], "facts": [], "plan": {}},
+    )
+
+    assert "■ 섹션 1️⃣" in finalized
+    assert "【확정 근거】" in finalized
+    assert "[출처:" not in finalized
+
+
+def test_finalize_answer_for_question_strips_embedded_review_template_when_graph_payload_is_renderable() -> None:
     raw_answer = (
         "N39.3은 보상 제외로 판단됩니다.\n\n"
         "■ 섹션 1️⃣ 【확정 근거】\n해당 없음\n"
@@ -202,12 +239,33 @@ def test_finalize_answer_for_question_strips_embedded_review_template_before_cit
         )
     ]
 
-    finalized = finalize_answer_for_question("N39.3 진단코드로 보상 가능 여부 알려주세요", raw_answer, chunks)
+    finalized = finalize_answer_for_question(
+        "N39.3 진단코드로 보상 가능 여부 알려주세요",
+        raw_answer,
+        chunks,
+        {"graph_review_paths": [{"path_type": "diagnosis_review", "status": "confirmed"}]},
+    )
 
     assert "■ 섹션 1️⃣" not in finalized
     assert "【확정 근거】" not in finalized
     assert "N39.3은 보상 제외로 판단됩니다." in finalized
     assert "[출처:" not in finalized
+
+
+def test_normalize_assistant_answer_for_display_keeps_template_without_renderable_graph_payload() -> None:
+    text = (
+        "■ 섹션 1️⃣ 【확정 근거】\n"
+        "해당 없음\n\n"
+        "■ 섹션 2️⃣ 【검토 필요 사항】\n"
+        "- 질병/상해 구분 확인\n\n"
+        "[출처: 약관, p.12]"
+    )
+
+    normalized = normalize_assistant_answer_for_display(text, {"graph_review_paths": [], "facts": [], "plan": {}})
+
+    assert "■ 섹션 1️⃣" in normalized
+    assert "질병/상해 구분 확인" in normalized
+    assert "[출처:" not in normalized
 
 
 def test_normalize_assistant_answer_for_display_removes_trailing_source_lines() -> None:

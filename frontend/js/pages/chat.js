@@ -450,20 +450,19 @@ function appendMsg(role, text, sources, track = true, uiPayload = null) {
 
   const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   const isUser = role === 'user';
-  const messageText = role === 'bot' ? sanitizeAssistantAnswer(text) : String(text || '');
+  const graphResult = role === 'bot' ? (uiPayload?.graphResult || null) : null;
+  const messageText = role === 'bot' ? sanitizeAssistantAnswer(text, graphResult) : String(text || '');
   const sourceHtml = sources?.length
     ? `<div class="msg-sources">📄 참고: ${sources.map((source) => `<span class="src-badge">${escapeHTML(formatSource(source))}</span>`).join('')}</div>`
     : '';
-  const graphResult = role === 'bot' ? (uiPayload?.graphResult || null) : null;
   const warnings = role === 'bot' ? (uiPayload?.warnings || []) : [];
   const legacyStructuredNotice = role === 'bot' ? Boolean(uiPayload?.legacyStructuredNotice) : false;
-  const suppressStructuredPanels = shouldSuppressStructuredPanels(messageText, graphResult);
   const botExtras = role === 'bot'
     ? renderClarificationHtml(graphResult)
       + renderWarningHtml(warnings)
       + renderLegacyStructuredNoticeHtml(legacyStructuredNotice)
-      + (suppressStructuredPanels ? '' : renderGraphReviewPathsHtml(graphResult))
-      + (suppressStructuredPanels ? '' : renderGraphFactsHtml(graphResult))
+      + renderGraphReviewPathsHtml(graphResult)
+      + renderGraphFactsHtml(graphResult)
     : '';
   const row = document.createElement('div');
   row.className = `msg-row ${role}`;
@@ -736,13 +735,12 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
       if (event.event === 'error') throw new Error(event.data.message || '응답 생성 중 오류가 발생했습니다.');
     });
     if (!answer) answer = '응답이 비어 있습니다.';
-    answer = sanitizeAssistantAnswer(answer);
-    const suppressStructuredPanels = shouldSuppressStructuredPanels(answer, graphResult);
+    answer = sanitizeAssistantAnswer(answer, graphResult);
     bubble.innerHTML = renderAssistantContent(answer)
       + renderClarificationHtml(graphResult)
       + renderWarningHtml(warnings)
-      + (suppressStructuredPanels ? '' : renderGraphReviewPathsHtml(graphResult))
-      + (suppressStructuredPanels ? '' : renderGraphFactsHtml(graphResult))
+      + renderGraphReviewPathsHtml(graphResult)
+      + renderGraphFactsHtml(graphResult)
       + (sources.length ? `<div class="msg-sources">📄 참고: ${sources.map((source) => `<span class="src-badge">${escapeHTML(formatSource(source))}</span>`).join('')}</div>` : '');
     msgs.push({
       role: 'bot',
@@ -911,17 +909,24 @@ function renderWarningHtml(warnings) {
   return `<div class="msg-warnings"><div class="evidence-title">처리 경고</div><ul>${items}</ul></div>`;
 }
 
-function shouldSuppressStructuredPanels(answer, graphResult) {
-  if (!graphResult) return false;
-  const text = String(answer || '');
-  return text.includes('【확정 근거】')
-    || text.includes('섹션 1️⃣')
-    || text.includes('구조화 검토 경로');
+function hasRenderableGraphPayload(graphResult) {
+  if (!graphResult || typeof graphResult !== 'object') return false;
+  if (Array.isArray(graphResult.graph_review_paths) && graphResult.graph_review_paths.length > 0) return true;
+  if (Array.isArray(graphResult.facts) && graphResult.facts.length > 0) return true;
+
+  const plan = graphResult.plan && typeof graphResult.plan === 'object' ? graphResult.plan : {};
+  return Boolean(
+    (Array.isArray(plan.clarification_questions) && plan.clarification_questions.length > 0)
+    || (plan.normalized_terms && typeof plan.normalized_terms === 'object' && Object.keys(plan.normalized_terms).length > 0)
+    || (Array.isArray(plan.term_correction_candidates) && plan.term_correction_candidates.length > 0)
+    || (Array.isArray(plan.ambiguous_terms) && plan.ambiguous_terms.length > 0)
+  );
 }
 
-function sanitizeAssistantAnswer(answer) {
+function sanitizeAssistantAnswer(answer, graphResult = null) {
   const text = String(answer || '').trim();
   if (!text) return '';
+  if (!hasRenderableGraphPayload(graphResult)) return stripTrailingSourceCitationLines(text);
 
   const positions = EMBEDDED_REVIEW_TEMPLATE_MARKERS
     .map((marker) => text.indexOf(marker))
@@ -1248,6 +1253,15 @@ async function exportChat(format) {
     toast(error.message || '내보내기 중 오류가 발생했습니다.', 'error');
   }
 }
+
+export {
+  formatSelectedModelLabel,
+  hasRenderableGraphPayload,
+  isReasoningSupportedModel,
+  sanitizeAssistantAnswer,
+  renderGraphReviewPathsHtml,
+  renderGraphFactsHtml,
+};
 
 function getSelectedModel() {
   return localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'ollama:exaone3.5:7.8b';

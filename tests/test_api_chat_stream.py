@@ -63,6 +63,13 @@ class ReasoningFakeLLM:
         yield "fallback 답변"
 
 
+class StructuredTemplateLLM:
+    def generate_stream(self, prompt, system="", temperature=0.2):
+        yield "N39.3은 보상 제외로 판단됩니다.\n\n"
+        yield "■ 섹션 1️⃣ 【확정 근거】\n해당 없음\n"
+        yield "■ 섹션 2️⃣ 【검토 필요 사항】\n질병/상해 구분 확인\n"
+
+
 class FakePipeline:
     def __init__(self):
         self.llm = FakeLLM()
@@ -151,6 +158,12 @@ class ReasoningFakePipeline(FakePipeline):
         self.llm = ReasoningFakeLLM()
 
 
+class StructuredTemplatePipeline(FakePipeline):
+    def __init__(self):
+        super().__init__()
+        self.llm = StructuredTemplateLLM()
+
+
 def _user(username: str = "employee01") -> User:
     return User(
         username=username,
@@ -235,6 +248,88 @@ async def test_chat_stream_passes_reasoning_mode_and_records_audit(db_session, m
     assert audit_entry.detail["finish_reason"] == "length"
     assert audit_entry.detail["final_retry_finish_reason"] == "stop"
     assert "THINKING_ONLY_OUTPUT" in audit_entry.detail["warning_codes"]
+
+
+@pytest.mark.anyio
+async def test_chat_stream_preserves_model_structured_template_when_graph_payload_is_empty(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: StructuredTemplatePipeline())
+
+    async def fake_prepare(*_args, **_kwargs):
+        return [], [], "prompt", {"graph_review_paths": [], "facts": [], "plan": {}}, [], None, None
+
+    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_prepare)
+    created = await sessions.create_session(SessionCreateRequest(title="빈 그래프"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(query="N39.3 보상 가능 여부", session_id=created.id, model="ollama:llama-3.3-70b-instruct-q4-k-m"),
+        None,
+        _user(),
+        db_session,
+    )
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+    stream = "".join(chunks)
+
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert "event: graph" in stream
+    assert "■ 섹션 1️⃣" in stream
+    assert "【확정 근거】" in messages[1].content
+
+
+@pytest.mark.anyio
+async def test_chat_stream_strips_model_structured_template_when_graph_payload_is_renderable(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: StructuredTemplatePipeline())
+
+    async def fake_prepare(*_args, **_kwargs):
+        return (
+            [],
+            [],
+            "prompt",
+            {
+                "graph_review_paths": [
+                    {
+                        "path_type": "diagnosis_review",
+                        "path_type_label": "진단코드 검토",
+                        "status": "confirmed",
+                        "status_label": "확정",
+                    }
+                ],
+                "facts": [],
+                "plan": {},
+            },
+            [],
+            None,
+            None,
+        )
+
+    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_prepare)
+    created = await sessions.create_session(SessionCreateRequest(title="그래프 패널"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(query="N39.3 보상 가능 여부", session_id=created.id, model="ollama:llama-3.3-70b-instruct-q4-k-m"),
+        None,
+        _user(),
+        db_session,
+    )
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+    stream = "".join(chunks)
+
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert "event: graph" in stream
+    assert "진단코드 검토" in stream
+    assert messages[1].content == "N39.3은 보상 제외로 판단됩니다."
+    assert "■ 섹션" not in messages[1].content
 
 
 @pytest.mark.anyio
@@ -364,7 +459,7 @@ async def test_session_export_filters_internal_assistant_meta_sources(db_session
 
 
 @pytest.mark.anyio
-async def test_list_messages_and_export_sanitize_embedded_review_template(db_session) -> None:
+async def test_list_messages_and_export_preserve_embedded_review_template_without_graph_panel(db_session) -> None:
     created = await sessions.create_session(SessionCreateRequest(title="복원"), _user(), db_session)
     raw_template = (
         "■ 섹션 1️⃣  【확정 근거】\n"
@@ -378,7 +473,13 @@ async def test_list_messages_and_export_sanitize_embedded_review_template(db_ses
             session_id=created.id,
             role="assistant",
             content=raw_template,
-            sources=[],
+            sources=[
+                {
+                    "__kind": "assistant_meta",
+                    "graph_result": {"graph_review_paths": [], "facts": [], "plan": {}},
+                    "warnings": [],
+                }
+            ],
         )
     )
     await db_session.commit()
@@ -387,10 +488,55 @@ async def test_list_messages_and_export_sanitize_embedded_review_template(db_ses
     response = await sessions.export_session(None, created.id, "txt", _user(), db_session)
     body = response.body.decode("utf-8") if isinstance(response.body, bytes) else response.body
 
-    assert "■ 섹션" not in messages[0].content
+    assert "■ 섹션" in messages[0].content
     assert "합병증 특약 가입 여부 확인이 필요합니다." in messages[0].content
-    assert "■ 섹션" not in body
+    assert "■ 섹션" in body
     assert "합병증 특약 가입 여부 확인이 필요합니다." in body
+
+
+@pytest.mark.anyio
+async def test_list_messages_and_export_sanitize_embedded_review_template_with_graph_panel(db_session) -> None:
+    created = await sessions.create_session(SessionCreateRequest(title="복원"), _user(), db_session)
+    raw_template = (
+        "N39.3은 보상 제외로 판단됩니다.\n\n"
+        "■ 섹션 1️⃣  【확정 근거】\n"
+        "해당 없음\n\n"
+        "■ 섹션 2️⃣  【검토 필요 사항】\n"
+        "- 질병/상해 구분 확인\n"
+    )
+    db_session.add(
+        ChatMessage(
+            session_id=created.id,
+            role="assistant",
+            content=raw_template,
+            sources=[
+                {
+                    "__kind": "assistant_meta",
+                    "graph_result": {
+                        "graph_review_paths": [
+                            {
+                                "path_type": "diagnosis_review",
+                                "path_type_label": "진단코드 검토",
+                                "status": "confirmed",
+                                "status_label": "확정",
+                                "summary": "문서에 직접 언급된 진단코드 근거 확인",
+                            }
+                        ]
+                    },
+                    "warnings": [],
+                }
+            ],
+        )
+    )
+    await db_session.commit()
+
+    messages = await sessions.list_messages(created.id, _user(), db_session)
+    response = await sessions.export_session(None, created.id, "txt", _user(), db_session)
+    body = response.body.decode("utf-8") if isinstance(response.body, bytes) else response.body
+
+    assert messages[0].content == "N39.3은 보상 제외로 판단됩니다."
+    assert "■ 섹션" not in body
+    assert "진단코드 검토" in body
 
 
 @pytest.mark.anyio

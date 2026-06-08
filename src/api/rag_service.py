@@ -645,18 +645,54 @@ def strip_trailing_source_citation_lines(text: str) -> str:
     return cleaned or text.strip()
 
 
-def normalize_assistant_answer_for_display(text: str) -> str:
+def graph_payload_has_renderable_evidence(graph_payload: dict | None) -> bool:
+    """Return whether the Graph payload can produce a visible structured panel."""
+
+    if not isinstance(graph_payload, dict):
+        return False
+    if graph_payload.get("graph_review_paths"):
+        return True
+    if graph_payload.get("facts"):
+        return True
+
+    plan = graph_payload.get("plan") or {}
+    if not isinstance(plan, dict):
+        return False
+    return any(
+        bool(plan.get(key))
+        for key in (
+            "clarification_questions",
+            "normalized_terms",
+            "term_correction_candidates",
+            "ambiguous_terms",
+        )
+    )
+
+
+def normalize_assistant_answer_for_display(text: str, graph_payload: dict | None = None) -> str:
     """Normalize stored/generated assistant text for UI and export display."""
 
-    return strip_trailing_source_citation_lines(strip_embedded_review_template(text))
+    if graph_payload_has_renderable_evidence(graph_payload):
+        return strip_trailing_source_citation_lines(strip_embedded_review_template(text))
+    return strip_trailing_source_citation_lines(text)
 
 
-def finalize_answer_for_question(question: str, raw_answer: str, chunks: list) -> str:
+def finalize_answer_for_question(
+    question: str,
+    raw_answer: str,
+    chunks: list,
+    graph_payload: dict | None = None,
+) -> str:
     """Apply source citations and evidence validation warnings to a generated answer."""
 
-    answer = append_retrieved_source_citations(strip_embedded_review_template(raw_answer), chunks)
+    display_answer = (
+        strip_embedded_review_template(raw_answer)
+        if graph_payload_has_renderable_evidence(graph_payload)
+        else raw_answer
+    )
+    answer = append_retrieved_source_citations(display_answer, chunks)
     answer = append_evidence_validation_warning(answer, question, chunks)
-    return normalize_assistant_answer_for_display(answer)
+    return normalize_assistant_answer_for_display(answer, graph_payload)
 
 
 __all__ = [
@@ -667,6 +703,7 @@ __all__ = [
     "finalize_answer_for_question",
     "formal_doc_filter",
     "graph_result_to_payload",
+    "graph_payload_has_renderable_evidence",
     "get_rag_pipeline",
     "normalize_assistant_answer_for_display",
     "build_history_context",

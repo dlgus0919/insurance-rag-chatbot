@@ -136,7 +136,7 @@ async def chat_stream(
                 yield _sse("warning", empty_warning)
                 answer = "모델 응답 본문이 비어 있어 답변을 생성하지 못했습니다. 검색 근거를 다시 확인해 주세요."
             else:
-                answer = finalize_answer_for_question(chat_request.query, raw_answer, chunks)
+                answer = finalize_answer_for_question(chat_request.query, raw_answer, chunks, graph_payload)
             yield _sse("final", {"answer": answer})
             yield _sse("done", {"session_id": chat_session.id, "answer": answer})
             await _persist_turn(
