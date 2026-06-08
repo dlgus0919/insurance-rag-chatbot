@@ -171,6 +171,7 @@ RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma3:4b")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
+OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "4096"))
 RERANKER_ENABLED: bool = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
 LOG_DIR: str = os.getenv("LOG_DIR", "logs")
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
@@ -245,15 +246,19 @@ def vllm_base_url_for_model(model: str) -> str:
     """Return the OpenAI-compatible endpoint for a vLLM served model."""
 
     return VLLM_MODEL_ENDPOINTS.get(model, VLLM_BASE_URL).rstrip("/")
-OLLAMA_CANDIDATE_MODELS: list[str] = [
-    "exaone3.5:7.8b",
-    "exaone3.5:7.8b-instruct",
-    "timHan/llama3korean8B4QKM:latest",   # llama-3-Korean-Bllossom-8B Q4_K_M (커뮤니티 업로드)
-    "qwen2.5:7b-instruct",
-    "qwen2.5:14b-instruct",
-    "gemma3:4b",
-    "gemma3:1b",
-]
+
+
+OLLAMA_DEFAULT_CANDIDATES = (
+    "exaone3.5:7.8b,"
+    "llama-3.3-70b-instruct-q4-k-m,"
+    "exaone3.5:7.8b-instruct,"
+    "timHan/llama3korean8B4QKM:latest,"
+    "qwen2.5:7b-instruct,"
+    "qwen2.5:14b-instruct,"
+    "gemma3:4b,"
+    "gemma3:1b"
+)
+OLLAMA_CANDIDATE_MODELS: list[str] = _parse_csv_env("OLLAMA_CANDIDATE_MODELS", OLLAMA_DEFAULT_CANDIDATES)
 DEFAULT_OPENAI_CANDIDATE_MODELS: list[str] = [
     "gpt-5.5",           # 최신 프론티어 — 복잡한 약관 해석·보상판정
     "gpt-5.2-chat-latest",  # 이전 세대 프론티어 인스턴트 — 일반 질의

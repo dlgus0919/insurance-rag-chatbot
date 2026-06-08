@@ -133,6 +133,7 @@ setup_fastapi_env() {
 
   export ALLOW_OLLAMA="${ALLOW_OLLAMA:-true}"
   export OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+  export OLLAMA_NUM_PREDICT="${OLLAMA_NUM_PREDICT:-4096}"
   if [[ "$DEFAULT_PROVIDER" == "ollama" ]]; then
     local selected_ollama_model="${INSURANCE_RAG_MODEL:-${OLLAMA_MODEL:-$DEFAULT_MODEL}}"
     export OLLAMA_MODEL="$selected_ollama_model"
@@ -141,7 +142,7 @@ setup_fastapi_env() {
     export VLLM_STRICT_AVAILABLE_MODELS=false
   else
     export OLLAMA_MODEL="${OLLAMA_MODEL:-exaone3.5:7.8b}"
-    export OLLAMA_CANDIDATE_MODELS="${OLLAMA_CANDIDATE_MODELS:-exaone3.5:7.8b}"
+    export OLLAMA_CANDIDATE_MODELS="${OLLAMA_CANDIDATE_MODELS:-exaone3.5:7.8b,llama-3.3-70b-instruct-q4-k-m}"
   fi
 
   export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"

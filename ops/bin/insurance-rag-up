@@ -13,6 +13,10 @@ REPLACE=0
 FOREGROUND=0
 SKIP_PREPARE=0
 NO_LLM_SWITCH=0
+LLAMA_GGUF_OLLAMA_MODEL="${LLAMA_GGUF_OLLAMA_MODEL:-llama-3.3-70b-instruct-q4-k-m}"
+LLAMA_GGUF_MODEL_DIR="${LLAMA_GGUF_MODEL_DIR:-$AI_OPS_ROOT/llm/models/$LLAMA_GGUF_OLLAMA_MODEL}"
+LLAMA_GGUF_FILE="${LLAMA_GGUF_FILE:-$LLAMA_GGUF_MODEL_DIR/Llama-3.3-70B-Instruct-Q4_K_M.gguf}"
+LLAMA_GGUF_MODELFILE="${LLAMA_GGUF_MODELFILE:-$PROJECT_DIR/ops/ollama/$LLAMA_GGUF_OLLAMA_MODEL.Modelfile}"
 
 usage() {
   cat <<'EOF'
@@ -33,6 +37,30 @@ Options:
   --foreground                     Run uvicorn in the current shell, not tmux.
   -h, --help                       Show this help.
 EOF
+}
+
+ollama_model_installed() {
+  local model="$1"
+  command -v ollama >/dev/null 2>&1 || return 1
+  OLLAMA_HOST="$OLLAMA_HOST" ollama list 2>/dev/null \
+    | awk 'NR > 1 {print $1}' \
+    | awk -v model="$model" '$1 == model || $1 == model ":latest" {found = 1} END {exit !found}'
+}
+
+ensure_ollama_gguf_model() {
+  local model="$1"
+  [[ "$model" == "$LLAMA_GGUF_OLLAMA_MODEL" || "$model" == "$LLAMA_GGUF_OLLAMA_MODEL:latest" ]] || return 0
+  require_file "$LLAMA_GGUF_FILE" "Llama 3.3 70B GGUF model"
+  require_file "$LLAMA_GGUF_MODELFILE" "Llama 3.3 Ollama Modelfile"
+  command -v ollama >/dev/null 2>&1 || die "ollama command is required for $model"
+
+  if ollama_model_installed "$LLAMA_GGUF_OLLAMA_MODEL"; then
+    log "Ollama model already installed: $LLAMA_GGUF_OLLAMA_MODEL"
+    return 0
+  fi
+
+  log "creating Ollama model from GGUF: $LLAMA_GGUF_OLLAMA_MODEL"
+  OLLAMA_HOST="$OLLAMA_HOST" ollama create "$LLAMA_GGUF_OLLAMA_MODEL" -f "$LLAMA_GGUF_MODELFILE"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -128,6 +156,7 @@ if [[ "$NO_LLM_SWITCH" != "1" ]]; then
       export VLLM_CANDIDATE_MODELS="$MODEL"
       ;;
     ollama)
+      ensure_ollama_gguf_model "$MODEL"
       log "using Ollama model without switch wrapper: $MODEL"
       export OLLAMA_MODEL="$MODEL"
       export OLLAMA_CANDIDATE_MODELS="$MODEL"

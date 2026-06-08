@@ -15,21 +15,40 @@ class OllamaClient:
 
     provider = "ollama"
 
-    def __init__(self, host: str, model: str, num_ctx: int | None = None):
+    def __init__(
+        self,
+        host: str,
+        model: str,
+        num_ctx: int | None = None,
+        num_predict: int | None = None,
+    ):
         self.host = host.rstrip("/") + "/"
         self.model = model
         self.num_ctx = num_ctx if num_ctx is not None else config.OLLAMA_NUM_CTX
+        self.num_predict = num_predict if num_predict is not None else config.OLLAMA_NUM_PREDICT
 
-    def generate(self, prompt: str, system: str = "", temperature: float = 0.2, num_ctx: int | None = None) -> str:
+    def generate(
+        self,
+        prompt: str,
+        system: str = "",
+        temperature: float = 0.2,
+        num_ctx: int | None = None,
+        num_predict: int | None = None,
+    ) -> str:
         """프롬프트를 보내고 생성된 답변 문자열을 반환한다."""
 
         selected_num_ctx = num_ctx if num_ctx is not None else self.num_ctx
+        selected_num_predict = num_predict if num_predict is not None else self.num_predict
         payload = {
             "model": self.model,
             "prompt": prompt,
             "system": system,
             "stream": False,
-            "options": {"temperature": temperature, "num_ctx": selected_num_ctx},
+            "options": {
+                "temperature": temperature,
+                "num_ctx": selected_num_ctx,
+                "num_predict": selected_num_predict,
+            },
         }
         try:
             response = requests.post(urljoin(self.host, "api/generate"), json=payload, timeout=120)
@@ -58,7 +77,11 @@ class OllamaClient:
             "prompt": prompt,
             "system": system,
             "stream": True,
-            "options": {"temperature": temperature, "num_ctx": self.num_ctx},
+            "options": {
+                "temperature": temperature,
+                "num_ctx": self.num_ctx,
+                "num_predict": self.num_predict,
+            },
         }
         try:
             with requests.post(
@@ -92,7 +115,15 @@ class OllamaClient:
         if response.status_code >= 400:
             return []
         data = response.json()
-        return [model["name"] for model in data.get("models", []) if "name" in model]
+        names: list[str] = []
+        for model in data.get("models", []):
+            name = model.get("name")
+            if not name:
+                continue
+            names.append(name)
+            if name.endswith(":latest"):
+                names.append(name.removesuffix(":latest"))
+        return list(dict.fromkeys(names))
 
     def health(self) -> bool:
         """Ollama 서버 접근 가능 여부를 반환한다."""

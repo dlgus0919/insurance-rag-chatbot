@@ -37,16 +37,22 @@ def test_ollama_generate_posts_non_stream_request(monkeypatch) -> None:
         return DummyResponse(200, {"response": "답변"})
 
     monkeypatch.setattr(requests, "post", fake_post)
-    client = OllamaClient("http://localhost:11434", "qwen2.5:3b-instruct", num_ctx=16384)
+    client = OllamaClient(
+        "http://localhost:11434",
+        "qwen2.5:3b-instruct",
+        num_ctx=16384,
+        num_predict=4096,
+    )
 
     assert client.generate("질문", system="규칙") == "답변"
     assert captured["url"] == "http://localhost:11434/api/generate"
     assert captured["json"]["stream"] is False
     assert captured["json"]["model"] == "qwen2.5:3b-instruct"
     assert captured["json"]["options"]["num_ctx"] == 16384
+    assert captured["json"]["options"]["num_predict"] == 4096
 
 
-def test_ollama_generate_allows_num_ctx_override(monkeypatch) -> None:
+def test_ollama_generate_allows_generation_option_override(monkeypatch) -> None:
     captured = {}
 
     def fake_post(url, json, timeout):
@@ -54,11 +60,12 @@ def test_ollama_generate_allows_num_ctx_override(monkeypatch) -> None:
         return DummyResponse(200, {"response": "답변"})
 
     monkeypatch.setattr(requests, "post", fake_post)
-    client = OllamaClient("http://localhost:11434", "model", num_ctx=16384)
+    client = OllamaClient("http://localhost:11434", "model", num_ctx=16384, num_predict=4096)
 
-    client.generate("질문", num_ctx=4096)
+    client.generate("질문", num_ctx=4096, num_predict=2048)
 
     assert captured["json"]["options"]["num_ctx"] == 4096
+    assert captured["json"]["options"]["num_predict"] == 2048
 
 
 def test_ollama_health_false_on_connection_error(monkeypatch) -> None:
@@ -72,11 +79,18 @@ def test_ollama_health_false_on_connection_error(monkeypatch) -> None:
 
 def test_ollama_list_models_returns_names(monkeypatch) -> None:
     def fake_get(url, timeout):
-        return DummyResponse(200, {"models": [{"name": "gemma3:4b"}, {"name": "gemma3:1b"}]})
+        return DummyResponse(
+            200,
+            {"models": [{"name": "gemma3:4b"}, {"name": "llama-3.3-70b-instruct-q4-k-m:latest"}]},
+        )
 
     monkeypatch.setattr(requests, "get", fake_get)
 
-    assert OllamaClient("http://localhost:11434", "model").list_models() == ["gemma3:4b", "gemma3:1b"]
+    assert OllamaClient("http://localhost:11434", "model").list_models() == [
+        "gemma3:4b",
+        "llama-3.3-70b-instruct-q4-k-m:latest",
+        "llama-3.3-70b-instruct-q4-k-m",
+    ]
 
 
 def test_ollama_list_models_returns_empty_on_error(monkeypatch) -> None:
@@ -105,7 +119,7 @@ def test_ollama_generate_stream_yields_tokens(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(requests, "post", fake_post)
-    client = OllamaClient("http://localhost:11434", "model", num_ctx=16384)
+    client = OllamaClient("http://localhost:11434", "model", num_ctx=16384, num_predict=4096)
 
     tokens = list(client.generate_stream("질문", system="규칙", temperature=0.1))
 
@@ -113,4 +127,5 @@ def test_ollama_generate_stream_yields_tokens(monkeypatch) -> None:
     assert captured["url"] == "http://localhost:11434/api/generate"
     assert captured["json"]["stream"] is True
     assert captured["json"]["options"]["num_ctx"] == 16384
+    assert captured["json"]["options"]["num_predict"] == 4096
     assert captured["stream"] is True

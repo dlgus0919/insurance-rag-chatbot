@@ -14,6 +14,9 @@ LOG_DIR="${INSURANCE_RAG_LAUNCHER_LOG_DIR:-$PROJECT_DIR/logs}"
 SGLANG_BASE_URL="${SGLANG_BASE_URL:-http://127.0.0.1:30000/v1}"
 VLLM_BASE_URL="${VLLM_BASE_URL:-http://127.0.0.1:30001/v1}"
 OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+LLAMA_GGUF_OLLAMA_MODEL="${LLAMA_GGUF_OLLAMA_MODEL:-llama-3.3-70b-instruct-q4-k-m}"
+LLAMA_GGUF_MODEL_DIR="${LLAMA_GGUF_MODEL_DIR:-$AI_OPS_ROOT/llm/models/$LLAMA_GGUF_OLLAMA_MODEL}"
+LLAMA_GGUF_FILE="${LLAMA_GGUF_FILE:-$LLAMA_GGUF_MODEL_DIR/Llama-3.3-70B-Instruct-Q4_K_M.gguf}"
 
 usage() {
   cat <<'EOF'
@@ -115,6 +118,15 @@ vllm_model_ready() {
   [[ -x "$PROJECT_DIR/.venv-vllm/bin/python" ]]
 }
 
+ollama_gguf_model_ready() {
+  local model="$1"
+  [[ "$model" == "$LLAMA_GGUF_OLLAMA_MODEL" ]] || return 1
+  [[ -f "$LLAMA_GGUF_FILE" ]] || return 1
+  if find "$LLAMA_GGUF_MODEL_DIR" -path '*/.cache/huggingface/download/*' -name '*.incomplete' -print -quit | grep -q .; then
+    return 1
+  fi
+}
+
 print_status() {
   local app="stopped"
   detect_app_health && app="running"
@@ -170,6 +182,10 @@ print_choices() {
 
   if [[ -n "$ollama_model" ]]; then
     printf 'start|ollama|%s\n' "$ollama_model"
+  fi
+  if ollama_gguf_model_ready "$LLAMA_GGUF_OLLAMA_MODEL" \
+    && [[ "$ollama_model" != "$LLAMA_GGUF_OLLAMA_MODEL" && "$ollama_model" != "$LLAMA_GGUF_OLLAMA_MODEL:latest" ]]; then
+    printf 'start|ollama|%s\n' "$LLAMA_GGUF_OLLAMA_MODEL"
   fi
 }
 
@@ -304,6 +320,10 @@ choose_action() {
   fi
   if [[ -n "$ollama_model" ]]; then
     rows+=("FALSE" "start|ollama|$ollama_model" "Ollama 모델 사용" "$ollama_model")
+  fi
+  if ollama_gguf_model_ready "$LLAMA_GGUF_OLLAMA_MODEL" \
+    && [[ "$ollama_model" != "$LLAMA_GGUF_OLLAMA_MODEL" && "$ollama_model" != "$LLAMA_GGUF_OLLAMA_MODEL:latest" ]]; then
+    rows+=("FALSE" "start|ollama|$LLAMA_GGUF_OLLAMA_MODEL" "Ollama GGUF 모델 생성/사용" "$LLAMA_GGUF_OLLAMA_MODEL")
   fi
 
   local current_text
