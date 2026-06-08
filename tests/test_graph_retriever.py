@@ -295,3 +295,22 @@ def test_retriever_missing_db() -> None:
     assert len(result.facts) == 0
     assert len(result.warnings) == 1
     assert "not found" in result.warnings[0]
+
+
+def test_retriever_missing_db_returns_renderable_condition_review_path() -> None:
+    retriever = GraphRetriever("non_existent_db_12345.sqlite")
+    result = retriever.retrieve(
+        "이륜자동차를 타다 사고가 났습니다. 원래 이륜자동차를 타지 않는 사람인데, "
+        "보험가입 후 이륜자동차를 타게 된 사실을 보험회사에 통지하지 않았습니다. "
+        "이럴 경우 보상이 되는지 알려주세요."
+    )
+
+    assert result.warnings
+    assert result.review_paths
+    path = result.review_paths[0]
+    assert path.path_type == "claim_condition_review"
+    assert path.status == "missing"
+    assert any(step.object == "이륜자동차 운전/탑승" for step in path.steps)
+    assert any(step.source == "graphdb" and step.status == "missing" for step in path.steps)
+    assert any(assertion.value == "이륜자동차 운전/탑승" for assertion in result.session_assertions)
+    assert "관련 약관 조항 직접 확인" in result.review_actions

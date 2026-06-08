@@ -57,6 +57,19 @@ _EMBEDDED_REVIEW_BULLET_PATTERN = re.compile(r"^\s*(?:[-*•]\s+|☐\s*|→\s*\d
 _SOURCE_CITATION_LINE_PATTERN = re.compile(r"^\s*\[출처:\s*.+\]\s*$")
 _TRAILING_SOURCE_NOTE_PATTERN = re.compile(r"^\s*\(참고:\s*.+\)\s*$")
 
+_GRAPH_STRUCTURED_CUE_KEYS = (
+    "diagnosis_codes",
+    "coverage_topics",
+    "conditions",
+    "complication_asserted",
+    "evidence_tags",
+    "one_disease_terms",
+    "claim_unit_terms",
+    "disease_grouping_requested",
+    "normalized_terms",
+    "clarification_questions",
+)
+
 
 @lru_cache(maxsize=1)
 def _load_shared_retrieval_components():
@@ -109,6 +122,30 @@ def _resolve_index_paths(index_mode: str):
     version = config.normalize_ocr_version(normalized)
     paths = config.get_ingest_paths(version)
     return paths["bm25_path"], paths["chroma_dir"]
+
+
+def _graph_payload_has_structured_cues(graph_payload: dict | None) -> bool:
+    if not isinstance(graph_payload, dict):
+        return False
+    plan = graph_payload.get("plan") or {}
+    if not isinstance(plan, dict):
+        return False
+    return any(bool(plan.get(key)) for key in _GRAPH_STRUCTURED_CUE_KEYS)
+
+
+def _log_graph_payload_visibility(question: str, graph_payload: dict | None) -> None:
+    if not _graph_payload_has_structured_cues(graph_payload):
+        return
+    review_paths = graph_payload.get("graph_review_paths") if isinstance(graph_payload, dict) else None
+    facts = graph_payload.get("facts") if isinstance(graph_payload, dict) else None
+    if review_paths or facts:
+        return
+    logger.info(
+        "Graph payload has structured cues but no renderable review paths/facts: query=%r plan=%s warnings=%s",
+        question[:160],
+        graph_payload.get("plan", {}) if isinstance(graph_payload, dict) else {},
+        graph_payload.get("warnings", []) if isinstance(graph_payload, dict) else [],
+    )
 
 
 def chunk_to_source(chunk) -> dict:
@@ -187,12 +224,21 @@ async def prepare_retrieved_context(
                     )
         except Exception as exc:  # pragma: no cover - runtime fallback
             logger.warning("Graph retrieval failed in API path: %s", exc, exc_info=True)
+            fallback_builder = getattr(pipeline.graph_retriever, "build_fallback_result", None)
+            if callable(fallback_builder):
+                graph_result = fallback_builder(
+                    question,
+                    "GraphDB 조회 중 예외가 발생해 직접 연결된 조항 경로를 확인하지 못했습니다.",
+                    warning=f"Graph retrieval failed in API path: {exc}",
+                )
+                graph_context = build_graph_context(graph_result)
+            else:
+                graph_result = None
+                graph_context = ""
             warnings.append({
                 "code": "GRAPH_RETRIEVAL_FAILED",
-                "message": "GraphDB 근거 조회 중 오류가 발생해 일반 RAG로 답변합니다.",
+                "message": "GraphDB 직접 근거 조회 중 오류가 발생해 구조화 검토 경로를 fallback으로 표시합니다.",
             })
-            graph_result = None
-            graph_context = ""
             graph_hits = []
 
     doc_filter = extract_doc_filter(filters)
@@ -212,7 +258,9 @@ async def prepare_retrieved_context(
     deterministic_answer = _deterministic_guard_answer(question, chunks, graph_context=graph_context)
     if debug is not None:
         debug.graph_result = graph_result
-    return chunks, sources, prompt, graph_result_to_payload(graph_result), warnings, deterministic_answer, debug
+    graph_payload = graph_result_to_payload(graph_result)
+    _log_graph_payload_visibility(question, graph_payload)
+    return chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug
 
 
 def extract_structured_terms(query: str) -> list[str]:

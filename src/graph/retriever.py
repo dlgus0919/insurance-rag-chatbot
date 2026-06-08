@@ -192,6 +192,167 @@ class GraphRetriever:
         self.planner = GraphQueryPlanner()
         self.complication_keywords = ["합병증", "합병증 치료", "수술 후 합병증", "부작용", "후유증", "미용 목적 시술 후 합병증"]
 
+    @staticmethod
+    def _unique_nonempty(values: list[str]) -> list[str]:
+        return [value for value in dict.fromkeys(values) if value]
+
+    def _fallback_session_assertions(self, plan: GraphQueryPlan) -> list[SessionAssertion]:
+        assertions: list[SessionAssertion] = []
+        for code in self._unique_nonempty(plan.diagnosis_codes):
+            assertions.append(SessionAssertion(kind="diagnosis", value=code, notes="GraphDB fallback session assertion"))
+        for name in self._unique_nonempty(plan.conditions):
+            assertions.append(SessionAssertion(kind="condition", value=name, notes="GraphDB fallback session assertion"))
+        for topic in self._unique_nonempty(plan.coverage_topics):
+            assertions.append(SessionAssertion(kind="coverage_topic", value=topic, notes="GraphDB fallback session assertion"))
+        if plan.complication_asserted:
+            assertions.append(SessionAssertion(kind="complication", value="합병증/후유증/부작용", notes="GraphDB fallback session assertion"))
+        for term in self._unique_nonempty(plan.claim_unit_terms + plan.one_disease_terms):
+            assertions.append(SessionAssertion(kind="claim_unit", value=term, notes="GraphDB fallback session assertion"))
+        return assertions
+
+    @staticmethod
+    def _missing_lookup_step(reason: str) -> GraphPathStep:
+        return GraphPathStep(
+            source="graphdb",
+            subject="GraphDB",
+            relation="LOOKUP",
+            object="직접 연결된 조항 없음",
+            status="missing",
+            notes=reason,
+        )
+
+    def _build_session_fallback_review_paths(self, plan: GraphQueryPlan, reason: str) -> list[GraphReviewPath]:
+        """Build renderable review paths from planner cues when graph lookup cannot prove a path."""
+
+        paths: list[GraphReviewPath] = []
+        condition_names = self._unique_nonempty(plan.conditions + plan.coverage_topics)
+        if condition_names:
+            steps = [
+                GraphPathStep(
+                    source="session",
+                    subject="질문/입력",
+                    relation="ASSERTS",
+                    object=name,
+                    status="asserted",
+                    notes="Planner가 구조화 판단 조건으로 인식했습니다.",
+                )
+                for name in condition_names
+            ]
+            steps.append(self._missing_lookup_step(reason))
+            paths.append(
+                GraphReviewPath(
+                    path_id=f"condition_fallback::{normalize_name(' '.join(condition_names))[:40]}",
+                    path_type="claim_condition_review",
+                    steps=steps,
+                    status="missing",
+                    summary="질문에서 구조화 판단 조건을 인식했지만, 직접 연결된 GraphDB 조항 경로는 확인하지 못했습니다.",
+                    review_actions=["관련 약관 조항 직접 확인"],
+                )
+            )
+
+        if plan.complication_asserted:
+            steps = [
+                GraphPathStep(
+                    source="session",
+                    subject="질문/입력",
+                    relation="ASSERTS",
+                    object="합병증/후유증/부작용",
+                    status="asserted",
+                    notes="질문에서 합병증/후유증/부작용 상황이 주장되었습니다.",
+                ),
+                self._missing_lookup_step(reason),
+            ]
+            paths.append(
+                GraphReviewPath(
+                    path_id="complication_fallback::asserted",
+                    path_type="complication_review",
+                    steps=steps,
+                    status="review_required",
+                    summary="합병증 관련 주장이 있으나 직접 조항 경로가 불명확하여 추가 검토가 필요합니다.",
+                    required_evidence=["진단서", "세부내역서"],
+                    review_actions=["진단서 요청", "세부내역서 요청"],
+                )
+            )
+
+        for code in self._unique_nonempty(plan.diagnosis_codes):
+            paths.append(
+                GraphReviewPath(
+                    path_id=f"diagnosis_fallback::{normalize_code(code)}",
+                    path_type="diagnosis_review",
+                    steps=[
+                        GraphPathStep(
+                            source="session",
+                            subject="질문/입력",
+                            relation="ASSERTS",
+                            object=code,
+                            status="asserted",
+                            notes="Planner가 진단코드로 인식했습니다.",
+                        ),
+                        self._missing_lookup_step(reason),
+                    ],
+                    status="missing",
+                    summary="진단코드를 인식했지만 문서 기반 직접 연결 경로는 확인하지 못했습니다.",
+                    review_actions=["진단코드 직접 근거 확인"],
+                )
+            )
+
+        claim_unit_terms = self._unique_nonempty(plan.claim_unit_terms + plan.one_disease_terms)
+        if plan.disease_grouping_requested or claim_unit_terms:
+            display_terms = claim_unit_terms or ["하나의 질병/상해 판단"]
+            paths.append(
+                GraphReviewPath(
+                    path_id=f"one_disease_fallback::{normalize_name(' '.join(display_terms))[:40]}",
+                    path_type="one_disease_review",
+                    steps=[
+                        GraphPathStep(
+                            source="session",
+                            subject="질문/입력",
+                            relation="ASSERTS",
+                            object=term,
+                            status="asserted",
+                            notes="Planner가 하나의 질병/상해 판단 단서로 인식했습니다.",
+                        )
+                        for term in display_terms
+                    ] + [self._missing_lookup_step(reason)],
+                    status="missing",
+                    summary="하나의 질병/상해 관련 판단 단서를 인식했지만 직접 조항 경로는 확인하지 못했습니다.",
+                    review_actions=["질병/상해 동일성 근거 확인"],
+                )
+            )
+
+        return paths
+
+    def _apply_session_fallback_review_paths(self, result: GraphRetrievalResult, reason: str) -> None:
+        if result.review_paths:
+            return
+        paths = self._build_session_fallback_review_paths(result.plan, reason)
+        if not paths:
+            return
+        result.session_assertions = self._fallback_session_assertions(result.plan)
+        result.review_paths = paths
+        result.required_evidence = sorted({
+            item
+            for path in paths
+            for item in list(path.required_evidence or []) + list(path.required_documents or [])
+        })
+        result.review_actions = sorted({item for path in paths for item in path.review_actions})
+        result.debug["graph_review_fallback"] = reason
+
+    def build_fallback_result(
+        self,
+        question: str,
+        reason: str,
+        *,
+        warning: str | None = None,
+    ) -> GraphRetrievalResult:
+        """Return a renderable planner-only graph result when direct GraphDB lookup fails."""
+
+        result = GraphRetrievalResult(plan=self.planner.plan(question))
+        if warning:
+            result.warnings.append(warning)
+        self._apply_session_fallback_review_paths(result, reason)
+        return result
+
     def _get_evidence_by_id(self, store: GraphStore, evidence_id: str) -> Optional[GraphEvidence]:
         rows = store.query("SELECT * FROM graph_evidence WHERE evidence_id = ?", (evidence_id,))
         if not rows:
@@ -1009,6 +1170,7 @@ class GraphRetriever:
         # fallback 대비: db_path가 없으면 경고만 남기고 리턴
         if not self.db_path.exists():
             result.warnings.append(f"Graph DB file not found at {self.db_path}. Running with empty graph fallback.")
+            self._apply_session_fallback_review_paths(result, "GraphDB 파일이 없어 직접 연결된 조항 경로를 확인하지 못했습니다.")
             return result
 
         try:
@@ -1016,6 +1178,7 @@ class GraphRetriever:
             store = GraphStore(self.db_path, readonly=True)
         except Exception as e:
             result.warnings.append(f"Failed to connect to Graph DB: {e}. Running with empty graph fallback.")
+            self._apply_session_fallback_review_paths(result, "GraphDB 연결 실패로 직접 연결된 조항 경로를 확인하지 못했습니다.")
             return result
 
         try:
@@ -1026,12 +1189,16 @@ class GraphRetriever:
             source_chunk_ids.update(review_chunk_ids)
             result.session_assertions = session_assertions
             result.review_paths = review_paths
+            self._apply_session_fallback_review_paths(
+                result,
+                "GraphDB에서 직접 연결된 조항 경로를 확인하지 못했습니다.",
+            )
             result.required_evidence = sorted({
                 item
-                for path in review_paths
+                for path in result.review_paths
                 for item in list(path.required_evidence or []) + list(path.required_documents or [])
             })
-            result.review_actions = sorted({item for path in review_paths for item in path.review_actions})
+            result.review_actions = sorted({item for path in result.review_paths for item in path.review_actions})
 
             # INTENT 1: surgery_grade_lookup / same_grade_surgery_list
             if plan.procedure_name:

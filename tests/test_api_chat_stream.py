@@ -10,7 +10,7 @@ from src.api.schemas.chat import ChatRequest
 from src.api.schemas.sessions import SessionCreateRequest
 from src.auth.users import User
 from src.graph.query_planner import GraphQueryPlan
-from src.graph.retriever import GraphEvidence, GraphFact, GraphRetrievalResult
+from src.graph.retriever import GraphEvidence, GraphFact, GraphRetrievalResult, GraphRetriever
 
 
 @pytest.fixture
@@ -149,6 +149,22 @@ class FakeGraphPipeline(FakePipeline):
         super().__init__()
         self.graph_enabled = True
         self.graph_retriever = FakeGraphRetriever()
+        self.vector_store = FakeVectorStore()
+
+
+class FailingGraphRetriever(GraphRetriever):
+    def __init__(self):
+        super().__init__("non_existent_db_12345.sqlite")
+
+    def retrieve(self, question):
+        raise RuntimeError("graph lookup boom")
+
+
+class FailingGraphPipeline(FakePipeline):
+    def __init__(self):
+        super().__init__()
+        self.graph_enabled = True
+        self.graph_retriever = FailingGraphRetriever()
         self.vector_store = FakeVectorStore()
 
 
@@ -580,6 +596,33 @@ async def test_prepare_retrieved_context_hides_missing_graph_chunk_warning() -> 
     assert graph_payload["source_chunk_ids"] == ["missing-graph-chunk"]
     assert warnings == []
     assert debug is not None
+
+
+@pytest.mark.anyio
+async def test_prepare_retrieved_context_uses_renderable_graph_fallback_on_graph_exception() -> None:
+    _chunks, _sources, _prompt, graph_payload, warnings, _deterministic_answer, debug = await prepare_retrieved_context(
+        FailingGraphPipeline(),
+        (
+            "이륜자동차를 타다 사고가 났습니다. 원래 이륜자동차를 타지 않는 사람인데, "
+            "보험가입 후 이륜자동차를 타게 된 사실을 보험회사에 통지하지 않았습니다. "
+            "이럴 경우 보상이 되는지 알려주세요."
+        ),
+        8,
+        [],
+    )
+
+    assert warnings == [
+        {
+            "code": "GRAPH_RETRIEVAL_FAILED",
+            "message": "GraphDB 직접 근거 조회 중 오류가 발생해 구조화 검토 경로를 fallback으로 표시합니다.",
+        }
+    ]
+    assert graph_payload is not None
+    assert graph_payload["graph_review_paths"][0]["path_type"] == "claim_condition_review"
+    assert graph_payload["graph_review_paths"][0]["status"] == "missing"
+    assert graph_payload["plan"]["conditions"] == ["이륜자동차 운전/탑승"]
+    assert debug is not None
+    assert debug.graph_result is not None
 
 
 @pytest.mark.anyio
