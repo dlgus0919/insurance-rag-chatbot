@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
+from src.ontology.registry import OntologyRegistry, get_default_ontology_registry
+
 
 @dataclass
 class GraphQueryPlan:
@@ -41,7 +43,8 @@ class GraphQueryPlan:
 
 
 class GraphQueryPlanner:
-    def __init__(self) -> None:
+    def __init__(self, ontology_registry: OntologyRegistry | None = None) -> None:
+        self.ontology_registry = ontology_registry or get_default_ontology_registry()
         # 등급 시스템 정규식 (예: 신1-5종, 1-5종, 1-3종)
         self.grade_system_rx = re.compile(r"(신\s*1[-~]5종|1[-~]5종|1[-~]3종)")
         # 등급 값 정규식 (예: 4종, 5종 등)
@@ -53,61 +56,14 @@ class GraphQueryPlanner:
         # 약관/상품 키워드
         self.products = ["SOL", "처음건강보험", "이지로운", "실손의료보험", "운전자보험", "자사_SOL건강"]
         self.appendices = ["별표7", "별표15", "별표"]
-        self.coverage_topics = [
-            "실손", "특약", "도수치료", "체외충격파치료", "증식치료", "비급여 주사료",
-            "MRI", "MRA", "자기공명영상진단", "상급병실료 차액", "건강보험 미적용",
-            "3대비급여", "합병증 치료", "미용 목적", "자동차보험", "산재보험", "건강검진",
-        ]
-        self.conditions = [
-            "미용 목적", "치료 목적", "예방 목적", "건강보험 미적용", "상급병실료 차액",
-            "후유증", "부작용", "합병증", "염증", "타 보험 보상", "증빙 부족",
-            "특약 가입 여부 확인",
-        ]
-        self.evidence_tags = ["영수증", "세부내역서", "진단서", "수술확인서", "판독결과지", "검사결과지"]
-        self.term_aliases = {
-            "실손": ("실손", "실비", "실손보험", "실손의료보험"),
-            "도수치료": ("도수치료", "도수"),
-            "체외충격파치료": ("체외충격파치료", "체외충격파"),
-            "증식치료": ("증식치료",),
-            "비급여 주사료": ("비급여 주사료", "비급여 주사", "주사료", "영양제", "영양주사"),
-            "자기공명영상진단": ("자기공명영상진단", "자기공명영상"),
-            "상급병실료 차액": ("상급병실료 차액", "상급병실", "병실료 차액"),
-            "건강보험 미적용": ("건강보험 미적용", "건보 미적용", "급여 미적용"),
-            "3대비급여": ("3대비급여", "3대 비급여", "세대비급여"),
-            "미용 목적": ("미용 목적", "미용", "성형 목적"),
-            "자동차보험": ("자동차보험", "자동차 보험", "교통사고", "차 사고"),
-            "산재보험": ("산재보험", "산재", "산업재해"),
-            "건강검진": ("건강검진", "검진 목적", "단순 건강검진"),
-        }
-        self.condition_aliases = {
-            "미용 목적": ("미용 목적", "미용", "성형 목적"),
-            "치료 목적": ("치료 목적", "치료목적"),
-            "예방 목적": ("예방 목적", "예방목적", "검진 목적", "건강검진", "이상 소견 없이"),
-            "건강보험 미적용": ("건강보험 미적용", "건보 미적용", "급여 미적용"),
-            "상급병실료 차액": ("상급병실료 차액", "상급병실", "병실료 차액"),
-            "타 보험 보상": ("자동차보험", "산재보험", "이미 보상", "타 보험"),
-            "증빙 부족": ("서류 없이", "세부내역서 없이", "영수증만", "증빙 부족"),
-            "특약 가입 여부 확인": ("특약 가입 여부", "특약 가입", "특약이 있는지"),
-        }
-        self.term_candidate_aliases = {
-            "MRI": ("엠알아이", "엠알 아이"),
-            "MRA": ("엠알에이", "엠알 에이"),
-            "자기공명영상진단": ("자기공명", "자기 공명"),
-            "도수치료 또는 체외충격파치료": ("도수/충격파", "도수 충격파", "도수랑 충격파"),
-            "체외충격파치료": ("체충파", "체외충격", "충격파치료"),
-            "상급병실료 차액": ("병실차액", "상급병실차액", "상급 병실 차액"),
-            "건강보험 미적용": ("건보 안됨", "건보 제외", "건강보험 안됨"),
-            "특약 가입 여부 확인": ("특약 확인", "특약 여부", "가입특약"),
-        }
+        self.coverage_topics = self.ontology_registry.coverage_topics
+        self.conditions = self.ontology_registry.conditions
+        self.evidence_tags = self.ontology_registry.evidence_tags
+        self.term_aliases = self.ontology_registry.term_aliases
+        self.condition_aliases = self.ontology_registry.condition_aliases
+        self.term_candidate_aliases = self.ontology_registry.term_candidate_aliases
         self.facility_types = ["상급종합병원", "종합병원", "병원", "의원", "약국"]
-        self.claim_unit_aliases = {
-            "하나의 질병": ("하나의 질병", "같은 질병", "동일 질병", "동일한 질병"),
-            "하나의 상해": ("하나의 상해", "같은 상해", "동일 상해", "동일한 상해"),
-            "하나의 통원": ("하나의 통원", "통원 1회", "하루에 같은 치료"),
-            "하나의 입원": ("하나의 입원", "1회 입원", "계속 입원"),
-            "하나의 질병수술": ("하나의 질병수술", "질병수술비 한 번", "질병수술비만"),
-            "하나의 후유장해 지급한도": ("후유장해보험금 한도", "후유장해보험가입금액을 한도"),
-        }
+        self.claim_unit_aliases = self.ontology_registry.claim_unit_aliases
         # 별표 조항/항목 번호 정규식
         self.appendix_number_rx = re.compile(r"(?<!별표\s)(?<!별표)(\d{1,3})\s*(?:번\s*)?(?:항목|조항|항)\b|(\d{1,3})\s*번\b")
         self.diagnosis_code_rx = re.compile(r"\b([A-Z][0-9]{2}(?:\.[0-9]+)?)\b")

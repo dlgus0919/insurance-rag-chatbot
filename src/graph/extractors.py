@@ -9,6 +9,7 @@ import pandas as pd
 
 from src.graph.schema import Node, Edge, Evidence, Alias, NodeType, EdgeType
 from src.graph.normalizer import normalize_name, normalize_code
+from src.ontology.registry import get_default_ontology_registry
 
 
 POLICY_REVIEW_SOURCE_PRIORITY = {
@@ -1123,6 +1124,7 @@ class PolicyReviewExtractor:
         self.store.commit()
 
     def _seed_canonical_nodes(self) -> None:
+        self._seed_ontology_registry_nodes()
         self._seed_nodes(NodeType.ComplicationConcept, COMPLICATION_CONCEPTS.keys(), "comp")
         self._seed_nodes(NodeType.ClaimCondition, CLAIM_CONDITIONS.keys(), "cond")
         self._seed_nodes(NodeType.DecisionConcept, DECISION_CONCEPTS.keys(), "decision")
@@ -1142,6 +1144,41 @@ class PolicyReviewExtractor:
         self._seed_rule_nodes(NodeType.DiseaseGroupingRule, DISEASE_GROUPING_RULES, "disease_grouping_rule")
         self._seed_nodes(NodeType.DiseaseRelationCriterion, DISEASE_RELATION_CRITERIA.keys(), "disease_relation_criterion")
         self._seed_nodes(NodeType.TreatmentEpisodeContext, TREATMENT_EPISODE_CONTEXTS.keys(), "treatment_episode_context")
+
+    def _seed_ontology_registry_nodes(self) -> None:
+        registry = get_default_ontology_registry()
+        for concept in registry.concepts_for_graph_seed():
+            try:
+                node_type = NodeType(concept.node_type)
+            except ValueError:
+                continue
+            properties = dict(concept.properties)
+            properties.setdefault("concept_id", concept.concept_id)
+            properties.setdefault("ontology_manifest_version", registry.version)
+            self.store.upsert_node(
+                Node(
+                    node_id=concept.node_id,
+                    node_type=node_type,
+                    canonical_name=concept.canonical_name,
+                    normalized_name=normalize_name(concept.canonical_name),
+                    properties=properties,
+                    created_by="ontology_registry",
+                )
+            )
+            aliases = list(dict.fromkeys((*concept.aliases, concept.canonical_name)))
+            for alias in aliases:
+                normalized_alias = normalize_name(alias)
+                if not normalized_alias:
+                    continue
+                self.store.add_alias(
+                    Alias(
+                        alias_id=f"alias_{concept.node_id}_{normalized_alias}",
+                        node_id=concept.node_id,
+                        alias=alias,
+                        normalized_alias=normalized_alias,
+                        source="ontology_registry",
+                    )
+                )
 
     def _seed_nodes(self, node_type: NodeType, names: Any, prefix: str) -> None:
         for name in names:

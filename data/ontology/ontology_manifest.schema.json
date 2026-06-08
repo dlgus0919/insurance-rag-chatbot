@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://insurance-rag.local/schemas/ontology_manifest.schema.json",
+  "title": "Insurance RAG Ontology Manifest",
+  "type": "object",
+  "required": ["schema_version", "version", "concepts"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"type": "string"},
+    "version": {"type": "string"},
+    "description": {"type": "string"},
+    "concepts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/concept"}
+    }
+  },
+  "$defs": {
+    "stringList": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "concept": {
+      "type": "object",
+      "required": ["concept_id", "canonical_name"],
+      "additionalProperties": false,
+      "properties": {
+        "concept_id": {"type": "string"},
+        "canonical_name": {"type": "string"},
+        "node_type": {"type": "string"},
+        "aliases": {"$ref": "#/$defs/stringList"},
+        "candidate_aliases": {"$ref": "#/$defs/stringList"},
+        "evidence_tags": {"$ref": "#/$defs/stringList"},
+        "planner": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "coverage_topics": {"$ref": "#/$defs/stringList"},
+            "conditions": {"$ref": "#/$defs/stringList"},
+            "intents": {"$ref": "#/$defs/stringList"},
+            "claim_unit_terms": {"$ref": "#/$defs/stringList"}
+          }
+        },
+        "retrieval": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "expansion_rules": {
+              "type": "array",
+              "items": {"$ref": "#/$defs/expansionRule"}
+            }
+          }
+        },
+        "properties": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "expansionRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "match_any": {"$ref": "#/$defs/stringList"},
+        "context_any": {"$ref": "#/$defs/stringList"},
+        "normalized_contains_any": {"$ref": "#/$defs/stringList"},
+        "expansion_terms": {"$ref": "#/$defs/stringList"}
+      }
+    }
+  }
+}

@@ -11,6 +11,7 @@ from typing import Any
 
 from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
+from src.ontology.registry import get_default_ontology_registry
 from src.parser.chunker import Chunk
 from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context, detect_retrieval_conflicts
 from src.rag.search_intent import SearchIntentPlan, classify_search_intent, extract_code_terms
@@ -291,33 +292,7 @@ def _extract_query_codes(question: str) -> list[str]:
 
 def _expand_retrieval_query(question: str) -> str:
     """검색 안정성을 위해 명세 범위의 동의어를 보강한다."""
-
-    normalized = question.replace(" ", "")
-
-    if any(keyword in question for keyword in ["교통사고", "자동차사고", "차량사고", "차 사고"]):
-        return (
-            f"{question} "
-            "상해급여 상해비급여 보장개시일 자동차보험 산재보험 "
-            "본인부담의료비 보험금을 지급하지 않는 사유"
-        )
-
-    if any(keyword in question for keyword in ["이륜자동차", "오토바이", "원동기", "스쿠터"]):
-        return (
-            f"{question} "
-            "이륜자동차 부담보 특별약관 보험금을 지급하지 않는 사유 "
-            "상해 탑승 운전 알릴 의무 통지"
-        )
-
-    if any(keyword in question for keyword in ["음주", "만취", "술"]) and any(
-        keyword in question for keyword in ["사고", "상해", "다쳤", "부상"]
-    ):
-        return f"{question} 보험금을 지급하지 않는 사유 면책 고의 중대한 과실 상해"
-
-    asks_items = any(keyword in question for keyword in ["항목", "무엇", "해당"])
-    if "3대비급여" in normalized and asks_items:
-        terms = "도수치료 체외충격파치료 증식치료 주사료 자기공명영상진단 MRI MRA 용어 정의"
-        return f"{question} {terms}"
-    return question
+    return get_default_ontology_registry().expand_retrieval_query(question)
 
 
 def _extract_named_code_terms(question: str) -> list[str]:
@@ -649,32 +624,7 @@ def _exclude_irrelevant_travel_insurance(hits: list[Hit], question: str) -> list
 
 def _expand_retrieval_query(question: str) -> str:
     """검색 성능 향상을 위해 질의를 확장한다."""
-    normalized = question.replace(" ", "")
-
-    if any(keyword in question for keyword in ["교통사고", "자동차사고", "차량사고", "차 사고"]):
-        return (
-            f"{question} "
-            "상해급여 상해비급여 보장개시일 자동차보험 산재보험 "
-            "본인부담의료비 보험금을 지급하지 않는 사유"
-        )
-
-    if any(keyword in question for keyword in ["이륜자동차", "오토바이", "원동기", "스쿠터"]):
-        return (
-            f"{question} "
-            "이륜자동차 부담보 특별약관 보험금을 지급하지 않는 사유 "
-            "상해 탑승 운전 알릴 의무 통지"
-        )
-
-    if any(keyword in question for keyword in ["음주", "만취", "술"]) and any(
-        keyword in question for keyword in ["사고", "상해", "다쳤", "부상"]
-    ):
-        return f"{question} 보험금을 지급하지 않는 사유 면책 고의 중대한 과실 상해"
-
-    asks_items = any(keyword in question for keyword in ["항목", "무엇", "해당"])
-    if "3대비급여" in normalized and asks_items:
-        terms = "도수치료 체외충격파치료 증식치료 주사료 자기공명영상진단 MRI MRA 용어 정의"
-        return f"{question} {terms}"
-    return question
+    return get_default_ontology_registry().expand_retrieval_query(question)
 
 
 def _is_low_value_wide_range_filter(hit: Hit) -> bool:
