@@ -15,9 +15,12 @@ class ClaimItemRequest(BaseModel):
     line_id: str | None = None
     input_name: str = Field(..., min_length=1)
     input_code: str = ""
-    claimed_amount: str = Field(..., min_length=1)
+    claimed_amount: str = ""
+    insured_copay_amount: str = ""
+    nonpay_amount: str = ""
     quantity: str = "1"
     user_category_hint: str = ""
+    extra_info: str = ""
 
 
 class ClaimCaseContextRequest(BaseModel):

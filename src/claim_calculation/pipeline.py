@@ -63,6 +63,129 @@ def _is_exclusion_match(match: StandardMatch | None) -> bool:
     return "면책" in opinion or "보상제외" in opinion or opinion in {"제외", "미보상"}
 
 
+def _standard_match_text(match: StandardMatch | None) -> str:
+    if match is None:
+        return ""
+    return " ".join(
+        [
+            match.std_cd or "",
+            match.std_cd_nm or "",
+            match.mid_category_cd_nm or "",
+            match.hira_care_type_cd_nm or "",
+            match.ins_care_type_cd_nm or "",
+            match.medical_class_cd_nm or "",
+            match.item_class_level1cd_nm or "",
+            match.item_class_level2cd_nm or "",
+            match.pay_opn_cd_nm or "",
+            match.notes or "",
+        ]
+    )
+
+
+def _is_nonpay_scope_restriction(match: StandardMatch | None) -> bool:
+    """비급여표준모델 의견이 급여외/비급여 산정 제한으로 읽히는지 판정한다."""
+
+    text = _standard_match_text(match)
+    compact = "".join(text.split())
+    return (
+        ("급여외" in compact and "산정불가" in compact)
+        or ("비급여" in compact and "산정불가" in compact)
+        or ("비급여" in compact and _is_exclusion_match(match))
+    )
+
+
+def _has_split_amounts(item: ClaimItemInput) -> bool:
+    return bool(str(item.insured_copay_amount or "").strip() or str(item.nonpay_amount or "").strip())
+
+
+def _line_amount_parts(item: ClaimItemInput) -> tuple[Decimal, Decimal, Decimal, bool]:
+    """청구 라인을 급여 본인부담/비급여 금액으로 분해한다.
+
+    새 영수증형 입력이 없으면 기존 claimed_amount 단일 금액 흐름을 유지한다.
+    """
+
+    from src.claim_calculation.models import parse_money, parse_money_or_zero, parse_quantity
+
+    quantity = parse_quantity(item.quantity)
+    split_mode = _has_split_amounts(item)
+    if not split_mode:
+        unit_amount = parse_money(item.claimed_amount)
+        amount = unit_amount * quantity
+        return Decimal("0"), Decimal("0"), amount, False
+
+    insured_copay = parse_money_or_zero(item.insured_copay_amount) * quantity
+    nonpay = parse_money_or_zero(item.nonpay_amount) * quantity
+    total = insured_copay + nonpay
+    if total <= 0:
+        raise ValueError("급여 본인부담금 또는 비급여 금액 중 하나는 0원보다 커야 합니다.")
+    return insured_copay, nonpay, total, True
+
+
+def _format_decimal_won(value: Decimal) -> str:
+    return f"{value:,.0f}".replace(",", "")
+
+
+def _nonpay_category_for_split_line(item: ClaimItemInput, match: StandardMatch | None) -> str:
+    category = _classify_claim_category(item, match)
+    if category in {"급여", "미분류"}:
+        return "비급여"
+    return category
+
+
+def _is_unresolved_nonpay(category: str, match: StandardMatch | None) -> bool:
+    """보장 유형이 확정되지 않은 비급여인지 판정한다.
+
+    4/5세대 모두 비급여라는 넓은 범주만으로는 자동 산정 근거가 부족하다.
+    다만 표준모델 행이 있고 보상의견이 명확한 경우에는 기존 계산 흐름을 유지한다.
+    """
+
+    if category != "비급여":
+        return False
+    if match and not match.requires_review and (match.pay_opn_cd_nm or match.ins_care_type_cd_nm):
+        return False
+    return True
+
+
+def _unresolved_nonpay_human_task_reason() -> str:
+    return "미분류 비급여는 보장/면책/특약 여부가 확정되지 않아 자동 지급 계산에서 제외하고 Human Task로 분류했습니다."
+
+
+def _is_human_task_line(line_reasons: list[str]) -> bool:
+    return any("Human Task" in reason for reason in line_reasons)
+
+
+def _line_calculation_status(
+    has_human_task: bool,
+    insured_copay_amount: Decimal,
+    payable: Decimal,
+    deductible: Decimal,
+) -> str:
+    if not has_human_task:
+        return "calculated"
+    if insured_copay_amount > 0 or payable > 0 or deductible > 0:
+        return "partial_human_task"
+    return "human_task"
+
+
+def _match_basis_summary(match: StandardMatch | None) -> str:
+    if match is None:
+        return ""
+    parts = []
+    if match.hira_care_type_cd_nm:
+        parts.append(f"HIRA구분: {match.hira_care_type_cd_nm}")
+    if match.ins_care_type_cd_nm:
+        parts.append(f"보험구분: {match.ins_care_type_cd_nm}")
+    if match.medical_class_cd_nm:
+        parts.append(f"의료분류: {match.medical_class_cd_nm}")
+    if match.item_class_level1cd_nm:
+        parts.append(f"항목1: {match.item_class_level1cd_nm}")
+    if match.item_class_level2cd_nm:
+        parts.append(f"항목2: {match.item_class_level2cd_nm}")
+    if match.pay_opn_cd_nm:
+        parts.append(f"보상의견: {match.pay_opn_cd_nm}")
+    return " | ".join(parts)
+
+
 def _is_evidence_requirement_satisfied(requirement: str, provided_tags: list[str]) -> bool:
     normalized_requirement = "".join((requirement or "").split())
     if not normalized_requirement:
@@ -148,6 +271,35 @@ def _prescription_deductible(
     return deductible, rx_rule.description, review_reasons
 
 
+def _apply_standard_deductible(
+    amount: Decimal,
+    category: str,
+    generation: str,
+    context: ClaimCaseContext,
+) -> tuple[Decimal, Decimal, str, list[str]]:
+    """세대/입원통원/의료기관 기준 공제와 건당 한도를 적용한다."""
+
+    deductible, rule, review_reasons = _line_deductible(
+        amount,
+        category,
+        generation,
+        context.visit_type,
+        context.facility_grade,
+    )
+    payable = amount - deductible
+
+    from src.claim_calculation.deductible_rules import lookup_rule as _lookup_rule
+
+    rule_entry = _lookup_rule(generation, category, context.visit_type, context.facility_grade)
+    if rule_entry.per_visit_limit and payable > rule_entry.per_visit_limit:
+        excess = payable - rule_entry.per_visit_limit
+        payable = rule_entry.per_visit_limit
+        deductible = amount - payable
+        review_reasons.append(f"건당 한도 {rule_entry.per_visit_limit:,.0f}원 초과분 {excess:,.0f}원은 자기부담입니다.")
+
+    return payable, deductible, rule, review_reasons
+
+
 def _is_health_insurance_unapplied(context: ClaimCaseContext) -> bool:
     text = " ".join([context.coverage_topic or "", context.situation_note or ""])
     return any(keyword in text for keyword in ["요양급여 미적용", "건강보험 미적용", "건강보험 적용받지 못", "급여 적용받지 못"])
@@ -175,7 +327,7 @@ def _calculate_line_items(
     context: ClaimCaseContext,
     standard_matches: list[StandardMatch],
 ) -> tuple[Decimal, Decimal, list[dict[str, str | bool | list[str]]], list[str]]:
-    from src.claim_calculation.models import parse_money, parse_quantity
+    from src.claim_calculation.models import parse_quantity
 
     generation = _normalize_policy_generation(context.policy_generation)
     total_payable = Decimal("0")
@@ -184,9 +336,9 @@ def _calculate_line_items(
     review_reasons: list[str] = []
 
     for idx, item in enumerate(items):
-        unit_amount = parse_money(item.claimed_amount)
         quantity = parse_quantity(item.quantity)
-        amount = unit_amount * quantity
+        insured_copay_amount, nonpay_amount, amount, split_mode = _line_amount_parts(item)
+        unit_amount = amount / quantity
         match = standard_matches[idx] if idx < len(standard_matches) else None
         category = _classify_claim_category(item, match)
         line_review = False
@@ -203,6 +355,67 @@ def _calculate_line_items(
             rule = "표준모델 후보 모호성으로 계산 보류"
             line_review = True
             line_reasons.append("동일 항목명에 복수 표준모델 후보가 있어 임의 후보로 보험금을 산출하지 않았습니다. 정확한 수가/표준코드를 입력해야 합니다.")
+        elif split_mode:
+            payable = Decimal("0")
+            deductible = Decimal("0")
+            rule_parts: list[str] = []
+            category_parts: list[str] = []
+
+            if insured_copay_amount > 0:
+                insured_payable, insured_deductible, insured_rule, insured_review = _apply_standard_deductible(
+                    insured_copay_amount,
+                    "급여",
+                    generation,
+                    context,
+                )
+                payable += insured_payable
+                deductible += insured_deductible
+                category_parts.append("급여")
+                rule_parts.append(f"급여 본인부담금: {insured_rule}")
+                line_reasons.extend(insured_review)
+                if insured_review:
+                    line_review = True
+
+            if nonpay_amount > 0:
+                nonpay_category = _nonpay_category_for_split_line(item, match)
+                category_parts.append(nonpay_category)
+                if _is_nonpay_scope_restriction(match):
+                    nonpay_deductible = nonpay_amount
+                    deductible += nonpay_deductible
+                    opinion = match.pay_opn_cd_nm if match else "산정불가"
+                    code = f"코드 {match.std_cd} " if match and match.std_cd else ""
+                    rule_parts.append(f"비급여 금액: 비급여 표준모델 {code}보상의견 '{opinion}'에 따라 지급예상액 0원")
+                    line_review = True
+                    line_reasons.append(
+                        "비급여표준모델의 급여외/비급여 산정 제한 의견을 비급여 금액에 적용했습니다. 급여 본인부담금은 별도 급여 실손 규칙으로 계산했습니다."
+                    )
+                elif _is_unresolved_nonpay(nonpay_category, match):
+                    rule_parts.append("비급여 금액: 미분류 비급여 Human Task 분류로 자동 산정 제외")
+                    line_review = True
+                    line_reasons.append(_unresolved_nonpay_human_task_reason())
+                else:
+                    nonpay_payable, nonpay_deductible, nonpay_rule, nonpay_review = _apply_standard_deductible(
+                        nonpay_amount,
+                        nonpay_category,
+                        generation,
+                        context,
+                    )
+                    payable += nonpay_payable
+                    deductible += nonpay_deductible
+                    rule_parts.append(f"비급여 금액: {nonpay_rule}")
+                    line_reasons.extend(nonpay_review)
+                    if nonpay_review:
+                        line_review = True
+
+            if not category_parts:
+                category_parts.append("미분류")
+            category = "+".join(dict.fromkeys(category_parts))
+            table_basis = _match_basis_summary(match)
+            rule = "; ".join(rule_parts) if rule_parts else "급여/비급여 분리 입력 계산"
+            if table_basis:
+                rule = f"{rule}; 표준모델 행 정보({table_basis})"
+            if nonpay_amount > 0 and _is_human_task_line(line_reasons):
+                category = category.replace("비급여", "미분류 비급여")
         elif _is_exclusion_match(match):
             deductible = amount
             payable = Decimal("0")
@@ -241,6 +454,38 @@ def _calculate_line_items(
             rule = rx_rule.description
             category = "처방약"
         else:
+            if _is_unresolved_nonpay(category, match):
+                deductible = Decimal("0")
+                payable = Decimal("0")
+                rule = "미분류 비급여 Human Task 분류로 자동 산정 제외"
+                category = "미분류 비급여"
+                line_review = True
+                line_reasons.append(_unresolved_nonpay_human_task_reason())
+                total_payable += payable
+                total_deductible += deductible
+                review_reasons.extend(line_reasons)
+                line_results.append(
+                    {
+                        "line_id": item.line_id,
+                        "input_name": item.input_name,
+                        "input_code": item.input_code,
+                        "category": category,
+                        "claimed_amount": _format_decimal_won(amount),
+                        "insured_copay_amount": _format_decimal_won(insured_copay_amount),
+                        "nonpay_amount": _format_decimal_won(nonpay_amount),
+                        "deductible": _format_decimal_won(deductible),
+                        "payable_amount": _format_decimal_won(payable),
+                        "policy_generation": generation,
+                        "rule_summary": rule,
+                        "extra_info": item.extra_info,
+                        "requires_review": line_review,
+                        "review_reasons": line_reasons,
+                        "calculation_status": "human_task",
+                        "excluded_from_calculation": True,
+                        "human_task_amount": _format_decimal_won(amount),
+                    }
+                )
+                continue
             deductible, rule, category_review = _line_deductible(amount, category, generation, context.visit_type, context.facility_grade)
             payable = amount - deductible
             line_reasons.extend(category_review)
@@ -264,6 +509,15 @@ def _calculate_line_items(
                 line_review = True
                 line_reasons.append("건강보험 또는 의료급여를 적용받지 못한 건은 약관상 40% 특례 계산 대상이므로 적용 사유 확인이 필요합니다.")
 
+        has_human_task = _is_human_task_line(line_reasons)
+        calculation_status = _line_calculation_status(
+            has_human_task,
+            insured_copay_amount,
+            payable,
+            deductible,
+        )
+        human_task_amount = nonpay_amount if has_human_task and nonpay_amount > 0 else (amount if calculation_status == "human_task" else Decimal("0"))
+
         total_payable += payable
         total_deductible += deductible
         review_reasons.extend(line_reasons)
@@ -273,13 +527,19 @@ def _calculate_line_items(
                 "input_name": item.input_name,
                 "input_code": item.input_code,
                 "category": category,
-                "claimed_amount": f"{amount:,.0f}".replace(",", ""),
-                "deductible": f"{deductible:,.0f}".replace(",", ""),
-                "payable_amount": f"{payable:,.0f}".replace(",", ""),
+                "claimed_amount": _format_decimal_won(amount),
+                "insured_copay_amount": _format_decimal_won(insured_copay_amount),
+                "nonpay_amount": _format_decimal_won(nonpay_amount),
+                "deductible": _format_decimal_won(deductible),
+                "payable_amount": _format_decimal_won(payable),
                 "policy_generation": generation,
                 "rule_summary": rule,
+                "extra_info": item.extra_info,
                 "requires_review": line_review,
                 "review_reasons": line_reasons,
+                "calculation_status": calculation_status,
+                "excluded_from_calculation": calculation_status == "human_task",
+                "human_task_amount": _format_decimal_won(human_task_amount),
             }
         )
 
@@ -347,8 +607,6 @@ def run_claim_calculation(
     db_review_required = False
     db_review_reasons = []
 
-    from src.claim_calculation.models import parse_money, parse_quantity
-
     for item in items:
         matches = match_standard_code(item.input_name, item.input_code)
         if not matches:
@@ -401,9 +659,8 @@ def run_claim_calculation(
     total_claimed = Decimal("0")
     for item in items:
         try:
-            qty = parse_quantity(item.quantity)
-            claimed_unit = parse_money(item.claimed_amount)
-            total_claimed += claimed_unit * qty
+            _, _, line_total, _ = _line_amount_parts(item)
+            total_claimed += line_total
         except Exception as exc:
             # 파싱 에러 발생 시 외부로 버블링시켜 UI에서 방어할 수 있도록 함
             raise exc
@@ -501,8 +758,17 @@ def run_claim_calculation(
     deterministic_line_results: list[dict[str, str | bool | list[str]]] = []
     deterministic_review_reasons: list[str] = []
     enforce_baseline = _should_trust_deterministic_baseline(standard_matches, disambiguation_required)
-    has_exclusion = _has_exclusion_match(standard_matches)
-    use_deterministic_calculation = use_fake_planner or has_exclusion
+    has_exclusion = any(
+        _is_exclusion_match(match) and (idx >= len(items) or not _has_split_amounts(items[idx]))
+        for idx, match in enumerate(standard_matches)
+    )
+    has_split_scope_restriction = any(
+        idx < len(items)
+        and _has_split_amounts(items[idx])
+        and (_is_exclusion_match(match) or _is_nonpay_scope_restriction(match))
+        for idx, match in enumerate(standard_matches)
+    )
+    use_deterministic_calculation = use_fake_planner or has_exclusion or has_split_scope_restriction
 
     if use_deterministic_calculation:
         payable_val = baseline_payable_val
@@ -750,9 +1016,11 @@ def run_claim_calculation(
     # DB 매치 근거 추가
     for idx, match in enumerate(standard_matches):
         if match.std_cd:
+            table_basis = _match_basis_summary(match)
+            extra = f" | {table_basis}" if table_basis else ""
             applied_basis.append({
                 "source": f"비급여 표준모델 (코드: {match.std_cd})",
-                "content": f"표준명: {match.std_cd_nm} | 분류: {repr(match.mid_category_cd_nm)} | 보상의견: {match.pay_opn_cd_nm or '없음'}"
+                "content": f"표준명: {match.std_cd_nm} | 분류: {repr(match.mid_category_cd_nm)} | 보상의견: {match.pay_opn_cd_nm or '없음'}{extra}"
             })
     # RAG 문서 근거 추가
     for ev in retrieved_evidences:

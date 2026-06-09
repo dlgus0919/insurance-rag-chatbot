@@ -184,11 +184,15 @@
             </div>
             <div class="p-field">
               <label class="p-label">수가/표준 코드 <span style="color:var(--gray);font-weight:400;">(옵션)</span></label>
-              <input class="p-input claim-item-code" type="text" placeholder="예: MX122 / 51040"/>
+              <input class="p-input claim-item-code" type="text" placeholder="예: L1213 / MX122"/>
             </div>
             <div class="p-field">
-              <label class="p-label">청구금액</label>
-              <input class="p-input claim-amount" type="text" placeholder="예: 150000"/>
+              <label class="p-label">급여 본인부담금</label>
+              <input class="p-input claim-insured-copay-amount" type="text" placeholder="예: 23434"/>
+            </div>
+            <div class="p-field">
+              <label class="p-label">비급여 금액</label>
+              <input class="p-input claim-nonpay-amount" type="text" placeholder="예: 0"/>
             </div>
             <div class="p-field">
               <label class="p-label">횟수/수량</label>
@@ -204,6 +208,10 @@
                 <option value="중증비급여">5세대 중증 비급여</option>
                 <option value="비중증비급여">5세대 비중증 비급여</option>
               </select>
+            </div>
+            <div class="p-field claim-extra-info-field">
+              <label class="p-label">기타 추가 정보</label>
+              <input class="p-input claim-extra-info" type="text" placeholder="예: 입원 중 수술 마취"/>
             </div>
             <button class="btn-sm claim-remove-line" type="button" data-action="remove-claim-line" aria-label="청구 항목 삭제">삭제</button>
           </div>

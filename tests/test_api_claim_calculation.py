@@ -113,6 +113,48 @@ async def test_claim_calculation_route_accepts_generation_and_multiple_items(mon
 
 
 @pytest.mark.anyio
+async def test_claim_calculation_route_accepts_split_receipt_amounts(monkeypatch) -> None:
+    monkeypatch.setattr("src.api.routes.claim.get_rag_pipeline", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "src.db.standard_codes.lookup_by_std_cd",
+        lambda *_args, **_kwargs: {
+            "std_cd": "L1213",
+            "std_cd_nm": "척추마취관리기본[1시간기준]",
+            "mid_category_cd_nm": "마취료",
+            "hira_care_type_cd_nm": "급여",
+            "ins_care_type_cd_nm": "급여",
+            "pay_opn_cd_nm": "급여외 산정불가",
+        },
+    )
+
+    response = await claim.calculate_claim(
+        ClaimCalculationRequest(
+            items=[
+                ClaimItemRequest(
+                    input_name="마취료",
+                    input_code="L1213",
+                    insured_copay_amount="23434",
+                    nonpay_amount="0",
+                    quantity="1",
+                    user_category_hint="급여",
+                    extra_info="입원 중 수술 마취",
+                )
+            ],
+            context={"policy_generation": "5th", "visit_type": "hospitalization", "coverage_topic": "실손"},
+        ),
+        request=None,
+        user=_employee(),
+        db=None,
+    )
+
+    assert response.claimed_amount == "23434"
+    assert response.payable_amount == "18747"
+    assert response.deductible == "4687"
+    assert response.line_results[0]["insured_copay_amount"] == "23434"
+    assert "급여외 산정불가" in response.applied_basis[0]["content"]
+
+
+@pytest.mark.anyio
 async def test_claim_calculation_route_uses_fixed_rag_top_k(monkeypatch) -> None:
     captured: dict[str, object] = {}
 

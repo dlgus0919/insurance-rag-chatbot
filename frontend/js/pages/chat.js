@@ -550,7 +550,11 @@ async function sendClaim(options = {}) {
   const note = document.getElementById('claim-note')?.value.trim() || '';
   const policyGeneration = document.querySelector('input[name="claim-policy-generation"]:checked')?.value || '4th';
 
-  const itemSummary = items.map((item) => `${item.input_name} ${item.claimed_amount}원 x ${item.quantity}`).join(', ');
+  const itemSummary = items.map((item) => {
+    const insured = item.insured_copay_amount || '0';
+    const nonpay = item.nonpay_amount || '0';
+    return `${item.input_name} 급여본인부담 ${insured}원 / 비급여 ${nonpay}원 x ${item.quantity}`;
+  }).join(', ');
   if (!suppressUserMessage) {
     appendMsg('user', `[보험금 계산/${policyGeneration === '5th' ? '5세대' : '4세대'}] ${itemSummary}`);
   }
@@ -573,18 +577,38 @@ function collectClaimItems() {
   return [...document.querySelectorAll('[data-claim-line]')]
     .map((row, index) => {
       const inputName = row.querySelector('.claim-item-name')?.value.trim() || '';
-      const claimedAmount = row.querySelector('.claim-amount')?.value.trim() || '';
-      if (!inputName || !claimedAmount) return null;
+      const legacyClaimedAmount = row.querySelector('.claim-amount')?.value.trim() || '';
+      const insuredCopayAmount = row.querySelector('.claim-insured-copay-amount')?.value.trim() || '';
+      const nonpayAmount = row.querySelector('.claim-nonpay-amount')?.value.trim() || '';
+      const totalAmount = sumMoneyInputs(insuredCopayAmount, nonpayAmount) || legacyClaimedAmount;
+      if (!inputName || !totalAmount) return null;
       return {
         line_id: `line-${index + 1}`,
         input_name: inputName,
         input_code: row.querySelector('.claim-item-code')?.value.trim() || '',
-        claimed_amount: claimedAmount,
+        claimed_amount: totalAmount,
+        insured_copay_amount: insuredCopayAmount,
+        nonpay_amount: nonpayAmount,
         quantity: row.querySelector('.claim-quantity')?.value.trim() || '1',
         user_category_hint: row.querySelector('.claim-category-hint')?.value || '',
+        extra_info: row.querySelector('.claim-extra-info')?.value.trim() || '',
       };
     })
     .filter(Boolean);
+}
+
+function sumMoneyInputs(...values) {
+  let hasValue = false;
+  let total = 0;
+  for (const raw of values) {
+    const text = String(raw || '').replace(/[,\s원]/g, '');
+    if (!text) continue;
+    const numeric = Number(text);
+    if (!Number.isFinite(numeric)) return raw;
+    hasValue = true;
+    total += numeric;
+  }
+  return hasValue ? String(total) : '';
 }
 
 function resetClaimForm() {
@@ -825,8 +849,31 @@ function renderClaimResultHtml(result) {
         return `<li><strong>${escapeHTML(basisItem.source || '근거')}</strong>${extra}: ${escapeHTML(truncateUiText(basisItem.content || '', 180))}</li>`;
       }).join('')}</ul></div>`
     : '';
-  const lineResults = result.line_results?.length
-    ? `<div class="claim-section"><div class="evidence-title">항목별 계산</div><ul>${result.line_results.map((line) => `<li><strong>${escapeHTML(line.input_name || '')}</strong> (${escapeHTML(line.category || '미분류')}): 청구 ${formatMoney(line.claimed_amount)}원 / 공제 ${formatMoney(line.deductible)}원 / 지급 ${formatMoney(line.payable_amount)}원</li>`).join('')}</ul></div>`
+  const calculatedLines = (result.line_results || []).filter((line) => line.calculation_status !== 'human_task');
+  const humanTaskLines = (result.line_results || []).filter((line) =>
+    line.calculation_status === 'human_task' ||
+    line.calculation_status === 'partial_human_task' ||
+    Number(line.human_task_amount || 0) > 0
+  );
+  const lineResults = calculatedLines.length
+    ? `<div class="claim-section"><div class="evidence-title">항목별 계산</div><ul>${calculatedLines.map((line) => {
+        const splitAmount = Number(line.insured_copay_amount || 0) > 0 || Number(line.nonpay_amount || 0) > 0
+          ? `급여본인부담 ${formatMoney(line.insured_copay_amount)}원 / 비급여 ${formatMoney(line.nonpay_amount)}원 / `
+          : '';
+        return `<li><strong>${escapeHTML(line.input_name || '')}</strong> (${escapeHTML(line.category || '미분류')}): ${splitAmount}청구 ${formatMoney(line.claimed_amount)}원 / 공제 ${formatMoney(line.deductible)}원 / 지급 ${formatMoney(line.payable_amount)}원</li>`;
+      }).join('')}</ul></div>`
+    : '';
+  const humanTaskResults = humanTaskLines.length
+    ? `<div class="claim-section claim-warning"><div class="evidence-title">Human Task 분류</div><ul>${humanTaskLines.map((line) => {
+        const reasons = Array.isArray(line.review_reasons) && line.review_reasons.length
+          ? ` - ${escapeHTML(line.review_reasons[0])}`
+          : '';
+        const taskAmount = line.human_task_amount || line.claimed_amount;
+        const splitAmount = Number(line.insured_copay_amount || 0) > 0 || Number(line.nonpay_amount || 0) > 0
+          ? `급여본인부담 ${formatMoney(line.insured_copay_amount)}원 / 비급여 ${formatMoney(line.nonpay_amount)}원 / `
+          : '';
+        return `<li><strong>${escapeHTML(line.input_name || '')}</strong> (${escapeHTML(line.category || '미분류')}): ${splitAmount}Human Task 금액 ${formatMoney(taskAmount)}원은 자동 지급 산정에서 제외했습니다.${reasons}</li>`;
+      }).join('')}</ul></div>`
     : '';
 
   return `
@@ -840,6 +887,7 @@ function renderClaimResultHtml(result) {
       </div>
       <div class="claim-note-text">${escapeHTML(result.notes || '')}</div>
       ${lineResults}
+      ${humanTaskResults}
       ${warnings}
       ${reasons}
       ${candidates}
@@ -860,6 +908,14 @@ function claimResultToText(result) {
   ];
   if (result.review_reasons?.length) {
     lines.push(`검토 사유: ${result.review_reasons.join(' / ')}`);
+  }
+  const humanTaskLines = (result.line_results || []).filter((line) =>
+    line.calculation_status === 'human_task' ||
+    line.calculation_status === 'partial_human_task' ||
+    Number(line.human_task_amount || 0) > 0
+  );
+  if (humanTaskLines.length) {
+    lines.push(`Human Task 분류: ${humanTaskLines.map((line) => `${line.input_name || ''} ${formatMoney(line.human_task_amount || line.claimed_amount)}원`).join(' / ')}`);
   }
   return lines.join('\n');
 }
@@ -1177,7 +1233,12 @@ function createBotStreamRow() {
   return row;
 }
 
+function syncModeChrome(mode) {
+  document.getElementById('page-chat')?.classList.toggle('claim-mode', mode === 'claim');
+}
+
 function setMode(mode, element) {
+  syncModeChrome(mode);
   if (mode === currentMode) return;
   currentMode = mode;
   document.querySelectorAll('.mode-tab').forEach((tab) => tab.classList.remove('active'));

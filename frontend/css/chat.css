@@ -288,7 +288,7 @@
   .claim-lines{grid-column:1 / -1;display:flex;flex-direction:column;gap:8px;}
   .claim-line-row{
     display:grid;
-    grid-template-columns:repeat(5,minmax(120px,1fr)) auto;
+    grid-template-columns:1.1fr 1fr 1fr 1fr 0.7fr 1fr 1.2fr auto;
     gap:8px;
     align-items:end;
     padding:8px;
@@ -299,6 +299,7 @@
   .claim-add-line{justify-self:start;}
   .claim-remove-line{background:#6b7280;padding-left:10px;padding-right:10px;}
   .claim-remove-line:hover{background:#4b5563;}
+  .claim-extra-info-field{min-width:0;}
   .claim-note{grid-column:1 / span 3;}
   .claim-result{width:100%; max-width:100%; box-sizing:border-box;}
   .claim-status{
@@ -440,6 +441,7 @@
   @keyframes tdot{0%,80%,100%{transform:translateY(0);background:var(--border);}40%{transform:translateY(-6px);background:var(--primary);}}
 
   .input-area{background:var(--white);border-top:1px solid var(--border);padding:12px 20px;flex-shrink:0;}
+  #page-chat.claim-mode .input-area{display:none;}
   .doc-scope{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px;align-items:center;}
   .scope-label{font-size:11px;font-weight:700;color:var(--gray);}
   .scope-chip{

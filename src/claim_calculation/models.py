@@ -14,8 +14,11 @@ class ClaimItemInput:
     input_name: str
     input_code: str = ""
     claimed_amount: str = "0"
+    insured_copay_amount: str = ""
+    nonpay_amount: str = ""
     quantity: str = "1"
     user_category_hint: str = ""  # 예: "급여", "비급여", "3대비급여", "모름"
+    extra_info: str = ""
     is_prescription: bool = False
 
 
@@ -49,6 +52,7 @@ class StandardMatch:
     std_cd: str = ""
     std_cd_nm: str = ""
     mid_category_cd_nm: str = ""
+    hira_care_type_cd_nm: str = ""
     ins_care_type_cd_nm: str = ""
     medical_class_cd_nm: str = ""
     item_class_level1cd_nm: str = ""
@@ -134,6 +138,30 @@ def parse_money(val: Any) -> Decimal:
 
     if d <= 0:
         raise ValueError(f"금액은 0보다 큰 양수여야 합니다: {val}")
+    return d
+
+
+def parse_money_or_zero(val: Any) -> Decimal:
+    """금액 문자열/숫자를 Decimal로 파싱하되 0원과 빈 입력을 허용한다."""
+    if val is None:
+        return Decimal("0")
+
+    if isinstance(val, (int, float, Decimal)):
+        d = Decimal(str(val))
+    else:
+        s = str(val).strip()
+        if not s:
+            return Decimal("0")
+        s = s.replace("원", "").replace(",", "").replace(" ", "").strip()
+        if not s:
+            return Decimal("0")
+        try:
+            d = Decimal(s)
+        except (InvalidOperation, ValueError) as exc:
+            raise ValueError(f"올바른 금액 형식이 아닙니다: {val}") from exc
+
+    if d < 0:
+        raise ValueError(f"금액은 0원 이상이어야 합니다: {val}")
     return d
 
 

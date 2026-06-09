@@ -55,8 +55,11 @@ async def calculate_claim(
             input_name=item.input_name,
             input_code=item.input_code,
             claimed_amount=item.claimed_amount,
+            insured_copay_amount=item.insured_copay_amount,
+            nonpay_amount=item.nonpay_amount,
             quantity=item.quantity,
             user_category_hint=item.user_category_hint,
+            extra_info=item.extra_info,
         )
         for idx, item in enumerate(payload.items)
     ]

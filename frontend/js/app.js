@@ -5,8 +5,8 @@ import { toast } from './modules/ui.js';
 import { apiFetch } from './utils.js';
 import { STORAGE_KEYS } from './config.js';
 import { initLoginCanvas, initLoginPage } from './pages/login.js?v=20260602_model_sync_fix1';
-import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260605_qwen_reasoning_toggle';
-import { initAdminPage } from './pages/admin.js?v=20260602_claim_reset_fix1';
+import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260609_claim_split_amount';
+import { initAdminPage } from './pages/admin.js?v=20260609_ontology_review_mvp';
 
 const PAGES = {
   LOGIN: '/html/login.html',

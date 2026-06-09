@@ -161,6 +161,143 @@ def test_excluded_standard_opinion_forces_zero_payable():
     assert any("지급예상액을 0원" in reason for reason in result.review_reasons)
 
 
+def test_split_receipt_l1213_covers_insured_copay_even_when_nonpay_unavailable():
+    """급여외 산정불가 표준모델 의견은 비급여 금액에 적용하고 급여 본인부담금은 보상 계산한다."""
+    items = [
+        ClaimItemInput(
+            line_id="line_l1213",
+            input_name="마취료",
+            input_code="L1213",
+            insured_copay_amount="23434",
+            nonpay_amount="0",
+            quantity="1",
+            user_category_hint="급여",
+            extra_info="입원 중 수술 마취",
+        )
+    ]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="hospitalization")
+    mock_match = {
+        "std_cd": "L1213",
+        "std_cd_nm": "척추마취관리기본[1시간기준]",
+        "mid_category_cd_nm": "마취료",
+        "hira_care_type_cd_nm": "급여",
+        "ins_care_type_cd_nm": "급여",
+        "medical_class_cd_nm": "입원",
+        "item_class_level1cd_nm": "마취료",
+        "item_class_level2cd_nm": "척추마취",
+        "pay_opn_cd_nm": "급여외 산정불가",
+    }
+
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=mock_match):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.claimed_amount == "23434"
+    assert result.payable_amount == "18747"
+    assert result.deductible == "4687"
+    assert result.line_results[0]["insured_copay_amount"] == "23434"
+    assert result.line_results[0]["nonpay_amount"] == "0"
+    assert "급여 본인부담금" in result.line_results[0]["rule_summary"]
+    assert "급여외 산정불가" in result.applied_basis[0]["content"]
+
+
+def test_split_receipt_standard_opinion_excludes_only_nonpay_part():
+    """분리 입력에서는 표준모델의 비급여 산정 제한이 급여 본인부담금까지 0원 처리하지 않는다."""
+    items = [
+        ClaimItemInput(
+            line_id="line_split",
+            input_name="마취료",
+            input_code="L1213",
+            insured_copay_amount="10000",
+            nonpay_amount="50000",
+            quantity="1",
+            user_category_hint="급여",
+        )
+    ]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="hospitalization")
+    mock_match = {
+        "std_cd": "L1213",
+        "std_cd_nm": "척추마취관리기본[1시간기준]",
+        "mid_category_cd_nm": "마취료",
+        "hira_care_type_cd_nm": "급여",
+        "ins_care_type_cd_nm": "급여",
+        "pay_opn_cd_nm": "급여외 산정불가",
+    }
+
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=mock_match):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.claimed_amount == "60000"
+    assert result.payable_amount == "8000"
+    assert result.deductible == "52000"
+    assert result.requires_review
+    assert any("급여외/비급여 산정 제한" in reason for reason in result.review_reasons)
+
+
+def test_fifth_generation_unresolved_split_nonpay_is_human_task_excluded_from_totals():
+    """5세대 미분류 비급여는 자동 지급/공제 합계에서 제외하고 Human Task로 분리한다."""
+    items = [
+        ClaimItemInput(line_id="line_benefit", input_name="급여 입원 본인부담금", insured_copay_amount="10000", nonpay_amount="0", quantity="1", user_category_hint="급여"),
+        ClaimItemInput(line_id="line_unknown_nonpay", input_name="메가디쓰리정 25000IU 비타민D", input_code="659901271", insured_copay_amount="0", nonpay_amount="48000", quantity="1", user_category_hint=""),
+    ]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="hospitalization")
+    matches = [
+        [{"std_cd": "PAY001", "std_cd_nm": "급여 입원 본인부담금", "mid_category_cd_nm": "급여", "hira_care_type_cd_nm": "급여", "ins_care_type_cd_nm": "급여", "pay_opn_cd_nm": "보상"}],
+        [],
+    ]
+
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=None), patch("src.db.standard_codes.search_by_name", side_effect=matches):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.claimed_amount == "58000"
+    assert result.payable_amount == "8000"
+    assert result.deductible == "2000"
+    assert result.requires_review
+    human_task_line = result.line_results[1]
+    assert human_task_line["category"] == "미분류 비급여"
+    assert human_task_line["payable_amount"] == "0"
+    assert human_task_line["deductible"] == "0"
+    assert human_task_line["calculation_status"] == "human_task"
+    assert human_task_line["excluded_from_calculation"] is True
+    assert any("Human Task" in reason for reason in result.review_reasons)
+
+
+def test_fourth_generation_unresolved_split_nonpay_is_human_task_excluded_from_totals():
+    """4세대에서도 미분류 비급여는 자동 지급/공제 합계에서 제외하고 Human Task로 분리한다."""
+    items = [
+        ClaimItemInput(line_id="line_benefit", input_name="급여 입원 본인부담금", insured_copay_amount="10000", nonpay_amount="0", quantity="1", user_category_hint="급여"),
+        ClaimItemInput(line_id="line_unknown_nonpay", input_name="미분류 비급여 치료재료", insured_copay_amount="0", nonpay_amount="48000", quantity="1", user_category_hint=""),
+    ]
+    context = ClaimCaseContext(policy_generation="4th", visit_type="hospitalization")
+
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=None), patch("src.db.standard_codes.search_by_name", return_value=[]):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.claimed_amount == "58000"
+    assert result.payable_amount == "8000"
+    assert result.deductible == "2000"
+    human_task_line = result.line_results[1]
+    assert human_task_line["category"] == "미분류 비급여"
+    assert human_task_line["payable_amount"] == "0"
+    assert human_task_line["deductible"] == "0"
+    assert human_task_line["calculation_status"] == "human_task"
+    assert human_task_line["excluded_from_calculation"] is True
+
+
+def test_matched_general_nonpay_with_clear_opinion_is_still_calculated():
+    """표준모델 보상의견이 명확한 비급여는 세대 공통 Human Task 제외 대상이 아니다."""
+    items = [ClaimItemInput(line_id="line_matched_nonpay", input_name="명확한 비급여 항목", claimed_amount="100000", quantity="1")]
+    context = ClaimCaseContext(policy_generation="4th", visit_type="hospitalization")
+    mock_match = {"std_cd": "NP001", "std_cd_nm": "명확한 비급여 항목", "mid_category_cd_nm": "비급여", "ins_care_type_cd_nm": "비급여", "pay_opn_cd_nm": "보상"}
+
+    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.payable_amount == "70000"
+    assert result.deductible == "30000"
+    assert result.line_results[0]["category"] == "비급여"
+    assert result.line_results[0]["calculation_status"] == "calculated"
+
+
 def test_coordination_review_does_not_leak_without_explicit_signal():
     """자동차/산재 맥락이 없는 청구에는 중복보상 조정 review reason이 붙지 않아야 한다."""
     from src.graph.retriever import GraphRetrievalResult, GraphReviewPath
