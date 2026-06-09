@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -9,7 +10,10 @@ from typing import Any, Iterable
 from src.graph.normalizer import normalize_name
 
 
-DEFAULT_ONTOLOGY_MANIFEST = Path(__file__).resolve().parents[2] / "data" / "ontology" / "concepts.json"
+ONTOLOGY_DIR = Path(__file__).resolve().parents[2] / "data" / "ontology"
+BASE_ONTOLOGY_MANIFEST = ONTOLOGY_DIR / "concepts.json"
+ACTIVE_ONTOLOGY_MANIFEST = ONTOLOGY_DIR / "concepts.active.json"
+DEFAULT_ONTOLOGY_MANIFEST = BASE_ONTOLOGY_MANIFEST
 NODE_TYPE_PREFIXES = {
     "ComplicationConcept": "comp",
     "ClaimCondition": "cond",
@@ -274,4 +278,13 @@ class OntologyRegistry:
 
 @lru_cache(maxsize=1)
 def get_default_ontology_registry() -> OntologyRegistry:
-    return OntologyRegistry(DEFAULT_ONTOLOGY_MANIFEST)
+    return OntologyRegistry(resolve_default_ontology_manifest())
+
+
+def resolve_default_ontology_manifest() -> Path:
+    configured = os.getenv("INSURANCE_ONTOLOGY_MANIFEST", "").strip()
+    if configured:
+        return Path(configured)
+    if ACTIVE_ONTOLOGY_MANIFEST.exists():
+        return ACTIVE_ONTOLOGY_MANIFEST
+    return BASE_ONTOLOGY_MANIFEST

@@ -47,6 +47,9 @@ done
 
 setup_fastapi_env
 mkdir -p "$PROJECT_DIR/logs"
+if [[ -f "$PROJECT_DIR/data/ontology/concepts.active.json" ]]; then
+  export INSURANCE_ONTOLOGY_MANIFEST="${INSURANCE_ONTOLOGY_MANIFEST:-$PROJECT_DIR/data/ontology/concepts.active.json}"
+fi
 
 run_step() {
   log "RUN: $*"

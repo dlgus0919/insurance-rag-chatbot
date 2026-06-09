@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from src.graph.query_planner import GraphQueryPlanner
-from src.ontology.registry import OntologyRegistry, get_default_ontology_registry
+from src.ontology.registry import OntologyRegistry, get_default_ontology_registry, resolve_default_ontology_manifest
 from scripts.check_ontology_sync import check_registry
 
 
@@ -96,3 +96,12 @@ def test_ontology_sync_check_rejects_retrieval_only_concept(tmp_path) -> None:
     errors = check_registry(OntologyRegistry(manifest_path))
 
     assert errors == ["bad.retrieval_only: retrieval expansion exists without planner mapping"]
+
+
+def test_resolve_default_ontology_manifest_prefers_env(monkeypatch, tmp_path) -> None:
+    manifest_path = tmp_path / "custom_concepts.json"
+    manifest_path.write_text('{"schema_version":"1.0","version":"test","concepts":[]}', encoding="utf-8")
+
+    monkeypatch.setenv("INSURANCE_ONTOLOGY_MANIFEST", str(manifest_path))
+
+    assert resolve_default_ontology_manifest() == manifest_path

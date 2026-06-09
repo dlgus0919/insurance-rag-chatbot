@@ -1,0 +1,248 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+PROJECT_DIR="${INSURANCE_RAG_PROJECT_DIR:-/srv/shared/projects/insurance-rag-chatbot}"
+PYTHON_BIN="${INSURANCE_RAG_PYTHON:-$PROJECT_DIR/.venv/bin/python}"
+LOG_DIR="${INSURANCE_RAG_LAUNCHER_LOG_DIR:-$PROJECT_DIR/logs}"
+REVIEW_CLI="$PROJECT_DIR/scripts/ontology_review.py"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  insurance-rag-ontology-review-gui [--dry-run]
+
+Shows a zenity-based ontology approval workflow for DGX desktop users.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+DRY_RUN=0
+if [[ "${1:-}" == "--dry-run" ]]; then
+  DRY_RUN=1
+fi
+
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python3"
+fi
+
+cd "$PROJECT_DIR"
+
+run_cli() {
+  PYTHONPATH="$PROJECT_DIR" "$PYTHON_BIN" "$REVIEW_CLI" "$@"
+}
+
+pending_count() {
+  run_cli --pending-count | tail -n 1
+}
+
+approved_count() {
+  run_cli --summary | "$PYTHON_BIN" -c 'import json,sys; print(json.load(sys.stdin).get("approved", 0))'
+}
+
+require_gui() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    return
+  fi
+  if [[ -z "${DISPLAY:-}" && -z "${WAYLAND_DISPLAY:-}" ]]; then
+    echo "DISPLAY/WAYLAND_DISPLAY is not set. Run this from the DGX desktop session." >&2
+    exit 1
+  fi
+  command -v zenity >/dev/null 2>&1 || {
+    echo "zenity is required for ontology review GUI." >&2
+    exit 1
+  }
+}
+
+show_info() {
+  local title="$1"
+  local message="$2"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '[INFO] %s: %s\n' "$title" "$message"
+    return
+  fi
+  zenity --info --title="$title" --width=680 --text="$message" 2>/dev/null || true
+}
+
+show_error() {
+  local title="$1"
+  local message="$2"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '[ERROR] %s: %s\n' "$title" "$message" >&2
+    return
+  fi
+  zenity --error --title="$title" --width=680 --text="$message" 2>/dev/null || true
+}
+
+run_apply_with_progress() {
+  mkdir -p "$LOG_DIR"
+  local log_file="$LOG_DIR/ontology_review_$(date +%Y%m%d_%H%M%S).log"
+  local status_file
+  status_file="$(mktemp /tmp/insurance-rag-ontology-review-status.XXXXXX)"
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    run_cli --apply --rebuild-graph --dry-run
+    return 0
+  fi
+
+  (
+    set +e
+    {
+      printf '[ontology-review] apply and rebuild started\n'
+      run_cli --apply --rebuild-graph
+      rc="$?"
+      printf '[ontology-review] exit_code=%s\n' "$rc"
+    } >>"$log_file" 2>&1
+    printf '%s' "$rc" >"$status_file"
+  ) &
+  local cmd_pid=$!
+
+  (
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+      printf '# 승인된 개념을 반영하고 GraphDB를 재구축합니다.\n'
+      sleep 2
+    done
+  ) | zenity --progress \
+    --title="온톨로지 반영 중" \
+    --text="승인된 개념을 반영하고 GraphDB를 재구축합니다." \
+    --pulsate \
+    --auto-close \
+    --no-cancel \
+    --width=560 2>/dev/null || true
+
+  wait "$cmd_pid" || true
+  local rc
+  rc="$(cat "$status_file" 2>/dev/null || printf '1')"
+  rm -f "$status_file"
+  if [[ "$rc" != "0" ]]; then
+    show_error "온톨로지 반영 실패" "GraphDB 재구축 또는 manifest 검증에 실패했습니다.\n\n로그:\n$log_file"
+    exit "$rc"
+  fi
+  show_info "온톨로지 반영 완료" "승인된 개념을 반영하고 GraphDB를 재구축했습니다.\n\n로그:\n$log_file"
+}
+
+review_pending_candidates() {
+  local ids
+  ids="$(run_cli --list-ids --status pending)"
+  if [[ -z "$ids" ]]; then
+    show_info "온톨로지 승인" "승인 대기 중인 후보가 없습니다."
+    return 0
+  fi
+
+  while IFS= read -r candidate_id; do
+    [[ -n "$candidate_id" ]] || continue
+    local detail
+    detail="$(run_cli --show "$candidate_id")"
+    local decision
+    if [[ "$DRY_RUN" == "1" ]]; then
+      printf '[DRY-RUN] would review candidate: %s\n%s\n' "$candidate_id" "$detail"
+      continue
+    fi
+    decision="$(zenity --list \
+      --radiolist \
+      --title="온톨로지 후보 검토" \
+      --text="$detail" \
+      --width=820 \
+      --height=520 \
+      --column="선택" \
+      --column="decision" \
+      --column="처리" \
+      --hide-column=2 \
+      --print-column=2 \
+      TRUE hold "보류" \
+      FALSE approve "승인" \
+      FALSE reject "거절" \
+      FALSE skip "이번 후보 건너뛰기" 2>/dev/null)" || return 0
+    case "$decision" in
+      approve|hold|reject)
+        run_cli --decide "$candidate_id" --decision "$decision" --reviewer "${USER:-practitioner}" --reviewer-type practitioner >/dev/null
+        ;;
+      skip|"")
+        ;;
+    esac
+  done <<< "$ids"
+}
+
+auto_approve_test_candidates() {
+  if [[ "${ENABLE_ONTOLOGY_TEST_AUTO_APPROVAL:-true}" == "false" ]]; then
+    show_error "테스트 자동 승인 비활성화" "ENABLE_ONTOLOGY_TEST_AUTO_APPROVAL=false 상태입니다."
+    exit 1
+  fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    run_cli --auto-approve-test --dry-run
+    return 0
+  fi
+  if ! zenity --question \
+    --title="테스트 후보 자동 승인" \
+    --width=700 \
+    --text="test_candidate=true 후보만 codex-test-auto로 승인합니다.\n\n운영 후보는 자동 승인 대상에서 제외됩니다.\n계속하시겠습니까?" 2>/dev/null; then
+    return 0
+  fi
+  run_cli --auto-approve-test --reviewer codex-test-auto >/dev/null
+}
+
+main() {
+  require_gui
+  local count
+  count="$(pending_count)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '[DRY-RUN] pending=%s\n' "${count:-0}"
+    run_cli --list-json --status pending
+    exit 0
+  fi
+  if [[ ! "$count" =~ ^[0-9]+$ || "$count" -eq 0 ]]; then
+    show_info "온톨로지 승인" "승인 대기 중인 후보가 없습니다."
+    exit 0
+  fi
+
+  local action
+  action="$(zenity --list \
+    --radiolist \
+    --title="온톨로지 승인 대기" \
+    --text="온톨로지 구축 대기 중인 개념이 ${count}건 있습니다.\n\n승인된 개념만 운영 GraphDB에 반영됩니다." \
+    --width=760 \
+    --height=320 \
+    --column="선택" \
+    --column="action" \
+    --column="작업" \
+    --hide-column=2 \
+    --print-column=2 \
+    TRUE review "개념 승인 검토 시작" \
+    FALSE skip "나중에 검토하고 앱 실행" \
+    FALSE auto_test "테스트 후보 LLM/Codex 자동 승인" \
+    FALSE cancel "취소" 2>/dev/null)" || exit 0
+
+  case "$action" in
+    review)
+      review_pending_candidates
+      ;;
+    auto_test)
+      auto_approve_test_candidates
+      ;;
+    skip|"")
+      exit 0
+      ;;
+    cancel)
+      exit 130
+      ;;
+  esac
+
+  local approved
+  approved="$(approved_count)"
+  if [[ "$approved" =~ ^[0-9]+$ && "$approved" -gt 0 ]]; then
+    if zenity --question \
+      --title="GraphDB 재구축 확인" \
+      --width=720 \
+      --text="승인된 후보 ${approved}건을 active ontology manifest에 반영하고 GraphDB를 재구축합니다.\n\n계속하시겠습니까?" 2>/dev/null; then
+      run_apply_with_progress
+    fi
+  else
+    show_info "온톨로지 승인" "새로 승인된 후보가 없습니다. 기존 앱 기동 흐름으로 돌아갑니다."
+  fi
+}
+
+main "$@"
