@@ -164,6 +164,27 @@ def chunk_to_source(chunk) -> dict:
     }
 
 
+def chunks_to_sources(chunks: list) -> list[dict]:
+    """Convert chunks to frontend sources while removing duplicate doc/page snippets."""
+
+    sources: list[dict] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for chunk in chunks:
+        source = chunk_to_source(chunk)
+        snippet_key = re.sub(r"\s+", "", str(source.get("snippet") or ""))[:160]
+        key = (
+            str(source.get("doc_short") or source.get("filename") or ""),
+            str(source.get("page") or ""),
+            str(source.get("page_end") or ""),
+            snippet_key,
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        sources.append(source)
+    return sources
+
+
 def summarize_legacy_messages(messages: list[ChatMessage]) -> str:
     """Compress older history into a compact text summary for prompt context."""
 
@@ -250,7 +271,7 @@ async def prepare_retrieved_context(
         return_debug=True,
     )
     chunks = [_hit_to_chunk(hit) for hit in hits]
-    sources = [chunk_to_source(chunk) for chunk in chunks]
+    sources = chunks_to_sources(chunks)
     prompt = pipeline.build_prompt(question, chunks, graph_context=graph_context)
     history_context = build_history_context(history)
     if history_context:
@@ -513,7 +534,7 @@ async def prepare_quickcode_context(
         include_coverage=include_coverage,
         selected_docs=selected_docs,
     )
-    sources = [chunk_to_source(chunk) for chunk in chunks]
+    sources = chunks_to_sources(chunks)
     system_prompt, prompt = build_quick_code_prompt(
         query,
         chunks,
@@ -573,7 +594,7 @@ async def prepare_formal_context(
     retrieval_query = build_formal_retrieval_query(question, filters)
     hits, _ = pipeline.retrieve_hits(retrieval_query, top_k=top_k, doc_filter=doc_filter)
     chunks = [_hit_to_chunk(hit) for hit in hits]
-    sources = [chunk_to_source(chunk) for chunk in chunks]
+    sources = chunks_to_sources(chunks)
     prompt_blocks: list[str] = []
     search_type = (filters or {}).get("search_type")
     if search_type:
@@ -747,6 +768,7 @@ __all__ = [
     "SYSTEM_PROMPT",
     "build_contextual_prompt",
     "chunk_to_source",
+    "chunks_to_sources",
     "finalize_answer",
     "finalize_answer_for_question",
     "formal_doc_filter",

@@ -27,6 +27,19 @@ _COVERAGE_CUES = (
     "입원",
     "처방조제",
 )
+_CLAUSE_DETAIL_CUES = (
+    "진단확정",
+    "확정기준",
+    "진단기준",
+    "필요서류",
+    "필요한서류",
+    "청구서류",
+    "제출서류",
+    "구비서류",
+    "자기부담금",
+    "자기부담",
+)
+_RIDER_OR_COVERAGE_UNIT_CUES = ("특별약관", "특약", "담보", "진단비", "지원금")
 
 
 @dataclass(frozen=True)
@@ -112,6 +125,8 @@ def classify_search_intent(
         _CLAUSE_PATTERN.search(text)
         or _contains_any(compact, ("조항", "별표", "약관본문", "면책조항", "약관근거"))
     )
+    has_clause_detail = _contains_any(compact, _CLAUSE_DETAIL_CUES)
+    has_rider_or_coverage_unit = _contains_any(compact, _RIDER_OR_COVERAGE_UNIT_CUES)
     requires_cross_doc = _contains_any(compact, ("문서별", "출처별", "기준별", "각각", "비교", "차이")) or bool(doc_filter and len(doc_filter) >= 2)
     requires_coverage = _contains_any(compact, _COVERAGE_CUES)
     has_ambiguous = _contains_any(lower_compact, ("mri", "mra", "엠알아이", "엠알에이")) or _contains_any(
@@ -142,6 +157,20 @@ def classify_search_intent(
                 if compound
                 else "질문에서 코드 패턴을 감지해 코드 필터 검색과 BM25를 우선합니다."
             ),
+        )
+
+    if has_clause_detail and (has_rider_or_coverage_unit or has_clause or requires_coverage):
+        return SearchIntentPlan(
+            intent="clause_detail_lookup",
+            confidence=0.86,
+            dense_weight=0.32,
+            bm25_weight=0.68,
+            top_k_dense=max(default_top_k_dense, 14),
+            top_k_bm25=max(default_top_k_bm25, 24),
+            requires_clause_lookup=True,
+            requires_coverage_judgment=requires_coverage,
+            rule_strength=0.86,
+            reason="담보/특약의 진단확정·청구서류·자기부담금 등 조항 세부 질의를 감지해 BM25와 문서 내부 보강 검색을 우선합니다.",
         )
 
     if has_clause:

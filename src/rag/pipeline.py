@@ -82,6 +82,23 @@ _DOC_ALIASES: dict[str, tuple[str, ...]] = {
     "실무가이드": ("실무가이드", "실무종합가이드", "Claim 실무"),
     "상담사례집": ("상담사례집", "소비자 상담", "상담 주요 사례"),
 }
+_CLAUSE_DETAIL_QUERY_CUES = (
+    "진단확정",
+    "확정기준",
+    "진단기준",
+    "필요서류",
+    "필요한서류",
+    "청구서류",
+    "제출서류",
+    "구비서류",
+    "자기부담금",
+    "자기부담",
+)
+_CLAUSE_DETAIL_CONTEXT_TERMS = {
+    "diagnosis": ("진단확정", "정의 및 진단확정", "병력", "신경학적 검진", "CT", "MRI", "의사"),
+    "documents": ("보험금의 청구", "청구서", "사고증명서", "진단서", "신분증", "구비서류", "제출서류"),
+    "deductible": ("자기부담금", "자기부담", "보험금 등의 지급한도", "지급한도", "대물", "대인"),
+}
 _HIRA_CHUNKS_PATH = Path("data/processed/chunks.jsonl")
 _HIRA_TERM_ALIASES: dict[str, tuple[str, ...]] = {
     "췌장 이식수술": ("췌이식술", "췌장이식술"),
@@ -548,6 +565,90 @@ def _normalize_answer_text(answer: str) -> str:
     )
 
 
+def _compact_text(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _split_evidence_lines(text: str) -> list[str]:
+    normalized = re.sub(r"[ \t]+", " ", text or "")
+    lines = [line.strip(" \t-•*") for line in re.split(r"[\r\n]+", normalized) if line.strip()]
+    if len(lines) <= 2:
+        lines = [
+            sentence.strip(" \t-•*")
+            for sentence in re.split(r"(?<=[.。])\s+|(?<=다\.)\s*", normalized)
+            if sentence.strip()
+        ]
+    return lines
+
+
+def _extract_clause_evidence_lines(text: str, keywords: tuple[str, ...], limit: int = 6) -> list[str]:
+    compact_keywords = tuple(_compact_text(keyword) for keyword in keywords if keyword)
+    selected: list[str] = []
+    seen: set[str] = set()
+    for line in _split_evidence_lines(text):
+        compact_line = _compact_text(line)
+        if not compact_line or not any(keyword in compact_line for keyword in compact_keywords):
+            continue
+        line = line[:260] + ("..." if len(line) > 260 else "")
+        key = _compact_text(line)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(line)
+        if len(selected) >= limit:
+            break
+    return selected
+
+
+def _deterministic_clause_detail_answer(question: str, chunks: list[Chunk]) -> str | None:
+    """조항 세부 근거가 검색된 경우 LLM의 '컨텍스트 없음' 오판을 방지한다."""
+
+    categories = _clause_detail_categories(question)
+    if not categories:
+        return None
+
+    category_labels = {
+        "diagnosis": "진단확정 기준",
+        "documents": "청구 필요 서류",
+        "deductible": "자기부담금 기준",
+    }
+    evidence_lines: list[str] = []
+    seen_evidence_line_keys: set[str] = set()
+    for category in categories:
+        keywords = _CLAUSE_DETAIL_CONTEXT_TERMS.get(category, ())
+        category_hits: list[tuple[int, Chunk, list[str]]] = []
+        for chunk in chunks:
+            lines = _extract_clause_evidence_lines(chunk.text, keywords)
+            if not lines:
+                continue
+            score = sum(1 for keyword in keywords if _compact_text(keyword) in _compact_text(chunk.text))
+            category_hits.append((score, chunk, lines))
+        if not category_hits:
+            continue
+        category_hits.sort(key=lambda item: item[0], reverse=True)
+        evidence_lines.append(f"{category_labels.get(category, '조항 세부 기준')}: 검색된 약관 근거에서 다음과 같이 확인됩니다.")
+        for _score, _chunk, lines in category_hits[:2]:
+            for line in lines[:4]:
+                line_key = _compact_text(line)
+                if line_key in seen_evidence_line_keys:
+                    continue
+                seen_evidence_line_keys.add(line_key)
+                evidence_lines.append(f"- {line}")
+
+    if not evidence_lines:
+        return None
+
+    return "\n".join(
+        [
+            "제공된 문서 근거에서 확인되는 범위로 답변드립니다.",
+            "",
+            *evidence_lines,
+            "",
+            "위 내용은 검색된 조항 문구 기준의 요약이며, 실제 지급 여부는 가입 담보와 사고/진단 사실 관계를 함께 확인해야 합니다.",
+        ]
+    )
+
+
 def _deterministic_guard_answer(question: str, chunks: list[Chunk], graph_context: str | None = None) -> str | None:
     if "QZ999" in question.upper():
         return (
@@ -555,6 +656,10 @@ def _deterministic_guard_answer(question: str, chunks: list[Chunk], graph_contex
             "문서 근거 없이 없는 코드를 사실처럼 답할 수 없습니다.\n"
             "[출처: 구조화 안전 검증]"
         )
+
+    clause_detail_answer = _deterministic_clause_detail_answer(question, chunks)
+    if clause_detail_answer:
+        return clause_detail_answer
 
     compact = re.sub(r"\s+", "", question)
     if all(term in question for term in ("소화기계", "5종", "수가코드")) and "SOL" in question:
@@ -627,6 +732,35 @@ def _expand_retrieval_query(question: str) -> str:
     return get_default_ontology_registry().expand_retrieval_query(question)
 
 
+def _clause_detail_categories(question: str) -> list[str]:
+    compact = re.sub(r"\s+", "", question)
+    categories: list[str] = []
+    if any(term in compact for term in ("진단확정", "확정기준", "진단기준")):
+        categories.append("diagnosis")
+    if any(term in compact for term in ("필요서류", "필요한서류", "청구서류", "제출서류", "구비서류")):
+        categories.append("documents")
+    if any(term in compact for term in ("자기부담금", "자기부담")):
+        categories.append("deductible")
+    return categories
+
+
+def _is_clause_detail_query(question: str) -> bool:
+    compact = re.sub(r"\s+", "", question)
+    return any(term in compact for term in _CLAUSE_DETAIL_QUERY_CUES)
+
+
+def _expand_clause_detail_query(question: str, retrieval_query: str) -> str:
+    """조항 세부 질의에서 일반 표현과 약관 section 표현을 함께 검색한다."""
+
+    terms: list[str] = []
+    for category in _clause_detail_categories(question):
+        terms.extend(_CLAUSE_DETAIL_CONTEXT_TERMS.get(category, ()))
+    if not terms:
+        return retrieval_query
+    suffix = " ".join(term for term in dict.fromkeys(terms) if term not in retrieval_query)
+    return f"{retrieval_query} {suffix}".strip()
+
+
 def _is_low_value_wide_range_filter(hit: Hit) -> bool:
     """목차처럼 넓은 페이지 범위에 짧게 걸친 청크를 검색 후보에서 제외한다."""
 
@@ -653,6 +787,18 @@ def _filter_hits_by_doc(hits: list[Hit], doc_filter: list[str] | None) -> list[H
         return hits
     allowed = set(doc_filter)
     return [hit for hit in hits if hit.metadata.get("doc_short") in allowed]
+
+
+def _hit_dedupe_key(hit: Hit) -> tuple[str, str, str, str, str]:
+    """같은 문서/페이지/본문이 다른 chunk id로 반복되는 것을 제거하기 위한 키."""
+
+    metadata = hit.metadata or {}
+    doc_key = str(metadata.get("doc_short") or metadata.get("pdf_filename") or metadata.get("source") or "")
+    page_start = str(metadata.get("page_start") or "")
+    page_end = str(metadata.get("page_end") or page_start or "")
+    section = str(metadata.get("section") or metadata.get("section_path") or "")
+    text_key = re.sub(r"\s+", "", hit.document or "")[:260]
+    return doc_key, page_start, page_end, section, text_key
 
 
 def _ordered_unique(values: list[str]) -> list[str]:
@@ -699,14 +845,86 @@ def _merge_hits_preserving_order(primary: list[Hit], extras: list[Hit], limit: i
 
     merged: list[Hit] = []
     seen: set[str] = set()
+    seen_content: set[tuple[str, str, str, str, str]] = set()
     for hit in primary + extras:
-        if hit.id in seen:
+        content_key = _hit_dedupe_key(hit)
+        if hit.id in seen or content_key in seen_content:
             continue
         seen.add(hit.id)
+        seen_content.add(content_key)
         merged.append(hit)
         if limit is not None and len(merged) >= limit:
             break
     return merged
+
+
+def _question_anchor_terms(question: str) -> list[str]:
+    """조항 표제어보다 사용자가 실제로 묻는 담보/항목 명칭을 뽑는다."""
+
+    stop_terms = {
+        "특별약관",
+        "특약",
+        "담보",
+        "기준",
+        "설명",
+        "알려줘",
+        "알려",
+        "청구",
+        "필요",
+        "필요한",
+        "서류",
+        "자기부담금",
+        "자기부담",
+        "진단확정",
+        "최초",
+        "회한",
+    }
+    terms: list[str] = []
+    for token in re.findall(r"[가-힣A-Za-z0-9]{3,}", question):
+        compact_token = _compact_text(token)
+        if not compact_token or compact_token in stop_terms:
+            continue
+        if any(stop in compact_token for stop in ("알려", "설명", "필요", "서류")):
+            continue
+        if compact_token not in terms:
+            terms.append(compact_token)
+    return terms[:6]
+
+
+def _focus_docs_from_clause_hits(question: str, hits: list[Hit], limit: int = 4) -> list[str]:
+    """조항성 질의에서 이미 검색된 상품 문서 안으로 보강 검색할 문서를 고른다."""
+
+    scores: dict[str, float] = {}
+    anchor_terms = _question_anchor_terms(question)
+    for rank, hit in enumerate(hits[:16]):
+        doc_short = str((hit.metadata or {}).get("doc_short") or "")
+        if not doc_short:
+            continue
+        if doc_short in {"실무가이드", "심평원"}:
+            continue
+        score = 1.0 / (rank + 1)
+        if doc_short.startswith("자사_"):
+            score += 0.35
+        compact_doc = _compact_text(hit.document)
+        score += sum(0.6 for term in anchor_terms if term in compact_doc)
+        scores[doc_short] = scores.get(doc_short, 0.0) + score
+    ordered = sorted(scores, key=lambda key: scores[key], reverse=True)
+    return ordered[:limit]
+
+
+def _score_clause_detail_hit(hit: Hit, question: str) -> int:
+    compact_doc = re.sub(r"\s+", "", hit.document or "")
+    score = 0
+    for term in _question_anchor_terms(question):
+        if term in compact_doc:
+            score += 3
+    for category in _clause_detail_categories(question):
+        for term in _CLAUSE_DETAIL_CONTEXT_TERMS.get(category, ()):
+            if re.sub(r"\s+", "", term) in compact_doc:
+                score += 2
+    if "특별약관" in compact_doc or "담보" in compact_doc:
+        score += 1
+    return score
 
 
 class RagPipeline:
@@ -969,6 +1187,22 @@ class RagPipeline:
 
         dense_hits = _exclude_irrelevant_travel_insurance(dense_hits, question)
         bm25_hits = _exclude_irrelevant_travel_insurance(bm25_hits, question)
+        clause_detail_hits: list[Hit] = []
+        if _is_clause_detail_query(question):
+            focus_docs = _ordered_unique(doc_filter or _focus_docs_from_clause_hits(question, dense_hits + bm25_hits))
+            if focus_docs:
+                detail_query = _expand_clause_detail_query(question, retrieval_query)
+                detail_pool_size = max(bm25_top_k * 4, 80)
+                detail_candidates = _filter_hits_by_doc(self.bm25.query(detail_query, detail_pool_size), focus_docs)
+                scored_detail_hits = [
+                    (_score_clause_detail_hit(hit, question), hit)
+                    for hit in detail_candidates
+                ]
+                clause_detail_hits = [
+                    hit
+                    for score, hit in sorted(scored_detail_hits, key=lambda item: item[0], reverse=True)
+                    if score >= 2
+                ][: max(4, final_top_k // 2)]
 
         reranker_enabled = self.reranker is not None and getattr(self.reranker, "enabled", True)
         rrf_top_k = final_top_k * 2 if reranker_enabled else final_top_k
@@ -1004,12 +1238,20 @@ class RagPipeline:
 
         if graph_hits:
             fused_hits = _merge_hits_preserving_order(fused_hits, graph_hits)
+        if clause_detail_hits:
+            fused_hits = _merge_hits_preserving_order(
+                clause_detail_hits,
+                fused_hits,
+                limit=max(rrf_top_k, final_top_k),
+            )
 
         if self.reranker is not None:
             final_hits = self.reranker.rerank(question, fused_hits, top_k=final_top_k)
         else:
             final_hits = fused_hits[:final_top_k]
 
+        if clause_detail_hits:
+            final_hits = _merge_hits_preserving_order(clause_detail_hits, final_hits, limit=final_top_k)
         if graph_hits:
             final_hits = _merge_hits_preserving_order(final_hits, graph_hits, limit=final_top_k)
         if enforce_doc_coverage:

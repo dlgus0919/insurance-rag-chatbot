@@ -260,6 +260,74 @@ def test_expand_retrieval_query_for_motorcycle() -> None:
     assert "알릴 의무" in expanded
 
 
+def test_clause_detail_lookup_retrieves_supplemental_product_section() -> None:
+    class DriverVectorStore(DummyVectorStore):
+        def query(self, query_embedding, top_k: int, doc_filter: list[str] | None = None):
+            self.query_calls.append((top_k, doc_filter))
+            return [
+                Hit(
+                    id="driver-benefit",
+                    score=0.9,
+                    document="자동차사고 부상치료지원금 특별약관 제1조 보험금의 지급사유",
+                    metadata={"doc_short": "자사_SOL운전자", "page_start": 73, "page_end": 74},
+                )
+            ]
+
+    class DriverBM25:
+        def query(self, text: str, top_k: int):
+            hits = [
+                Hit(
+                    id="driver-benefit-bm25",
+                    score=2.0,
+                    document="자동차사고 부상치료지원금 특별약관 제1조 보험금의 지급사유",
+                    metadata={"doc_short": "자사_SOL운전자", "page_start": 73, "page_end": 74},
+                ),
+                Hit(
+                    id="actual-loss-noise",
+                    score=1.8,
+                    document="자동차보험에서 보상받은 의료비의 실손 처리 기준",
+                    metadata={"doc_short": "약관", "page_start": 36, "page_end": 36},
+                ),
+            ]
+            if "보험금의 청구" in text:
+                hits.insert(
+                    0,
+                    Hit(
+                        id="driver-claim-docs",
+                        score=5.0,
+                        document=(
+                            "자동차사고 부상치료지원금 특별약관 제3조(보험금의 청구) "
+                            "보험금을 청구할 때에는 청구서, 사고증명서, 신분증, "
+                            "자동차보험 보상처리확인서 또는 교통사고사실확인원을 제출해야 합니다."
+                        ),
+                        metadata={"doc_short": "자사_SOL운전자", "page_start": 74, "page_end": 74},
+                    ),
+                )
+            return hits[:top_k]
+
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        DriverVectorStore(),
+        DriverBM25(),
+        DummyLLM(),
+        top_k_dense=4,
+        top_k_bm25=4,
+        top_k_final=4,
+        reranker_enabled=False,
+    )
+
+    hits, debug = pipeline.retrieve_hits(
+        "자동차사고 부상치료지원금 담보를 청구하려 해. 필요한 서류를 알려줘.",
+        top_k=4,
+        return_debug=True,
+    )
+
+    assert hits[0].id == "driver-claim-docs"
+    assert debug is not None
+    assert debug.search_intent is not None
+    assert debug.search_intent.intent == "clause_detail_lookup"
+
+
 def test_expand_retrieval_query_for_drunk_injury() -> None:
     expanded = _expand_retrieval_query("술을 마신 상태에서 넘어져 상해를 입었습니다.")
 
@@ -552,6 +620,46 @@ def test_doc_filter_flows_to_vector_store_and_filters_bm25() -> None:
 
     assert vector_store.query_calls == [(12, ["심평원"])]
     assert all(hit.metadata.get("doc_short") == "심평원" for hit in hits)
+
+
+def test_merge_hits_preserving_order_dedupes_same_doc_page_text() -> None:
+    first = Hit(
+        id="driver-a",
+        score=1.0,
+        document="특정 외상성 뇌출혈 진단비 특별약관 제3조 진단확정 기준",
+        metadata={"doc_short": "자사_SOL운전자", "page_start": 71, "page_end": 71},
+    )
+    duplicated = Hit(
+        id="driver-b",
+        score=0.9,
+        document="특정 외상성 뇌출혈 진단비 특별약관 제3조 진단확정 기준",
+        metadata={"doc_short": "자사_SOL운전자", "page_start": 71, "page_end": 71},
+    )
+
+    merged = _merge_hits_preserving_order([first], [duplicated])
+
+    assert [hit.id for hit in merged] == ["driver-a"]
+
+
+def test_deterministic_guard_answers_clause_detail_when_context_contains_evidence() -> None:
+    chunk = make_chunk(
+        doc_short="자사_SOL운전자",
+        page_start=71,
+        text=(
+            "제3조(정의 및 진단확정) 특정 외상성 뇌출혈의 진단확정은 병원 또는 의원의 의사에 의해 내려져야 하며 "
+            "병력, 신경학적 검진과 함께 뇌 전산화단층촬영(CT), 자기공명영상(MRI) 등을 기초로 합니다."
+        ),
+    )
+
+    answer = _deterministic_guard_answer(
+        "특정 외상성 뇌출혈 진단비 특별약관에서 진단확정 기준을 알려줘",
+        [chunk],
+    )
+
+    assert answer is not None
+    assert "진단확정 기준" in answer
+    assert "CT" in answer
+    assert "MRI" in answer
 
 
 def test_reranker_receives_expanded_rrf_pool() -> None:

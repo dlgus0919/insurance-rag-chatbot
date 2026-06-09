@@ -3,6 +3,7 @@ import pytest
 from src.api import rag_service
 from src.api.rag_service import (
     build_formal_retrieval_query,
+    chunks_to_sources,
     extract_doc_filter,
     finalize_answer_for_question,
     formal_doc_filter,
@@ -119,6 +120,34 @@ def test_graph_payload_has_renderable_evidence_checks_panels_and_clarifications(
 def test_extract_doc_filter_deduplicates_and_normalizes() -> None:
     filters = {"doc_filter": ["약관", "표준약관", "약관", ""]}
     assert extract_doc_filter(filters) == ["약관", "표준약관"]
+
+
+def test_chunks_to_sources_deduplicates_same_doc_page_snippet() -> None:
+    first = Chunk(
+        id="driver-1",
+        text="특정 외상성 뇌출혈 진단비 특별약관 제3조 진단확정 기준",
+        metadata={
+            "pdf_filename": "운전자.pdf",
+            "doc_short": "자사_SOL운전자",
+            "page_start": 71,
+            "page_end": 71,
+        },
+    )
+    duplicate = Chunk(
+        id="driver-2",
+        text="특정 외상성 뇌출혈 진단비 특별약관 제3조 진단확정 기준",
+        metadata={
+            "pdf_filename": "운전자.pdf",
+            "doc_short": "자사_SOL운전자",
+            "page_start": 71,
+            "page_end": 71,
+        },
+    )
+
+    sources = chunks_to_sources([first, duplicate])
+
+    assert len(sources) == 1
+    assert sources[0]["chunk_id"] == "driver-1"
 
 
 def test_formal_doc_filter_merges_scope_and_category() -> None:
