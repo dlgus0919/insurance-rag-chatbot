@@ -160,7 +160,11 @@ def _validate_no_conflicts(base_concepts: list[dict[str, Any]], candidate_concep
                     continue
                 owner = aliases.get(normalized)
                 if owner and owner != concept_id:
-                    raise ValueError(f"alias conflict: {alias} maps to both {owner} and {concept_id}")
+                    message = f"alias conflict: {alias} maps to both {owner} and {concept_id}"
+                    if source == "base":
+                        warnings.append(f"base manifest existing {message}")
+                        continue
+                    raise ValueError(message)
                 aliases[normalized] = concept_id
 
             if source == "candidate" and not raw_aliases:

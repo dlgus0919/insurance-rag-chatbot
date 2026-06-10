@@ -110,3 +110,38 @@ def test_merge_approved_candidates_rejects_alias_conflict(tmp_path: Path) -> Non
             base_manifest_path=base_path,
             output_path=tmp_path / "concepts.active.json",
         )
+
+
+def test_merge_allows_existing_base_alias_conflict_as_warning(tmp_path: Path) -> None:
+    base_path = tmp_path / "concepts.json"
+    active_path = tmp_path / "concepts.active.json"
+    payload = {
+        "schema_version": "1.0",
+        "version": "base-test",
+        "concepts": [
+            {
+                "concept_id": "cond.one",
+                "canonical_name": "첫 조건",
+                "aliases": ["공통 별칭"],
+            },
+            {
+                "concept_id": "cond.two",
+                "canonical_name": "둘째 조건",
+                "aliases": ["공통 별칭"],
+            },
+        ],
+    }
+    base_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    candidate = OntologyCandidate(
+        candidate_id="reinforce",
+        concept_id="cond.one",
+        canonical_name="첫 조건",
+        candidate_aliases=["새 표현"],
+        properties={"candidate_type": "alias_or_expansion", "target_concept_id": "cond.one"},
+        status=APPROVED,
+    )
+
+    result = merge_approved_candidates([candidate], base_manifest_path=base_path, output_path=active_path)
+
+    assert result.merged_candidate_count == 1
+    assert result.warnings == ["base manifest existing alias conflict: 공통 별칭 maps to both cond.one and cond.two"]
