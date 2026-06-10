@@ -22,6 +22,9 @@ REJECTED = "rejected"
 APPLIED = "applied"
 VALID_STATUSES = {PENDING, APPROVED, HELD, REJECTED, APPLIED}
 VALID_DECISIONS = {"approve", "hold", "reject"}
+DEV_AUTO_APPROVAL_REVIEW_KEY = "codex_dev_review"
+DEV_AUTO_APPROVAL_RISK_FLAGS = {"dev_only", "dev_auto_approval"}
+DEV_AUTO_APPROVAL_ALLOWED_RISK_LEVELS = {"low", "dev_only"}
 
 
 def utc_now_iso() -> str:
@@ -69,6 +72,26 @@ def _string_list(value: Any) -> list[str]:
         if text and text not in result:
             result.append(text)
     return result
+
+
+def is_codex_development_auto_approvable(candidate: "OntologyCandidate") -> bool:
+    """Return whether a pending candidate is explicitly marked for dev-only Codex approval."""
+    if candidate.status != PENDING:
+        return False
+    if not candidate.source_evidence:
+        return False
+    if not DEV_AUTO_APPROVAL_RISK_FLAGS.intersection(candidate.risk_flags):
+        return False
+    review = candidate.properties.get(DEV_AUTO_APPROVAL_REVIEW_KEY)
+    if not isinstance(review, dict):
+        return False
+    return (
+        review.get("decision") == "approve"
+        and review.get("development_only") is True
+        and review.get("domain_fit") is True
+        and review.get("evidence_fit") is True
+        and str(review.get("risk_level") or "").strip() in DEV_AUTO_APPROVAL_ALLOWED_RISK_LEVELS
+    )
 
 
 @dataclass
@@ -293,6 +316,30 @@ class OntologyReviewStore:
                 reviewer=reviewer,
                 reviewer_type="codex_test_auto",
                 reason="test_candidate auto approval",
+            )
+        return selected
+
+    def auto_approve_codex_development_candidates(
+        self,
+        *,
+        reviewer: str = "codex-dev-auto",
+        dry_run: bool = False,
+    ) -> list[OntologyCandidate]:
+        candidates = self.load_candidates()
+        selected = [
+            candidate
+            for candidate in candidates
+            if is_codex_development_auto_approvable(candidate)
+        ]
+        if dry_run:
+            return selected
+        for candidate in selected:
+            self.decide(
+                candidate.candidate_id,
+                "approve",
+                reviewer=reviewer,
+                reviewer_type="codex_dev_auto",
+                reason="codex development-only domain review auto approval",
             )
         return selected
 

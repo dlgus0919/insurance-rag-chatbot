@@ -62,6 +62,67 @@ def test_auto_approve_test_candidates_excludes_production_candidates(tmp_path: P
     assert statuses["prod-cand"] == PENDING
 
 
+def test_auto_approve_codex_development_candidates_requires_dev_review_metadata(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.add_candidate(
+        OntologyCandidate(
+            candidate_id="dev-cand",
+            concept_id="cond.dev",
+            canonical_name="개발 검증 후보",
+            aliases=["개발검증후보"],
+            risk_flags=["dev_auto_approval"],
+            source_evidence=[
+                {
+                    "doc_short": "개발검증",
+                    "doc_name": "개발 검증 후보",
+                    "page": 1,
+                    "chunk_id": "dev-cand",
+                    "excerpt": "개발 단계 자동 승인 검증용 후보입니다.",
+                    "confidence": 1.0,
+                }
+            ],
+            properties={
+                "codex_dev_review": {
+                    "decision": "approve",
+                    "development_only": True,
+                    "domain_fit": True,
+                    "evidence_fit": True,
+                    "risk_level": "low",
+                    "reason": "development-only ontology pipeline validation",
+                }
+            },
+        )
+    )
+    store.add_candidate(
+        OntologyCandidate(
+            candidate_id="unreviewed-cand",
+            concept_id="cond.unreviewed",
+            canonical_name="검토 누락 후보",
+            aliases=["검토누락후보"],
+            risk_flags=["dev_auto_approval"],
+            source_evidence=[
+                {
+                    "doc_short": "개발검증",
+                    "doc_name": "개발 검증 후보",
+                    "page": 2,
+                    "chunk_id": "unreviewed-cand",
+                    "excerpt": "Codex 개발 검토 metadata가 없는 후보입니다.",
+                    "confidence": 1.0,
+                }
+            ],
+        )
+    )
+
+    selected = store.auto_approve_codex_development_candidates()
+
+    assert [candidate.candidate_id for candidate in selected] == ["dev-cand"]
+    statuses = {candidate.candidate_id: candidate.status for candidate in store.load_candidates()}
+    assert statuses["dev-cand"] == APPROVED
+    assert statuses["unreviewed-cand"] == PENDING
+    log_text = (tmp_path / "review_log.jsonl").read_text(encoding="utf-8")
+    assert '"reviewer_type": "codex_dev_auto"' in log_text
+
+
 def test_mark_approved_as_applied_preserves_applied_candidate_for_manifest(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.add_candidate(build_test_candidate("test-cand"))

@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.ontology.manifest_merge import ManifestMergeResult, merge_approved_candidates
+from src.ontology.candidate_display import format_candidate_for_practitioner
 from src.ontology.registry import ACTIVE_ONTOLOGY_MANIFEST, BASE_ONTOLOGY_MANIFEST
 from src.ontology.review_store import (
     APPROVED,
@@ -60,19 +61,7 @@ def _backup_file(path: Path, backup_dir: Path) -> Path | None:
 
 
 def _print_candidate(candidate: OntologyCandidate) -> None:
-    evidence = candidate.source_evidence[0] if candidate.source_evidence else {}
-    excerpt = str(evidence.get("excerpt") or "").replace("\n", " ").strip()
-    doc = str(evidence.get("doc_short") or evidence.get("doc_name") or "").strip()
-    page = str(evidence.get("page") or "").strip()
-    print(f"ID: {candidate.candidate_id}")
-    print(f"개념: {candidate.canonical_name} ({candidate.concept_id})")
-    print(f"타입: {candidate.node_type or '-'}")
-    print(f"상태: {candidate.status}")
-    print(f"테스트 후보: {'예' if candidate.test_candidate else '아니오'}")
-    print(f"별칭: {', '.join(candidate.aliases) if candidate.aliases else '-'}")
-    print(f"위험 플래그: {', '.join(candidate.risk_flags) if candidate.risk_flags else '-'}")
-    print(f"근거: {doc or '-'} {('p.' + page) if page else ''}")
-    print(f"발췌: {excerpt or '-'}")
+    print(format_candidate_for_practitioner(candidate))
 
 
 def _list_zenity_rows(candidates: list[OntologyCandidate]) -> None:
@@ -159,6 +148,11 @@ def main() -> int:
     parser.add_argument("--reviewer-type", default="practitioner", help="Reviewer type for audit log.")
     parser.add_argument("--reason", default="", help="Decision reason.")
     parser.add_argument("--auto-approve-test", action="store_true", help="Approve pending test_candidate=true candidates only.")
+    parser.add_argument(
+        "--auto-approve-dev",
+        action="store_true",
+        help="Approve pending development-only candidates with codex_dev_review approval metadata.",
+    )
     parser.add_argument("--apply", action="store_true", help="Generate active manifest from approved/applied candidates.")
     parser.add_argument("--rebuild-graph", action="store_true", help="Rebuild GraphDB after --apply.")
     parser.add_argument("--dry-run", action="store_true", help="Report planned operations without mutating files.")
@@ -216,6 +210,10 @@ def main() -> int:
     if args.auto_approve_test:
         selected = store.auto_approve_test_candidates(reviewer=args.reviewer, dry_run=args.dry_run)
         print(_json({"auto_approved_test_candidates": [candidate.candidate_id for candidate in selected], "dry_run": args.dry_run}))
+
+    if args.auto_approve_dev:
+        selected = store.auto_approve_codex_development_candidates(reviewer=args.reviewer, dry_run=args.dry_run)
+        print(_json({"auto_approved_dev_candidates": [candidate.candidate_id for candidate in selected], "dry_run": args.dry_run}))
 
     if args.apply:
         result = apply_reviews(store, rebuild_graph=args.rebuild_graph, dry_run=args.dry_run)

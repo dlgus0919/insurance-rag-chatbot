@@ -185,6 +185,24 @@ auto_approve_test_candidates() {
   run_cli --auto-approve-test --reviewer codex-test-auto >/dev/null
 }
 
+auto_approve_dev_candidates() {
+  if [[ "${ENABLE_ONTOLOGY_DEV_AUTO_APPROVAL:-false}" != "true" ]]; then
+    show_error "개발 자동 승인 비활성화" "ENABLE_ONTOLOGY_DEV_AUTO_APPROVAL=true 상태에서만 개발용 Codex 자동 승인을 실행할 수 있습니다."
+    exit 1
+  fi
+  if [[ "$DRY_RUN" == "1" ]]; then
+    run_cli --auto-approve-dev --dry-run
+    return 0
+  fi
+  if ! zenity --question \
+    --title="개발 후보 Codex 자동 승인" \
+    --width=760 \
+    --text="개발 단계 시험 용도로 명시 표시된 후보만 codex-dev-auto로 승인합니다.\n\n필수 조건: pending 상태, dev_only/dev_auto_approval risk flag, 원문 근거, properties.codex_dev_review 승인 metadata.\n\n운영 실무 승인 대체 용도로 사용하지 않습니다.\n계속하시겠습니까?" 2>/dev/null; then
+    return 0
+  fi
+  run_cli --auto-approve-dev --reviewer codex-dev-auto >/dev/null
+}
+
 main() {
   require_gui
   local count
@@ -214,6 +232,7 @@ main() {
     TRUE review "개념 승인 검토 시작" \
     FALSE skip "나중에 검토하고 앱 실행" \
     FALSE auto_test "테스트 후보 LLM/Codex 자동 승인" \
+    FALSE auto_dev "개발 후보 Codex 자동 승인" \
     FALSE cancel "취소" 2>/dev/null)" || exit 0
 
   case "$action" in
@@ -222,6 +241,9 @@ main() {
       ;;
     auto_test)
       auto_approve_test_candidates
+      ;;
+    auto_dev)
+      auto_approve_dev_candidates
       ;;
     skip|"")
       exit 0

@@ -167,6 +167,10 @@ print_choices() {
   vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
   ollama_model="$(detect_ollama_model)"
 
+  if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
+    printf 'ontology|review|%s\n' "$(ontology_pending_count)"
+  fi
+
   if [[ -n "$sglang_model" ]]; then
     printf 'current|sglang|%s\n' "$sglang_model"
   elif [[ -n "$vllm_model" ]]; then
@@ -291,7 +295,12 @@ choose_action() {
   local sglang_model="$2"
   local vllm_model="$3"
   local ollama_model="$4"
+  local ontology_pending_count="${5:-0}"
   local rows=()
+
+  if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
+    rows+=("FALSE" "ontology|review|${ontology_pending_count:-0}" "온톨로지 승인 검토" "승인 대기 ${ontology_pending_count:-0}건")
+  fi
 
   if [[ -n "$sglang_model" ]]; then
     rows+=("TRUE" "current|sglang|$sglang_model" "현재 실행 중인 SGLang 유지" "$sglang_model")
@@ -388,11 +397,12 @@ main() {
     show_error "설치 오류" "기동 wrapper가 없습니다.\n\n$APP_UP"
     exit 1
   }
+  local pending_ontology_count="0"
   if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
-    local pending_ontology_count
     pending_ontology_count="$(ontology_pending_count)"
-    if [[ "${pending_ontology_count:-0}" =~ ^[0-9]+$ && "$pending_ontology_count" -gt 0 ]]; then
+    if [[ "${INSURANCE_RAG_SKIP_ONTOLOGY_PREFLIGHT:-0}" != "1" && "${pending_ontology_count:-0}" =~ ^[0-9]+$ && "$pending_ontology_count" -gt 0 ]]; then
       "$ONTOLOGY_REVIEW_GUI" || exit "$?"
+      pending_ontology_count="$(ontology_pending_count)"
     fi
   fi
 
@@ -406,10 +416,15 @@ main() {
   ollama_model="$(detect_ollama_model)"
 
   local choice
-  choice="$(choose_action "$app_running" "$sglang_model" "$vllm_model" "$ollama_model")" || exit 0
+  choice="$(choose_action "$app_running" "$sglang_model" "$vllm_model" "$ollama_model" "$pending_ontology_count")" || exit 0
   [[ -n "$choice" ]] || exit 0
 
   IFS='|' read -r mode provider model <<<"$choice"
+  if [[ "$mode" == "ontology" ]]; then
+    "$ONTOLOGY_REVIEW_GUI" || exit "$?"
+    INSURANCE_RAG_SKIP_ONTOLOGY_PREFLIGHT=1 exec "$0"
+  fi
+
   local log_file
   if [[ "$mode" == "current" ]]; then
     log_file="$(run_with_progress "앱 기동 중" "현재 실행 중인 $provider 서버를 유지하고 앱을 준비합니다." "$APP_UP" --provider "$provider" --model "$model" --no-llm-switch)"

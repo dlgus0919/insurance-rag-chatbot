@@ -65,6 +65,34 @@ def test_merge_approved_candidates_rejects_duplicate_concept_id(tmp_path: Path) 
         )
 
 
+def test_merge_approved_reinforcement_candidate_updates_existing_concept(tmp_path: Path) -> None:
+    base_path = tmp_path / "concepts.json"
+    active_path = tmp_path / "concepts.active.json"
+    write_base_manifest(base_path)
+    candidate = OntologyCandidate(
+        candidate_id="reinforce",
+        concept_id="cond.base",
+        canonical_name="기존 조건",
+        node_type="ClaimCondition",
+        candidate_aliases=["새 표현"],
+        evidence_tags=["candidate:새표현"],
+        retrieval={"expansion_rules": [{"match_any": ["기존 조건"], "expansion_terms": ["새 표현"]}]},
+        properties={"candidate_type": "alias_or_expansion", "target_concept_id": "cond.base"},
+        status=APPROVED,
+    )
+
+    result = merge_approved_candidates([candidate], base_manifest_path=base_path, output_path=active_path)
+
+    payload = json.loads(active_path.read_text(encoding="utf-8"))
+    concept = payload["concepts"][0]
+    assert result.total_concept_count == 1
+    assert result.merged_candidate_count == 1
+    assert concept["candidate_aliases"] == ["새 표현"]
+    assert concept["evidence_tags"] == ["candidate:새표현"]
+    assert concept["retrieval"]["expansion_rules"][0]["expansion_terms"] == ["새 표현"]
+    assert concept["properties"]["approval_candidate_ids"] == ["reinforce"]
+
+
 def test_merge_approved_candidates_rejects_alias_conflict(tmp_path: Path) -> None:
     base_path = tmp_path / "concepts.json"
     write_base_manifest(base_path)
