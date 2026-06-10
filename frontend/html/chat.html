@@ -93,8 +93,6 @@
     <div class="mode-bar">
       <span class="mode-label">검색 모드</span>
       <button class="mode-tab active" type="button" data-mode="general">일반 질의</button>
-      <button class="mode-tab" type="button" data-mode="quick">퀵 코드 검색</button>
-      <button class="mode-tab" type="button" data-mode="formal">약관 정형 검색</button>
       <button class="mode-tab" type="button" data-mode="claim">보험금 계산</button>
     </div>
 
@@ -112,59 +110,6 @@
         <input type="radio" name="ocr-index" value="v1_v2_combined">
         <span>원본+보정본 OCR 통합</span>
       </label>
-    </div>
-
-    <div class="sub-panel" id="panel-quick">
-      <div class="panel-row">
-        <div class="p-field">
-          <label class="p-label">시술/수술명 또는 코드</label>
-          <input class="p-input" type="text" placeholder="예: 백내장 / Q15.0 / 수정체유화술"/>
-        </div>
-        <div style="padding-bottom:2px;">
-          <label class="check-item"><input id="quick-include-summary" type="checkbox" checked> 분류.점수.산정지침 요약</label>
-          <label class="check-item"><input id="quick-include-coverage" type="checkbox" checked> 실손 약관 기준 보상가능 여부 검색</label>
-        </div>
-        <button class="btn-sm" type="button" data-action="send-quick">검색</button>
-      </div>
-    </div>
-
-    <div class="sub-panel" id="panel-formal">
-      <div class="scenario-chips">
-        <span class="p-label" style="padding-top:3px;flex-shrink:0;">시나리오</span>
-        <div class="scenario-chip active">3대비급여</div>
-        <div class="scenario-chip" data-toggle-active="true">실손</div>
-        <div class="scenario-chip" data-toggle-active="true">암보험</div>
-      </div>
-      <div class="formal-radios">
-        <label class="radio-item"><input type="radio" name="ftype" value="보상가능 여부 판정" checked> 보상가능 여부 판정</label>
-        <label class="radio-item"><input type="radio" name="ftype" value="약관 조문 검색"> 약관 조문 검색</label>
-        <label class="radio-item"><input type="radio" name="ftype" value="키워드/시술명 검색"> 키워드/시술명 검색</label>
-      </div>
-      <div class="panel-row">
-        <div class="p-field" style="max-width:200px;">
-          <label class="p-label">진단코드 또는 시술명</label>
-          <input class="p-input" type="text" placeholder="예: N39.3 / 요로감염"/>
-        </div>
-        <div class="p-field">
-          <label class="p-label">보장종목</label>
-          <div class="formal-tags">
-            <div class="tag-chip">질병급여 <span class="rm" data-action="remove-tag">×</span></div>
-            <div class="tag-chip">질병비급여 <span class="rm" data-action="remove-tag">×</span></div>
-            <div class="tag-chip">3대비급여 <span class="rm" data-action="remove-tag">×</span></div>
-          </div>
-        </div>
-        <div class="p-field" style="grid-column:1 / -1;">
-          <label class="p-label">상황 메모 <span style="color:var(--gray);font-weight:400;">(옵션)</span></label>
-          <textarea
-            class="p-input"
-            id="formal-memo"
-            rows="2"
-            placeholder="추가 상황이나 참고사항을 자유롭게 입력하세요 (예: 입원 7일 초과, 3세대 실손 가입)"
-            style="resize:vertical;min-height:52px;"
-          ></textarea>
-        </div>
-        <button class="btn-sm" type="button" data-action="send-formal">검색</button>
-      </div>
     </div>
 
     <div class="sub-panel" id="panel-claim">
