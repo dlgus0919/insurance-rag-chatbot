@@ -1,0 +1,76 @@
+from src.rag.query_router import resolve_query_route
+
+
+def test_general_explanation_stays_on_general_strategy() -> None:
+    route = resolve_query_route("보험계약의 고지의무를 쉽게 설명해줘")
+
+    assert route.route == "general"
+    assert route.intent == "general_explanation"
+
+
+def test_quick_code_question_reuses_quickcode_strategy() -> None:
+    route = resolve_query_route("식도조루술 수가 코드와 점수를 알려줘")
+
+    assert route.route == "quickcode"
+    assert route.filters["include_summary"] is True
+    assert route.filters["include_coverage"] is False
+
+
+def test_quick_code_with_coverage_reuses_combined_quickcode_strategy() -> None:
+    route = resolve_query_route("식도조루술 수가 코드와 실손 보상 여부를 알려줘")
+
+    assert route.route == "quickcode"
+    assert route.filters["include_summary"] is True
+    assert route.filters["include_coverage"] is True
+
+
+def test_simple_coverage_question_keeps_general_graph_strategy() -> None:
+    route = resolve_query_route("도수치료 보상돼?")
+
+    assert route.route == "general"
+
+
+def test_coverage_question_reuses_formal_strategy_without_forcing_product_scope() -> None:
+    route = resolve_query_route("N39.3 진단코드는 4세대 실손 질병급여에서 보상 가능한가요?")
+
+    assert route.route == "formal"
+    assert route.formal_mode == "coverage_judgment"
+    assert route.filters["search_type"] == "보상가능 여부 판정"
+    assert "product_category" not in route.filters
+    assert route.coverage_topics == ["질병급여"]
+
+
+def test_clause_question_reuses_formal_clause_strategy() -> None:
+    route = resolve_query_route("실손보험 약관 제12조와 별표 내용을 찾아줘")
+
+    assert route.route == "formal"
+    assert route.formal_mode == "clause_lookup"
+    assert route.article_number == "12"
+    assert route.include_appendix is True
+    assert route.filters["search_type"] == "약관 조문 검색"
+
+
+def test_clause_question_does_not_force_a_product_document_scope() -> None:
+    route = resolve_query_route(
+        "자동차사고 부상치료지원금 담보를 청구하려고 합니다. 필요한 서류를 알려주세요."
+    )
+
+    assert route.route == "formal"
+    assert route.formal_mode == "clause_lookup"
+    assert "product_category" not in route.filters
+
+
+def test_general_surgery_grade_question_keeps_general_graph_strategy() -> None:
+    route = resolve_query_route("기관지 식도루 폐쇄술의 신1-5종 수술 종수는?")
+
+    assert route.route == "general"
+
+
+def test_explicit_scope_filter_is_preserved() -> None:
+    route = resolve_query_route(
+        "백내장 수술 코드 알려줘",
+        {"doc_filter": ["심평원"]},
+    )
+
+    assert route.route == "quickcode"
+    assert route.filters["doc_filter"] == ["심평원"]

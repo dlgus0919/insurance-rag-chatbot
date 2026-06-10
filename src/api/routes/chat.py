@@ -30,6 +30,7 @@ from src.api.rag_service import (
 from src.api.schemas.chat import ChatRequest
 from src.auth.users import User
 from src.rag.pipeline import DebugInfo
+from src.rag.query_router import resolve_query_route
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -71,20 +72,28 @@ async def chat_stream(
             yield _sse("status", "searching")
             pipeline = _get_pipeline(selected_model, chat_request.top_k, effective_index_mode)
             system_prompt = SYSTEM_PROMPT
+            resolved_mode = chat_request.mode
+            effective_filters = dict(chat_request.filters or {})
+            resolved_intent = None
+            if chat_request.mode == "general":
+                route = resolve_query_route(chat_request.query, effective_filters)
+                resolved_mode = route.route
+                effective_filters = route.filters
+                resolved_intent = route.intent
             doc_filter = None
-            if chat_request.mode == "quickcode":
+            if resolved_mode == "quickcode":
                 chunks, sources, prompt, system_prompt, doc_filter = await prepare_quickcode_context(
                     pipeline,
                     chat_request.query,
-                    chat_request.filters,
+                    effective_filters,
                 )
-            elif chat_request.mode == "formal":
+            elif resolved_mode == "formal":
                 chunks, sources, prompt, doc_filter = await prepare_formal_context(
                     pipeline,
                     chat_request.query,
                     chat_request.top_k,
                     history,
-                    chat_request.filters,
+                    effective_filters,
                     chat_request.memo,
                 )
             else:
@@ -93,7 +102,7 @@ async def chat_stream(
                     chat_request.query,
                     chat_request.top_k,
                     history,
-                    chat_request.filters,
+                    effective_filters,
                 )
             yield _sse("sources", sources)
             if graph_payload is not None:
@@ -156,9 +165,11 @@ async def chat_stream(
                 detail={
                     "model": selected_model,
                     "mode": chat_request.mode,
+                    "resolved_route": resolved_mode,
+                    "resolved_intent": resolved_intent,
                     "search_type": (
-                        (chat_request.filters or {}).get("search_type")
-                        if chat_request.mode == "formal"
+                        effective_filters.get("search_type")
+                        if resolved_mode == "formal"
                         else None
                     ),
                     "top_k": chat_request.top_k,
@@ -185,7 +196,7 @@ async def chat_stream(
                         source_count=len(sources),
                         warnings=warnings,
                         elapsed_ms=round((time.perf_counter() - started) * 1000, 2),
-                    ) if chat_request.mode == "general" else None,
+                    ) if resolved_mode == "general" else None,
                     "request_id": getattr(getattr(request, "state", None), "request_id", None),
                 },
             )

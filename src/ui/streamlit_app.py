@@ -41,6 +41,7 @@ from src.rag.insurance_form import (
 )
 from src.rag.pipeline import DebugInfo, RagPipeline, _hit_to_chunk
 from src.rag.quick_code import QUICK_CODE_TOP_K, generate_quick_code_answer, retrieve_quick_code_chunks
+from src.rag.query_router import resolve_query_route
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
 from src.retrieval.index_mode import resolve_index_paths
@@ -63,7 +64,7 @@ from src.utils.logger import (
 )
 
 _DOC_SHORT_TO_FILENAME: dict[str, str] = {source.doc_short: source.path.name for source in config.PDF_SOURCES}
-SEARCH_MODES = ["일반 질의", "퀵 코드 검색", "약관 정형 검색", "보험금 계산"]
+SEARCH_MODES = ["일반 질의", "보험금 계산"]
 INSURANCE_SUB_MODES = {
     "보상가능 여부 판정": "coverage_judgment",
     "약관 조문 검색": "clause_lookup",
@@ -930,10 +931,12 @@ def _handle_quick_code(
     temperature: float,
     session_id: str,
     selected_docs: list[str] | None,
+    display_question: str | None = None,
+    log_mode: str = "quick_code",
 ) -> None:
     """퀵 코드 검색 폼 제출을 처리한다."""
 
-    question = f"퀵 코드 검색: {procedure_name}"
+    question = display_question or f"퀵 코드 검색: {procedure_name}"
     options = {"summary": include_summary, "coverage": include_coverage}
     st.session_state.messages.append({"role": "user", "content": question})
     st.session_state["last_debug"] = None
@@ -941,7 +944,7 @@ def _handle_quick_code(
     _log(
         EVENT_QUESTION,
         _build_question_log_details(
-            mode="quick_code",
+            mode=log_mode,
             model=model,
             top_k=6,
             temperature=0.0,
@@ -998,7 +1001,7 @@ def _handle_quick_code(
     _log(
         EVENT_ANSWER,
         _build_answer_log_details(
-            mode="quick_code",
+            mode=log_mode,
             model=model,
             selected_docs=applied_doc_filter,
             answer=answer,
@@ -1027,11 +1030,13 @@ def _handle_insurance_form(
     model: str,
     session_id: str,
     selected_docs: list[str] | None,
+    display_question: str | None = None,
+    log_mode: str = "insurance_form",
 ) -> None:
     """약관 정형 검색 폼 제출을 처리한다."""
 
     sub_mode_label = {value: key for key, value in INSURANCE_SUB_MODES.items()}[form.mode]
-    question = f"약관 정형 검색({sub_mode_label}): {form.primary}"
+    question = display_question or f"약관 정형 검색({sub_mode_label}): {form.primary}"
     applied_doc_filter = [] if selected_docs is None else list(dict.fromkeys(["약관"] + selected_docs))
     log_extra = {
         "sub_mode": form.mode,
@@ -1043,7 +1048,7 @@ def _handle_insurance_form(
     _log(
         EVENT_QUESTION,
         _build_question_log_details(
-            mode="insurance_form",
+            mode=log_mode,
             model=model,
             top_k=8,
             temperature=0.1,
@@ -1095,7 +1100,7 @@ def _handle_insurance_form(
     _log(
         EVENT_ANSWER,
         _build_answer_log_details(
-            mode="insurance_form",
+            mode=log_mode,
             model=model,
             selected_docs=applied_doc_filter,
             answer=answer,
@@ -1624,54 +1629,44 @@ def main() -> None:
         render_claim_calculation_panel(model, get_pipeline_or_show_error, session_id)
         return
 
-    if search_mode == "약관 정형 검색":
-        form, submitted = render_insurance_form_panel()
-        if submitted:
-            if form is None or not form.primary:
-                st.warning("검색어를 입력해주세요.")
-                return
-            if form.mode == "coverage_judgment" and not form.coverage_topics:
-                st.warning("보장종목을 1개 이상 선택해주세요.")
-                return
-            active_pipeline = get_pipeline_or_show_error()
-            if active_pipeline is None:
-                return
-            _handle_insurance_form(form, active_pipeline, model, session_id, None)
-        return
-
-    if search_mode == "퀵 코드 검색":
-        with st.form("quick_code_form", clear_on_submit=False):
-            procedure_name = st.text_input("시술/수술명", placeholder="예: 식도조루술")
-            col_a, col_b = st.columns(2)
-            with col_a:
-                opt_summary = st.checkbox("분류·점수·산정지침 요약", value=True)
-            with col_b:
-                opt_coverage = st.checkbox("실손 약관 기준 보상가능 여부", value=False)
-            submitted = st.form_submit_button("코드 검색", type="primary", use_container_width=True)
-
-        if submitted:
-            if not procedure_name.strip():
-                st.warning("시술/수술명을 입력해주세요.")
-                return
-            active_pipeline = get_pipeline_or_show_error()
-            if active_pipeline is None:
-                return
-            _handle_quick_code(
-                procedure_name.strip(),
-                opt_summary,
-                opt_coverage,
-                active_pipeline,
-                model,
-                temperature,
-                session_id,
-                None,
-            )
-        return
-
     question = st.chat_input("질문을 입력하세요")
     if question:
         active_pipeline = get_pipeline_or_show_error()
         if active_pipeline is not None:
+            route = resolve_query_route(question)
+            if route.route == "quickcode":
+                _handle_quick_code(
+                    question,
+                    bool(route.filters.get("include_summary", True)),
+                    bool(route.filters.get("include_coverage", False)),
+                    active_pipeline,
+                    model,
+                    temperature,
+                    session_id,
+                    None,
+                    display_question=question,
+                    log_mode="general",
+                )
+                return
+            if route.route == "formal":
+                coverage_topics = route.coverage_topics or list(COVERAGE_TOPICS)
+                form = InsuranceFormInput(
+                    mode=route.formal_mode or "coverage_judgment",
+                    primary=question,
+                    coverage_topics=coverage_topics,
+                    article_number=route.article_number,
+                    include_appendix=route.include_appendix,
+                )
+                _handle_insurance_form(
+                    form,
+                    active_pipeline,
+                    model,
+                    session_id,
+                    None,
+                    display_question=question,
+                    log_mode="general",
+                )
+                return
             _log(
                 EVENT_QUESTION,
                 _build_question_log_details(
