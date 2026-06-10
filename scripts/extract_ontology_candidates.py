@@ -33,6 +33,17 @@ def _json(payload: object) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
 
 
+def mark_candidates_as_test(candidates: list[object]) -> None:
+    """Mark generated candidates as development test candidates by explicit CLI opt-in."""
+    for candidate in candidates:
+        candidate.test_candidate = True
+        candidate.properties = dict(candidate.properties)
+        extraction = dict(candidate.properties.get("extraction") or {})
+        extraction["marked_test_candidate"] = True
+        extraction["test_candidate_reason"] = "explicit --mark-test-candidates"
+        candidate.properties["extraction"] = extraction
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Extract pending ontology review candidates from project data.")
     parser.add_argument("--source", action="append", default=[], help="Processed chunk JSONL source. Can be repeated.")
@@ -54,6 +65,11 @@ def main() -> int:
     parser.add_argument("--llm-base-url", default=None)
     parser.add_argument("--llm-timeout", type=int, default=1800)
     parser.add_argument("--replace-existing", action="store_true", help="Replace existing candidates with the same id.")
+    parser.add_argument(
+        "--mark-test-candidates",
+        action="store_true",
+        help="Mark generated candidates as test_candidate=true for development auto-approval only.",
+    )
     args = parser.parse_args()
 
     candidate_policy = load_candidate_extraction_policy(args.candidate_policy)
@@ -92,6 +108,8 @@ def main() -> int:
             extraction_policy=candidate_policy,
             review_policy=review_policy,
         )
+        if args.mark_test_candidates:
+            mark_candidates_as_test(result.candidates)
         saved = 0
         skipped_existing: list[str] = []
         if not args.dry_run:
@@ -114,6 +132,7 @@ def main() -> int:
                     "saved_count": saved,
                     "skipped_existing": skipped_existing,
                     "warnings": result.warnings,
+                    "mark_test_candidates": args.mark_test_candidates,
                     "policy_validation": policy_validation,
                     "llm": {
                         "mode": llm_config.llm,
