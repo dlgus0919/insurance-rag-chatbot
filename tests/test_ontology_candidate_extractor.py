@@ -59,5 +59,8 @@ def test_extract_reinforcement_candidates_from_processed_chunks(tmp_path: Path) 
     assert candidate.properties["target_concept_id"] == "cond.traffic_injury"
     assert "display" in candidate.properties
     assert candidate.properties["codex_dev_review"]["decision"] == "approve"
+    assert candidate.properties["codex_dev_review"]["policy_id"] == "ontology-review-default"
+    assert candidate.properties["extraction"]["policy_id"] == "candidate-extraction-default"
+    assert candidate.properties["extraction"]["policy_version"] == "2026-06-10"
     assert candidate.risk_flags == ["dev_auto_approval"]
     assert any("교통 사고" in item or "교통상해" in item for item in candidate.candidate_aliases)

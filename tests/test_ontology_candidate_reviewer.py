@@ -16,6 +16,9 @@ def test_dev_review_approves_low_risk_evidence_backed_candidate() -> None:
     assert review["domain_fit"] is True
     assert review["evidence_fit"] is True
     assert review["risk_level"] == "low"
+    assert review["policy_id"] == "ontology-review-default"
+    assert review["policy_version"] == "2026-06-10"
+    assert review["reason_codes"] == ["low_risk_evidence_backed"]
 
 
 def test_dev_review_holds_payment_logic_or_unsupported_candidates() -> None:
@@ -28,6 +31,7 @@ def test_dev_review_holds_payment_logic_or_unsupported_candidates() -> None:
     assert review["decision"] == "hold"
     assert review["risk_level"] == "medium"
     assert "자동 승인 금지" in review["reason"]
+    assert "prohibited_candidate_type" in review["reason_codes"]
 
 
 def test_dev_review_holds_expression_without_target_overlap() -> None:
@@ -40,6 +44,7 @@ def test_dev_review_holds_expression_without_target_overlap() -> None:
 
     assert review["decision"] == "hold"
     assert "기존 concept 표현" in review["reason"]
+    assert "target_overlap_missing" in review["reason_codes"]
 
 
 def test_dev_review_holds_scope_condition_terms() -> None:
@@ -52,6 +57,7 @@ def test_dev_review_holds_scope_condition_terms() -> None:
 
     assert review["decision"] == "hold"
     assert "지급/면책/감액/한도" in review["reason"]
+    assert "risk_term_guardrail" in review["reason_codes"]
 
 
 def test_dev_review_holds_payment_or_coverage_scope_terms_in_alias_candidate() -> None:

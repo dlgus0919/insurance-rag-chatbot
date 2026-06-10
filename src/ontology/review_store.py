@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.ontology.policy import OntologyReviewPolicy, load_review_policy
 from src.ontology.registry import ONTOLOGY_DIR
 
 
@@ -23,8 +24,6 @@ APPLIED = "applied"
 VALID_STATUSES = {PENDING, APPROVED, HELD, REJECTED, APPLIED}
 VALID_DECISIONS = {"approve", "hold", "reject"}
 DEV_AUTO_APPROVAL_REVIEW_KEY = "codex_dev_review"
-DEV_AUTO_APPROVAL_RISK_FLAGS = {"dev_only", "dev_auto_approval"}
-DEV_AUTO_APPROVAL_ALLOWED_RISK_LEVELS = {"low", "dev_only"}
 
 
 def utc_now_iso() -> str:
@@ -74,23 +73,27 @@ def _string_list(value: Any) -> list[str]:
     return result
 
 
-def is_codex_development_auto_approvable(candidate: "OntologyCandidate") -> bool:
+def is_codex_development_auto_approvable(candidate: "OntologyCandidate", policy: OntologyReviewPolicy | None = None) -> bool:
     """Return whether a pending candidate is explicitly marked for dev-only Codex approval."""
-    if candidate.status != PENDING:
+    review_policy = policy or load_review_policy()
+    auto_approval = review_policy.auto_approval
+    if auto_approval.require_pending_status and candidate.status != PENDING:
         return False
-    if not candidate.source_evidence:
+    if auto_approval.require_source_evidence and not candidate.source_evidence:
         return False
-    if not DEV_AUTO_APPROVAL_RISK_FLAGS.intersection(candidate.risk_flags):
+    if auto_approval.require_test_candidate and candidate.test_candidate is not True:
+        return False
+    if auto_approval.require_dev_risk_flag and not set(auto_approval.risk_flags).intersection(candidate.risk_flags):
         return False
     review = candidate.properties.get(DEV_AUTO_APPROVAL_REVIEW_KEY)
     if not isinstance(review, dict):
         return False
     return (
         review.get("decision") == "approve"
-        and review.get("development_only") is True
+        and (not auto_approval.development_only or review.get("development_only") is True)
         and review.get("domain_fit") is True
         and review.get("evidence_fit") is True
-        and str(review.get("risk_level") or "").strip() in DEV_AUTO_APPROVAL_ALLOWED_RISK_LEVELS
+        and str(review.get("risk_level") or "").strip() in set(auto_approval.allowed_risk_levels)
     )
 
 
@@ -324,12 +327,14 @@ class OntologyReviewStore:
         *,
         reviewer: str = "codex-dev-auto",
         dry_run: bool = False,
+        policy: OntologyReviewPolicy | None = None,
     ) -> list[OntologyCandidate]:
+        review_policy = policy or load_review_policy()
         candidates = self.load_candidates()
         selected = [
             candidate
             for candidate in candidates
-            if is_codex_development_auto_approvable(candidate)
+            if is_codex_development_auto_approvable(candidate, review_policy)
         ]
         if dry_run:
             return selected

@@ -17,6 +17,7 @@ from src.ontology.candidate_extractor import (
     load_processed_chunks,
 )
 from src.ontology.llm_batch import LlmBatchConfig, maybe_start_llm_server, maybe_stop_llm_server
+from src.ontology.policy import load_candidate_extraction_policy, load_review_policy, validate_policy_files
 from src.ontology.registry import BASE_ONTOLOGY_MANIFEST
 from src.ontology.review_store import DEFAULT_CANDIDATES_PATH, OntologyReviewStore, utc_now_iso
 
@@ -41,7 +42,10 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="Print candidates without writing candidates.jsonl.")
     parser.add_argument("--limit", type=int, default=100, help="Maximum candidates to generate.")
     parser.add_argument("--source-limit", type=int, default=2000, help="Maximum source chunks/evidence rows to scan.")
-    parser.add_argument("--candidate-type", default="alias_or_expansion", help="Candidate type to generate in this MVP.")
+    parser.add_argument("--candidate-type", default=None, help="Candidate type to generate in this MVP.")
+    parser.add_argument("--candidate-policy", default=None, help="Candidate extraction policy JSON path.")
+    parser.add_argument("--review-policy", default=None, help="Ontology review policy JSON path.")
+    parser.add_argument("--validate-policies", action="store_true", help="Validate ontology policy files before extraction.")
     parser.add_argument("--template-only", action="store_true", help="Generate display metadata without LLM calls.")
     parser.add_argument("--llm", choices=["auto", "none", "sglang", "vllm"], default="none")
     parser.add_argument("--model", default="qwen3-next-80b-a3b-instruct-fp8")
@@ -52,7 +56,16 @@ def main() -> int:
     parser.add_argument("--replace-existing", action="store_true", help="Replace existing candidates with the same id.")
     args = parser.parse_args()
 
-    if args.candidate_type != "alias_or_expansion":
+    candidate_policy = load_candidate_extraction_policy(args.candidate_policy)
+    review_policy = load_review_policy(args.review_policy)
+    policy_validation = None
+    if args.validate_policies:
+        policy_validation = validate_policy_files(
+            candidate_policy_path=args.candidate_policy,
+            review_policy_path=args.review_policy,
+        )
+    candidate_type = args.candidate_type or candidate_policy.default_reinforcement_type
+    if candidate_type != "alias_or_expansion":
         raise SystemExit("Phase 5 MVP currently supports --candidate-type alias_or_expansion only")
 
     sources = [Path(path) for path in args.source] or DEFAULT_SOURCES
@@ -75,6 +88,9 @@ def main() -> int:
             chunks=chunks,
             extraction_run_id=f"ontology-candidate-extract-{utc_now_iso()}",
             candidate_limit=args.limit,
+            candidate_type=candidate_type,
+            extraction_policy=candidate_policy,
+            review_policy=review_policy,
         )
         saved = 0
         skipped_existing: list[str] = []
@@ -98,6 +114,7 @@ def main() -> int:
                     "saved_count": saved,
                     "skipped_existing": skipped_existing,
                     "warnings": result.warnings,
+                    "policy_validation": policy_validation,
                     "llm": {
                         "mode": llm_config.llm,
                         "selected_provider": selection.provider if selection else None,

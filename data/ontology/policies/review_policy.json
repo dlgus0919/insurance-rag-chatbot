@@ -1,0 +1,107 @@
+{
+  "schema_version": "1.0",
+  "policy_id": "ontology-review-default",
+  "version": "2026-06-10",
+  "low_risk_candidate_types": [
+    "alias_or_expansion",
+    "evidence_tag",
+    "search_query_expansion"
+  ],
+  "prohibited_auto_approval_types": [
+    "exclusion_rule",
+    "payment_logic",
+    "deductible_rule",
+    "benefit_limit",
+    "coordination_rule",
+    "coverage_decision_edge"
+  ],
+  "prohibited_risk_terms": [
+    "면책",
+    "부지급",
+    "감액",
+    "공제",
+    "한도",
+    "지급 제외",
+    "보험금",
+    "보험",
+    "담보",
+    "지급",
+    "보상",
+    "보상하지",
+    "보장",
+    "급여",
+    "비급여",
+    "제외",
+    "포함",
+    "한함",
+    "조건",
+    "대상",
+    "특약",
+    "가입",
+    "계약",
+    "피보험",
+    "한정",
+    "위반",
+    "청구권",
+    "간주",
+    "자동차"
+  ],
+  "unsafe_auto_approval_fragments": [
+    "상대가치",
+    "분류번호",
+    "요양급여",
+    "의료급여",
+    "질병군",
+    "진단적",
+    "검사결과",
+    "목록표",
+    "일반원칙",
+    "위한"
+  ],
+  "expression_shape": {
+    "min_length": 3,
+    "max_length": 18,
+    "allow_digits": false,
+    "allow_ascii_letters": false,
+    "max_terms": 3,
+    "blocked_prefixes": [
+      "및 ",
+      "또는 ",
+      "은 ",
+      "는 ",
+      "을 ",
+      "를 ",
+      "에 ",
+      "에서 "
+    ],
+    "blocked_suffixes": [
+      "을",
+      "를",
+      "은",
+      "는",
+      "이",
+      "가",
+      "에",
+      "로",
+      "으로",
+      "와",
+      "과"
+    ]
+  },
+  "auto_approval": {
+    "require_pending_status": true,
+    "require_source_evidence": true,
+    "require_test_candidate": true,
+    "require_dev_risk_flag": true,
+    "require_target_overlap": true,
+    "development_only": true,
+    "allowed_risk_levels": [
+      "low",
+      "dev_only"
+    ],
+    "risk_flags": [
+      "dev_only",
+      "dev_auto_approval"
+    ]
+  }
+}

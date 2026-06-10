@@ -1,0 +1,85 @@
+{
+  "schema_version": "1.0",
+  "policy_id": "candidate-extraction-default",
+  "version": "2026-06-10",
+  "domain_keywords": [
+    "상해",
+    "질병",
+    "진단",
+    "수술",
+    "입원",
+    "통원",
+    "치료",
+    "담보",
+    "특약",
+    "보장",
+    "비급여",
+    "급여",
+    "본인부담",
+    "표준코드",
+    "EDI",
+    "교통사고",
+    "운전자",
+    "자동차",
+    "오토바이",
+    "서류"
+  ],
+  "stop_phrases": [
+    "보험",
+    "약관",
+    "보장",
+    "담보",
+    "상해",
+    "질병",
+    "진단",
+    "수술",
+    "입원",
+    "통원",
+    "치료",
+    "비급여",
+    "급여",
+    "EDI",
+    "입원료",
+    "목적",
+    "술"
+  ],
+  "generic_table_terms": [
+    "급여 상대가치점수",
+    "비급여 목록",
+    "비급여 목록표",
+    "요양급여의 적용기준",
+    "분류번호",
+    "코 드",
+    "점 수",
+    "일반원칙"
+  ],
+  "noise_fragments": [
+    "상대가치",
+    "요양급여",
+    "의료급여",
+    "질병군",
+    "분류번호",
+    "점수",
+    "산정",
+    "결정기준",
+    "승인",
+    "일반원칙",
+    "주진단",
+    "수술부위"
+  ],
+  "table_noise_markers": [
+    "목록표",
+    "상대가치점수",
+    "일반원칙"
+  ],
+  "expression_shape": {
+    "min_length": 3,
+    "max_length": 18,
+    "allow_digits": false,
+    "allow_ascii_letters": false,
+    "max_terms": 3
+  },
+  "candidate_types": {
+    "default_reinforcement_type": "alias_or_expansion"
+  }
+}

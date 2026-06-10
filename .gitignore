@@ -26,6 +26,10 @@ assets.zip
 
 # data 산출물은 기본 제외하되, 향후 단계 표준 디렉토리만 보존한다.
 data/*
+!data/ontology/
+data/ontology/*
+!data/ontology/policies/
+!data/ontology/policies/*.json
 !data/extracted/
 data/extracted/**
 !data/extracted/.gitkeep

@@ -91,6 +91,7 @@ def test_auto_approve_codex_development_candidates_requires_dev_review_metadata(
                     "reason": "development-only ontology pipeline validation",
                 }
             },
+            test_candidate=True,
         )
     )
     store.add_candidate(
@@ -121,6 +122,45 @@ def test_auto_approve_codex_development_candidates_requires_dev_review_metadata(
     assert statuses["unreviewed-cand"] == PENDING
     log_text = (tmp_path / "review_log.jsonl").read_text(encoding="utf-8")
     assert '"reviewer_type": "codex_dev_auto"' in log_text
+
+
+def test_auto_approve_codex_development_candidates_requires_test_candidate_flag(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.add_candidate(
+        OntologyCandidate(
+            candidate_id="prod-dev-cand",
+            concept_id="cond.prod_dev",
+            canonical_name="운영 개발 후보",
+            aliases=["운영개발후보"],
+            risk_flags=["dev_auto_approval"],
+            source_evidence=[
+                {
+                    "doc_short": "개발검증",
+                    "doc_name": "개발 검증 후보",
+                    "page": 1,
+                    "chunk_id": "prod-dev-cand",
+                    "excerpt": "개발 자동 승인 metadata는 있으나 test_candidate가 아닙니다.",
+                    "confidence": 1.0,
+                }
+            ],
+            properties={
+                "codex_dev_review": {
+                    "decision": "approve",
+                    "development_only": True,
+                    "domain_fit": True,
+                    "evidence_fit": True,
+                    "risk_level": "low",
+                    "reason": "development-only ontology pipeline validation",
+                }
+            },
+            test_candidate=False,
+        )
+    )
+
+    selected = store.auto_approve_codex_development_candidates()
+
+    assert selected == []
+    assert store.load_candidates()[0].status == PENDING
 
 
 def test_mark_approved_as_applied_preserves_applied_candidate_for_manifest(tmp_path: Path) -> None:

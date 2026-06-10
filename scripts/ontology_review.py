@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
 
 from src.ontology.manifest_merge import ManifestMergeResult, merge_approved_candidates
 from src.ontology.candidate_display import format_candidate_for_practitioner
+from src.ontology.policy import load_review_policy
 from src.ontology.registry import ACTIVE_ONTOLOGY_MANIFEST, BASE_ONTOLOGY_MANIFEST
 from src.ontology.review_store import (
     APPROVED,
@@ -148,6 +149,8 @@ def main() -> int:
     parser.add_argument("--reviewer-type", default="practitioner", help="Reviewer type for audit log.")
     parser.add_argument("--reason", default="", help="Decision reason.")
     parser.add_argument("--auto-approve-test", action="store_true", help="Approve pending test_candidate=true candidates only.")
+    parser.add_argument("--review-policy", default=None, help="Ontology review policy JSON path.")
+    parser.add_argument("--validate-policy", action="store_true", help="Validate the ontology review policy before running.")
     parser.add_argument(
         "--auto-approve-dev",
         action="store_true",
@@ -159,6 +162,20 @@ def main() -> int:
     args = parser.parse_args()
 
     store = OntologyReviewStore()
+    review_policy = load_review_policy(args.review_policy) if args.validate_policy or args.auto_approve_dev else None
+
+    if args.validate_policy and review_policy:
+        print(
+            _json(
+                {
+                    "review_policy": {
+                        "policy_id": review_policy.policy_id,
+                        "version": review_policy.version,
+                    },
+                    "valid": True,
+                }
+            )
+        )
 
     if args.seed_test_candidate:
         candidate = build_test_candidate()
@@ -212,7 +229,11 @@ def main() -> int:
         print(_json({"auto_approved_test_candidates": [candidate.candidate_id for candidate in selected], "dry_run": args.dry_run}))
 
     if args.auto_approve_dev:
-        selected = store.auto_approve_codex_development_candidates(reviewer=args.reviewer, dry_run=args.dry_run)
+        selected = store.auto_approve_codex_development_candidates(
+            reviewer=args.reviewer,
+            dry_run=args.dry_run,
+            policy=review_policy,
+        )
         print(_json({"auto_approved_dev_candidates": [candidate.candidate_id for candidate in selected], "dry_run": args.dry_run}))
 
     if args.apply:

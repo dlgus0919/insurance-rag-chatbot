@@ -11,76 +11,9 @@ from typing import Any, Iterable
 from src.graph.normalizer import normalize_name
 from src.ontology.candidate_display import build_display_metadata, unique_strings
 from src.ontology.candidate_reviewer import build_codex_dev_review, has_target_overlap
+from src.ontology.policy import CandidateExtractionPolicy, OntologyReviewPolicy, load_candidate_extraction_policy, load_review_policy
 from src.ontology.registry import BASE_ONTOLOGY_MANIFEST
 from src.ontology.review_store import OntologyCandidate, utc_now_iso
-
-
-DOMAIN_KEYWORDS = (
-    "상해",
-    "질병",
-    "진단",
-    "수술",
-    "입원",
-    "통원",
-    "치료",
-    "담보",
-    "특약",
-    "보장",
-    "비급여",
-    "급여",
-    "본인부담",
-    "표준코드",
-    "EDI",
-    "교통사고",
-    "운전자",
-    "자동차",
-    "오토바이",
-    "서류",
-)
-STOP_PHRASES = {
-    "보험",
-    "약관",
-    "보장",
-    "담보",
-    "상해",
-    "질병",
-    "진단",
-    "수술",
-    "입원",
-    "통원",
-    "치료",
-    "비급여",
-    "급여",
-    "EDI",
-    "입원료",
-    "목적",
-    "술",
-}
-GENERIC_TABLE_TERMS = {
-    "급여 상대가치점수",
-    "비급여 목록",
-    "비급여 목록표",
-    "요양급여의 적용기준",
-    "분류번호",
-    "코 드",
-    "점 수",
-    "일반원칙",
-}
-CANDIDATE_NOISE_FRAGMENTS = {
-    "상대가치",
-    "요양급여",
-    "의료급여",
-    "질병군",
-    "분류번호",
-    "점수",
-    "산정",
-    "결정기준",
-    "승인",
-    "일반원칙",
-    "주진단",
-    "수술부위",
-}
-REINFORCEMENT_CANDIDATE_TYPE = "alias_or_expansion"
 
 
 @dataclass(frozen=True)
@@ -216,7 +149,13 @@ def extract_reinforcement_candidates(
     chunks: list[SourceChunk],
     extraction_run_id: str | None = None,
     candidate_limit: int | None = None,
+    candidate_type: str | None = None,
+    extraction_policy: CandidateExtractionPolicy | None = None,
+    review_policy: OntologyReviewPolicy | None = None,
 ) -> CandidateExtractionResult:
+    policy = extraction_policy or load_candidate_extraction_policy()
+    dev_review_policy = review_policy or load_review_policy()
+    reinforcement_type = candidate_type or policy.default_reinforcement_type
     run_id = extraction_run_id or f"ontology-candidate-extract-{utc_now_iso()}"
     existing_terms = _normalized_existing_terms(concepts)
     grouped_terms: dict[str, list[str]] = {}
@@ -227,19 +166,19 @@ def extract_reinforcement_candidates(
         text = _clean_text(chunk.text)
         if not text:
             continue
-        if _looks_like_index_or_code_table(text):
+        if _looks_like_index_or_code_table(text, policy):
             continue
         normalized_text = normalize_name(text)
         if not normalized_text:
             continue
         for concept in concepts:
-            contexts = _matching_contexts(concept, text, normalized_text)
+            contexts = _matching_contexts(concept, text, normalized_text, policy=policy)
             if not contexts:
                 continue
             terms = [
                 term
                 for context in contexts
-                for term in extract_candidate_terms(context)
+                for term in extract_candidate_terms(context, policy=policy)
                 if _is_new_term(term, existing_terms)
             ]
             if not terms:
@@ -262,20 +201,21 @@ def extract_reinforcement_candidates(
         if not terms or not evidence:
             continue
         review = build_codex_dev_review(
-            candidate_type=REINFORCEMENT_CANDIDATE_TYPE,
+            candidate_type=reinforcement_type,
             source_evidence=evidence,
             similar_expressions=terms,
             target_terms=list(concept.all_terms),
+            policy=dev_review_policy,
         )
         risk_flags = ["dev_auto_approval"] if review["decision"] == "approve" else ["requires_practitioner_review"]
         properties = {
-            "candidate_type": REINFORCEMENT_CANDIDATE_TYPE,
+            "candidate_type": reinforcement_type,
             "target_concept_id": concept.concept_id,
             "target_canonical_name": concept.canonical_name,
             "display": build_display_metadata(
                 canonical_name=concept.canonical_name,
                 node_type=concept.node_type,
-                candidate_type=REINFORCEMENT_CANDIDATE_TYPE,
+                candidate_type=reinforcement_type,
                 similar_expressions=terms,
                 source_evidence=evidence,
             ),
@@ -283,6 +223,8 @@ def extract_reinforcement_candidates(
             "extraction": {
                 "source": "processed_chunks_or_graph_evidence",
                 "term_count": len(terms),
+                "policy_id": policy.policy_id,
+                "policy_version": policy.version,
             },
         }
         candidates.append(
@@ -317,14 +259,15 @@ def extract_reinforcement_candidates(
     return CandidateExtractionResult(candidates=candidates, source_count=len(chunks), warnings=warnings)
 
 
-def extract_candidate_terms(text: str) -> list[str]:
+def extract_candidate_terms(text: str, policy: CandidateExtractionPolicy | None = None) -> list[str]:
+    extraction_policy = policy or load_candidate_extraction_policy()
     cleaned = _clean_text(text)
     terms: list[str] = []
     terms.extend(_parenthetical_terms(cleaned))
     terms.extend(_delimited_terms(cleaned))
-    terms.extend(_keyword_phrases(cleaned))
+    terms.extend(_keyword_phrases(cleaned, extraction_policy))
     normalized_terms = [_normalize_candidate_term(term) for term in terms]
-    return [term for term in unique_strings(normalized_terms, limit=24) if _candidate_term_allowed(term)]
+    return [term for term in unique_strings(normalized_terms, limit=24) if _candidate_term_allowed(term, extraction_policy)]
 
 
 def _string_list(value: Any) -> list[str]:
@@ -347,10 +290,17 @@ def _normalized_existing_terms(concepts: list[OntologySourceConcept]) -> set[str
     return result
 
 
-def _matching_contexts(concept: OntologySourceConcept, text: str, normalized_text: str, *, radius: int = 180) -> list[str]:
+def _matching_contexts(
+    concept: OntologySourceConcept,
+    text: str,
+    normalized_text: str,
+    *,
+    policy: CandidateExtractionPolicy,
+    radius: int = 180,
+) -> list[str]:
     contexts: list[str] = []
     for term in concept.all_terms:
-        if len(term.strip()) < 2 or term in STOP_PHRASES:
+        if len(term.strip()) < 2 or term in policy.stop_phrases:
             continue
         if term and term in text:
             index = text.find(term)
@@ -368,23 +318,26 @@ def _is_new_term(term: str, existing_terms: set[str]) -> bool:
     return bool(normalized and normalized not in existing_terms)
 
 
-def _candidate_term_allowed(term: str) -> bool:
+def _candidate_term_allowed(term: str, policy: CandidateExtractionPolicy) -> bool:
+    shape = policy.expression_shape
     text = _clean_text(term).strip(" -:;,.()[]{}")
-    if len(text) < 3 or len(text) > 18:
+    if len(text) < shape.min_length or len(text) > shape.max_length:
         return False
-    if text in STOP_PHRASES:
+    if text in policy.stop_phrases:
         return False
-    if any(generic in text for generic in GENERIC_TABLE_TERMS):
+    if any(generic in text for generic in policy.generic_table_terms):
         return False
-    if any(fragment in text for fragment in CANDIDATE_NOISE_FRAGMENTS):
+    if any(fragment in text for fragment in policy.noise_fragments):
         return False
     if re.search(r"제\s*\d+\s*(장|절|편|부)", text):
         return False
-    if any(char.isdigit() for char in text):
+    if not shape.allow_digits and any(char.isdigit() for char in text):
         return False
-    if any("A" <= char <= "Z" or "a" <= char <= "z" for char in text):
+    if not shape.allow_ascii_letters and any("A" <= char <= "Z" or "a" <= char <= "z" for char in text):
         return False
-    if not any(keyword in text for keyword in DOMAIN_KEYWORDS):
+    if len(text.split()) > shape.max_terms:
+        return False
+    if not any(keyword in text for keyword in policy.domain_keywords):
         return False
     if re.fullmatch(r"[\d\s.,%-]+", text):
         return False
@@ -404,12 +357,12 @@ def _normalize_candidate_term(term: str) -> str:
     return text.strip(" -:;,.()[]{}")
 
 
-def _looks_like_index_or_code_table(text: str) -> bool:
+def _looks_like_index_or_code_table(text: str, policy: CandidateExtractionPolicy) -> bool:
     if "····" in text:
         return True
     if "분류번호" in text and "점 수" in text:
         return True
-    if text.count("제") >= 8 and any(term in text for term in ("목록표", "상대가치점수", "일반원칙")):
+    if text.count("제") >= 8 and any(term in text for term in policy.table_noise_markers):
         return True
     return False
 
@@ -430,9 +383,9 @@ def _delimited_terms(text: str) -> list[str]:
     return terms
 
 
-def _keyword_phrases(text: str) -> list[str]:
+def _keyword_phrases(text: str, policy: CandidateExtractionPolicy) -> list[str]:
     terms: list[str] = []
-    for keyword in DOMAIN_KEYWORDS:
+    for keyword in policy.domain_keywords:
         for match in re.finditer(rf"([가-힣A-Za-z0-9\s]{{0,14}}{re.escape(keyword)}[가-힣A-Za-z0-9\s]{{0,14}})", text):
             phrase = _clean_text(match.group(1))
             if phrase:
