@@ -99,10 +99,10 @@ def build_display_metadata(
 
 
 PRACTITIONER_DECISION_GUIDE = [
-    "승인: 후보 표현이 후보 개념과 같은 보험 업무 개념을 가리키고, 원문 근거의 사용 맥락도 그 개념과 맞으며, 다른 개념으로 해석될 가능성이 낮을 때 선택합니다.",
-    "보류: 유사 표현 자체는 쓸 만하지만 원문 근거가 다른 개념과 섞여 있거나, 소유권 충돌/문장 조각/추가 근거 확인이 필요할 때 선택합니다.",
-    "거절: 표현이 너무 넓거나 지급·면책·감액·계산 판단으로 이어지거나, 후보 개념과 연결이 잘못됐거나, 단순 문장 조각일 때 선택합니다.",
-    "근거는 후보 개념과 연결이 어긋났지만 유사 표현은 적절해 보이면 바로 승인하지 말고 보류한 뒤 target concept 또는 표현 정제를 요청합니다.",
+    "승인: 승인 대상 표현이 후보 개념과 같은 보험 업무 개념을 가리키고, 원문 근거의 사용 맥락도 그 개념과 맞으며, 다른 개념으로 해석될 가능성이 낮을 때 선택합니다.",
+    "보류: 승인 대상 표현 자체는 쓸 만하지만 원문 근거가 다른 개념과 섞여 있거나, 소유권 충돌/문장 조각/추가 근거 확인이 필요할 때 선택합니다.",
+    "거절: 승인 대상 표현이 너무 넓거나 지급·면책·감액·계산 판단으로 이어지거나, 후보 개념과 연결이 잘못됐거나, 단순 문장 조각일 때 선택합니다.",
+    "근거는 후보 개념과 연결이 어긋났지만 승인 대상 표현은 적절해 보이면 바로 승인하지 말고 보류한 뒤 target concept 또는 표현 정제를 요청합니다.",
 ]
 
 
@@ -118,6 +118,13 @@ def _format_quality_issues(issues: list[CandidateQualityIssue]) -> list[str]:
         if issue.recommendation:
             lines.append(f"  권장 판단: {issue.recommendation}")
     return lines
+
+
+def _format_bullets(values: list[str]) -> list[str]:
+    items = unique_strings(values)
+    if not items:
+        return ["-"]
+    return [f"- {item}" for item in items]
 
 
 def wrap_display_text(text: str, *, width: int = 82) -> str:
@@ -169,6 +176,10 @@ def format_candidate_for_practitioner(
         f"후보 ID: {candidate.candidate_id}",
         f"대상 concept: {candidate.concept_id}",
         "",
+        "승인 대상 표현(후보 alias):",
+        "아래 표현들을 이 후보 개념에 검색 alias/보강 표현으로 붙여도 되는지 판단합니다.",
+        *_format_bullets(candidate.candidate_aliases),
+        "",
         "설명:",
         _clean_text(display.get("summary")) or "-",
         "",
@@ -183,11 +194,9 @@ def format_candidate_for_practitioner(
             )
         ),
         "",
-        "유사 표현:",
-        ", ".join(unique_strings([str(item) for item in similar])) if similar else "-",
-        "",
-        "후보 alias:",
-        ", ".join(unique_strings(candidate.candidate_aliases)) if candidate.candidate_aliases else "-",
+        "참고 유사 표현(자동 표시용):",
+        "승인 대상과 같을 수 있지만, 화면 설명/예시 질문 생성을 위해 별도로 보관된 참고 표현입니다.",
+        *_format_bullets([str(item) for item in similar]),
         "",
         "예시 질문:",
     ]

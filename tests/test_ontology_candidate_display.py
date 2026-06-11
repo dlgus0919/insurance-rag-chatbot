@@ -45,6 +45,7 @@ def test_format_candidate_for_practitioner_uses_display_metadata() -> None:
     text = format_candidate_for_practitioner(candidate)
 
     assert "후보 개념: 교통사고 상해" in text
+    assert "승인 대상 표현(후보 alias)" in text
     assert "교통 관련 상해 표현" in text
     assert "교통상해" in text
     assert "[약관 / 12쪽]" in text
@@ -67,6 +68,7 @@ def test_format_candidate_for_practitioner_includes_guide_quality_warning_and_wr
 
     text = format_candidate_for_practitioner(candidate, all_candidates=[candidate, other], wrap_width=46)
 
+    assert "승인 대상 표현(후보 alias)" in text
     assert "실무자 판단 기준" in text
     assert "품질 경고" in text
     assert "문장 조각" in text
