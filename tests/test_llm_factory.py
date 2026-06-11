@@ -45,6 +45,7 @@ def test_model_info_and_label_for_known_and_custom_models() -> None:
     assert info["size"] == "mini"
     assert "Cloud · OpenAI · GPT-5 mini" in factory.format_model_label("gpt-5-mini", "openai")
     assert "Local · SGLang · GPT-OSS · 20B · 검증완료" == factory.format_model_label("gpt-oss-20b", "sglang")
+    assert "삭제검토" in factory.format_model_label("gemma-4-26b-a4b-nvfp4", "vllm")
     assert custom["use_case"] == "사용자 정의"
 
 
@@ -185,8 +186,8 @@ def test_build_llm_rejects_openai_without_key(monkeypatch) -> None:
         factory.build_llm("gpt-5-mini", provider="openai")
 
 
-def test_list_available_models_discovers_local_sglang_models(monkeypatch, tmp_path) -> None:
-    staged = tmp_path / "gemma-4-26b-a4b-nvfp4"
+def test_list_available_models_does_not_discover_local_sglang_directories(monkeypatch, tmp_path) -> None:
+    staged = tmp_path / "qwen3-next-80b-a3b-instruct-fp8"
     staged.mkdir()
     (staged / "config.json").write_text("{}", encoding="utf-8")
     (staged / "tokenizer.json").write_text("{}", encoding="utf-8")
@@ -203,7 +204,7 @@ def test_list_available_models_discovers_local_sglang_models(monkeypatch, tmp_pa
 
     grouped = factory.list_available_models()
 
-    assert grouped["sglang"] == ["gpt-oss-20b", "gemma-4-26b-a4b-nvfp4"]
+    assert grouped["sglang"] == ["gpt-oss-20b"]
 
 
 def test_disabled_sglang_models_are_hidden_and_rejected(monkeypatch, tmp_path) -> None:
@@ -274,6 +275,40 @@ def test_served_model_is_exposed_even_when_not_configured(monkeypatch) -> None:
     grouped = factory.list_available_models()
 
     assert grouped["vllm"] == ["nemotron-3-nano-30b-a3b-nvfp4"]
+
+
+def test_unknown_served_model_is_not_exposed(monkeypatch) -> None:
+    monkeypatch.setattr(factory.config, "VLLM_DEFAULT_MODEL", "gemma-4-31b-it-nvfp4")
+    monkeypatch.setattr(factory.config, "VLLM_CANDIDATE_MODELS", ["gemma-4-31b-it-nvfp4"])
+    monkeypatch.setattr(factory.config, "VLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "VLLM_BASE_URL", "http://127.0.0.1:30001/v1")
+    monkeypatch.setattr(factory.config, "VLLM_STRICT_AVAILABLE_MODELS", True)
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
+    monkeypatch.setenv("ALLOW_OLLAMA", "false")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+
+    def fake_served(endpoint, api_key=None):
+        if endpoint.endswith("30001/v1"):
+            return ["unknown-local-model"]
+        return []
+
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", fake_served)
+
+    grouped = factory.list_available_models()
+
+    assert grouped["vllm"] == []
+
+
+def test_build_llm_rejects_unsupported_provider_models() -> None:
+    with pytest.raises(RuntimeError, match="SGLang provider"):
+        factory.build_llm("exaone-4.0-32b-awq", provider="sglang")
+
+    with pytest.raises(RuntimeError, match="vLLM provider"):
+        factory.build_llm("qwen3-next-80b-a3b-instruct-fp8", provider="vllm")
 
 
 def test_extract_final_content_strips_pad_tokens() -> None:
