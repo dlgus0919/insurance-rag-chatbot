@@ -158,6 +158,14 @@ def test_formal_doc_filter_merges_scope_and_category() -> None:
     assert formal_doc_filter(filters) == ["상담사례집", "약관", "표준약관", "자사_SOL건강"]
 
 
+def test_formal_doc_filter_without_explicit_scope_keeps_legacy_policy_scope() -> None:
+    assert formal_doc_filter({"search_type": "약관 조문 검색"}) == ["약관"]
+
+
+def test_formal_doc_filter_auto_routed_without_scope_is_unfiltered() -> None:
+    assert formal_doc_filter({"search_type": "약관 조문 검색", "_auto_routed": True}) is None
+
+
 def test_build_formal_retrieval_query_shapes_clause_search() -> None:
     query = build_formal_retrieval_query("N39.3", {"search_type": "약관 조문 검색"})
 
@@ -473,3 +481,32 @@ async def test_prepare_formal_context_uses_shaped_retrieval_query() -> None:
     assert "보상하지 않는 사항" in captured["question"]
     assert "[검색 유형]\n약관 조문 검색" in captured["prompt_question"]
     assert "[상황 메모]\n입원 7일" in captured["prompt_question"]
+
+
+@pytest.mark.anyio
+async def test_prepare_formal_context_uses_dynamic_document_selection_without_scope() -> None:
+    captured = {}
+
+    class FakePipeline:
+        def retrieve_hits(self, question, top_k=None, doc_filter=None):
+            captured["question"] = question
+            captured["doc_filter"] = doc_filter
+            return [], None
+
+        def build_prompt(self, question, chunks):
+            return "PROMPT"
+
+    chunks, sources, prompt, doc_filter = await rag_service.prepare_formal_context(
+        pipeline=FakePipeline(),
+        question="자동차사고 부상치료지원금 담보를 청구하려고 합니다. 필요한 서류를 알려주세요.",
+        top_k=5,
+        history=[],
+        filters={"search_type": "약관 조문 검색", "_auto_routed": True},
+    )
+
+    assert chunks == []
+    assert sources == []
+    assert prompt == "PROMPT"
+    assert doc_filter is None
+    assert captured["doc_filter"] is None
+    assert "자동차사고 부상치료지원금" in captured["question"]

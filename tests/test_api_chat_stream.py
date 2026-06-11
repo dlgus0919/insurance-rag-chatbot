@@ -377,6 +377,79 @@ async def test_formal_chat_stream_records_search_type_in_audit_log(db_session, m
 
 
 @pytest.mark.anyio
+async def test_general_chat_auto_routes_quickcode_and_records_strategy(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: FakePipeline())
+    captured = {}
+
+    async def fake_prepare(_pipeline, query, filters):
+        captured["query"] = query
+        captured["filters"] = filters
+        return [], [], "quick prompt", "quick system", ["심평원"]
+
+    monkeypatch.setattr(chat, "prepare_quickcode_context", fake_prepare)
+    created = await sessions.create_session(SessionCreateRequest(title="코드"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="식도조루술 수가 코드와 점수를 알려줘",
+            session_id=created.id,
+            model="gemma3:4b",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    async for _chunk in response.body_iterator:
+        pass
+
+    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
+    audit_entry = audit_result.scalar_one()
+
+    assert captured["filters"]["include_summary"] is True
+    assert audit_entry.detail["mode"] == "general"
+    assert audit_entry.detail["resolved_route"] == "quickcode"
+    assert audit_entry.detail["resolved_intent"] == "procedure_code_lookup"
+    assert audit_entry.detail["route_reason"] == "procedure_code_intent"
+    assert "procedure_code_lookup" in audit_entry.detail["matched_cues"]
+
+
+@pytest.mark.anyio
+async def test_general_chat_auto_routes_formal_and_records_strategy(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: FakePipeline())
+    captured = {}
+
+    async def fake_prepare(_pipeline, query, top_k, history, filters, memo):
+        captured["query"] = query
+        captured["filters"] = filters
+        return [], [], "formal prompt", ["약관", "표준약관"]
+
+    monkeypatch.setattr(chat, "prepare_formal_context", fake_prepare)
+    created = await sessions.create_session(SessionCreateRequest(title="약관"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="실손보험 약관 제12조와 별표 내용을 알려줘",
+            session_id=created.id,
+            model="gemma3:4b",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    async for _chunk in response.body_iterator:
+        pass
+
+    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
+    audit_entry = audit_result.scalar_one()
+
+    assert captured["filters"]["search_type"] == "약관 조문 검색"
+    assert audit_entry.detail["mode"] == "general"
+    assert audit_entry.detail["resolved_route"] == "formal"
+    assert audit_entry.detail["search_type"] == "약관 조문 검색"
+    assert audit_entry.detail["route_reason"] == "clause_lookup_intent"
+
+
+@pytest.mark.anyio
 async def test_persist_turn_stores_graph_payload_for_history_restore(db_session) -> None:
     created = await sessions.create_session(SessionCreateRequest(title="진단코드"), _user(), db_session)
 

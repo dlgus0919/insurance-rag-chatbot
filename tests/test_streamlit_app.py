@@ -5,6 +5,7 @@ import json
 from src.parser.chunker import Chunk
 from src.rag.insurance_form import InsuranceFormInput
 from src.ui.streamlit_app import (
+    SEARCH_MODES,
     _build_answer_log_details,
     _build_question_log_details,
     _admin_bootstrap_message,
@@ -19,6 +20,10 @@ from src.ui.streamlit_app import (
     _source_title,
     _turn_count,
 )
+
+
+def test_search_modes_expose_one_chat_mode_and_claim_calculation() -> None:
+    assert SEARCH_MODES == ["일반 질의", "고급 검색", "보험금 계산"]
 
 
 def test_source_title_includes_pdf_filename_hierarchy_and_page() -> None:

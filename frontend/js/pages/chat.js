@@ -172,10 +172,6 @@ function setupChatDelegatedHandlers() {
 
     if (action === 'toggle-export') {
       toggleExport(event);
-    } else if (action === 'send-quick') {
-      await sendQuick();
-    } else if (action === 'send-formal') {
-      await sendFormal();
     } else if (action === 'send-claim') {
       await sendClaim();
     } else if (action === 'add-claim-line') {
@@ -507,34 +503,8 @@ async function sendMsg() {
   appendMsg('user', text);
   input.value = '';
   input.style.height = 'auto';
-  await streamChat(text, currentMode === 'quick' ? 'quickcode' : currentMode, getActiveScopeFilters());
-}
-
-async function sendQuick() {
-  const input = document.querySelector('#panel-quick .p-input');
-  const term = input?.value.trim() || '백내장 수술';
-  const filters = {
-    ...getActiveScopeFilters(),
-    include_summary: document.getElementById('quick-include-summary')?.checked !== false,
-    include_coverage: document.getElementById('quick-include-coverage')?.checked !== false,
-  };
-  appendMsg('user', '[퀵코드 검색] ' + term);
-  await streamChat(term, 'quickcode', filters);
-}
-
-async function sendFormal() {
-  const input = document.querySelector('#panel-formal .p-input');
-  const memo = document.getElementById('formal-memo')?.value.trim() || '';
-  const query = input?.value.trim() || 'N39.3 / 질병급여·비급여·3대비급여';
-  const categories = [...document.querySelectorAll('.scenario-chip.active')].map((item) => item.textContent.trim());
-  const searchType = document.querySelector('input[name="ftype"]:checked')?.value || '보상가능 여부 판정';
-  const filters = {
-    ...getActiveScopeFilters(),
-    product_category: categories,
-    search_type: searchType,
-  };
-  appendMsg('user', '[약관 정형] ' + query);
-  await streamChat(query, 'formal', filters, memo);
+  const mode = currentMode === 'claim' ? 'general' : currentMode;
+  await streamChat(text, mode, getActiveScopeFilters());
 }
 
 async function sendClaim(options = {}) {
@@ -1243,11 +1213,7 @@ function setMode(mode, element) {
   currentMode = mode;
   document.querySelectorAll('.mode-tab').forEach((tab) => tab.classList.remove('active'));
   element.classList.add('active');
-  document.getElementById('panel-quick')?.classList.remove('visible');
-  document.getElementById('panel-formal')?.classList.remove('visible');
   document.getElementById('panel-claim')?.classList.remove('visible');
-  if (mode === 'quick') document.getElementById('panel-quick')?.classList.add('visible');
-  if (mode === 'formal') document.getElementById('panel-formal')?.classList.add('visible');
   if (mode === 'claim') document.getElementById('panel-claim')?.classList.add('visible');
   msgs = [];
   renderWelcome();

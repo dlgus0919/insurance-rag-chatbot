@@ -560,7 +560,12 @@ def formal_doc_filter(filters: dict | None) -> list[str] | None:
     for item in categories:
         merged.extend(_FORMAL_CATEGORY_DOC_FILTERS.get(str(item), _PRODUCT_DOC_FILTERS.get(str(item), [])))
 
-    return list(dict.fromkeys(merged or ["약관"]))
+    normalized = list(dict.fromkeys(merged))
+    if normalized:
+        return normalized
+    if filters.get("_auto_routed") is True:
+        return None
+    return ["약관"]
 
 
 def build_formal_retrieval_query(question: str, filters: dict | None) -> str:
