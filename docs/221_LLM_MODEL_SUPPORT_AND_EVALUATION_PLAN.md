@@ -4,6 +4,37 @@
 
 DGX에 존재하는 LLM 파일을 모두 앱 후보로 취급하지 않고, 실제 앱 코드와 전환 스크립트가 지원하는 모델만 노출한다. 이후 기능별 평가를 통해 답변 생성 LLM과 온톨로지 후보 추출 LLM을 최소한으로 고정한다.
 
+## 통합 테스트의 두 가지 목적
+
+이번 테스트는 하나의 모델 순위를 만드는 작업이 아니다. 최종 목적은 서로 다른 두 기능에 대해 각각 필요한 모델을 확정하고, 두 기능 어디에도 필요하지 않은 모델만 삭제 후보로 분류하는 것이다.
+
+| 목적 | 선택 대상 | 평가 기준 | 최종 산출 |
+|---|---|---|---|
+| 일반 질의 답변 생성 | RAG 답변을 생성할 주력 LLM | 약관 근거 해석 정확도, 조항/기간/수치 보존, 출처 유지, 응답 안정성, 지연 시간 | `answer_generation_primary_model`, 필요 시 `answer_generation_fallback_model` |
+| 온톨로지 후보 개념/alias 검토 보조 | 후보 alias 정제, evidence 정합성, 실무자 표시 설명/예시 질문 생성을 맡길 batch LLM | unsafe approval 방지, evidence mismatch 탐지, ownership conflict 탐지, JSON schema 안정성, 실무자 검토 부담 감소 | `ontology_enrichment_primary_model`, 필요 시 `ontology_enrichment_fallback_model` |
+
+이 두 목적은 분리해서 판정한다.
+
+- 답변 생성 품질이 낮아도 온톨로지 enrichment 품질이 높으면 삭제하지 않는다.
+- 온톨로지 enrichment 품질이 낮아도 답변 생성 품질이 높으면 삭제하지 않는다.
+- 삭제 후보는 두 평가 축에서 모두 열세이고, 보존해야 할 별도 용도도 없는 경우에만 확정한다.
+- `qwen3-next-80b-a3b-instruct-fp8`와 `qwen3-30b-a3b-instruct-2507-fp8`는 온톨로지 모델 비교가 끝날 때까지 삭제 금지다.
+- `gemma-4-31b-it-nvfp4`는 이미지 인식 후보 기능 검토가 끝날 때까지 삭제 금지다.
+
+## 검토된 결점과 보완
+
+초안의 결점:
+
+1. 답변 생성 모델 평가와 온톨로지 후보 모델 평가가 같은 "LLM 테스트" 안에 있지만, 최종 의사결정이 두 개라는 점이 충분히 명시되지 않았다.
+2. 모델 삭제 판단이 답변 생성 평가 결과에 과도하게 끌려갈 수 있었다.
+3. 온톨로지 후보 평가는 실제 운영 반영 전 shadow enrichment 평가라는 점은 명확했지만, 답변 생성 모델 선정과 별도 산출물로 관리한다는 연결이 부족했다.
+
+보완 원칙:
+
+- 평가 결과 보고서는 반드시 두 개의 ranking table을 분리해 작성한다.
+- 모델별 최종 판정은 `answer_role`, `ontology_role`, `other_reserved_role`, `delete_candidate` 네 필드를 가진 decision matrix로 작성한다.
+- 삭제 전에는 "답변 생성", "온톨로지 enrichment", "이미지 인식 후보 기능", "fallback/runtime baseline" 중 남은 역할이 없는지 확인한다.
+
 ## 지원 모델 목록 고정 패치
 
 변경 원칙:
@@ -42,6 +73,8 @@ DGX에 존재하는 LLM 파일을 모두 앱 후보로 취급하지 않고, 실�
 ### 평가 목적
 
 일반 질의에서 보험 약관 근거를 정확히 찾아 요약하고, 약관 조항과 조건을 왜곡하지 않는 모델을 1개 주력 답변 모델로 고정한다. 필요하면 경량 fallback 1개만 별도 유지한다.
+
+이 평가는 온톨로지 후보 모델을 직접 고르는 평가가 아니다. 다만 같은 모델이 양쪽에서 모두 우수할 수 있으므로 결과를 decision matrix에 함께 기록한다.
 
 ### 평가셋
 
@@ -160,6 +193,8 @@ DGX에 존재하는 LLM 파일을 모두 앱 후보로 취급하지 않고, 실�
 
 이 단계는 `src/ontology/llm_batch.py`의 모델 기동 정책과 연결하되, 최종 승인/차단은 기존 guardrail과 실무자 승인 정책이 계속 담당한다.
 
+상세 구현 계획은 `docs/222_ONTOLOGY_LLM_ENRICHMENT_EVALUATION_IMPLEMENTATION_PLAN.md`를 따른다. 이 절은 221번 통합 모델 최소화 계획 안에서 온톨로지 평가가 어떤 의사결정을 담당하는지 정의한다.
+
 ### 온톨로지 평가 후보 모델
 
 1. `sglang:qwen3-next-80b-a3b-instruct-fp8`
@@ -234,12 +269,44 @@ DGX에 존재하는 LLM 파일을 모두 앱 후보로 취급하지 않고, 실�
    - LLM JSON enrichment 추가
    - `qwen3-next-80b-a3b-instruct-fp8`와 `qwen3-30b-a3b-instruct-2507-fp8`를 같은 입력으로 비교
 
-6. 삭제 후보 확정
+6. 통합 decision matrix 작성
+   - 모델별 `answer_role`, `ontology_role`, `other_reserved_role`, `delete_candidate`, `delete_reason`을 기록한다.
+   - 답변 생성 ranking과 온톨로지 enrichment ranking은 별도 표로 유지한다.
+   - 두 평가 중 하나라도 보존 사유가 있으면 삭제 후보로 확정하지 않는다.
+
+7. 삭제 후보 확정
    - 기동 실패, 품질 열세, 대체 모델 존재, 운영 용도 부재가 모두 확인된 모델만 삭제한다.
    - 삭제 전 `docs/`에 평가 근거와 보존/삭제 판단을 남긴다.
+
+## 최종 decision matrix schema
+
+모델 삭제나 고정을 결정하기 전에 다음 형태의 JSONL 또는 Markdown 표를 남긴다.
+
+```json
+{
+  "model": "qwen3-30b-a3b-instruct-2507-fp8",
+  "providers": ["sglang"],
+  "answer_role": "primary|fallback|none|not_tested",
+  "ontology_role": "primary|fallback|reserved|none|not_tested",
+  "other_reserved_role": ["image_vision_candidate", "runtime_baseline"],
+  "delete_candidate": false,
+  "delete_reason": "",
+  "evidence": {
+    "answer_eval_report": "reports/large_model_rag_eval/...",
+    "ontology_eval_report": "reports/ontology_llm_enrichment_eval/..."
+  }
+}
+```
+
+판정 규칙:
+
+- `delete_candidate=true`는 `answer_role=none`, `ontology_role=none`, `other_reserved_role=[]`일 때만 허용한다.
+- `not_tested`가 남아 있는 모델은 삭제하지 않는다.
+- `reserved`는 현재 주력 모델은 아니지만 온톨로지 batch, 이미지 인식 후보, fallback baseline 등 명시 역할이 남아 있는 상태다.
 
 ## 보류 위험
 
 - 현재 온톨로지 후보 추출은 모델별 차이를 바로 측정할 수 없는 구조다. 모델 고정 전 LLM enrichment 단계를 먼저 구현해야 한다.
 - `gpt-oss-120b`는 용량이 크고 메모리 부족 이력이 있으므로, 전체 평가가 아니라 기동 가능성 smoke test부터 해야 한다.
 - `gemma-4-26b-a4b-nvfp4`는 삭제 후보지만 기존 vLLM 검증완료 이력이 있으므로 31B 대체 검증 전 제거하면 안 된다.
+- 한 기능의 평가 결과만으로 모델을 삭제하면 안 된다. 삭제는 통합 decision matrix 작성 후 별도 확인 단계에서만 수행한다.

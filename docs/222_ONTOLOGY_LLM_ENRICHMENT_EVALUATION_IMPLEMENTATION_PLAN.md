@@ -13,6 +13,21 @@
 
 평가의 목적은 "LLM이 지금 이미 이 일을 하고 있다"가 아니라, "이 일을 LLM에게 맡기는 설계를 메인 프로젝트에 넣을 가치가 있는지"를 검증하는 것이다.
 
+이 문서는 `docs/221_LLM_MODEL_SUPPORT_AND_EVALUATION_PLAN.md`의 두 평가 목적 중 "온톨로지 후보 개념/alias 검토 보조 모델 선택"에 해당한다. 일반 질의 답변 생성 모델 선택은 별도 평가 축으로 유지한다.
+
+## 전체 테스트 안에서의 역할
+
+전체 LLM 최소화 테스트의 최종 산출물은 두 개다.
+
+1. 질의에 대한 답 생성 모델
+   - RAG 답변을 생성할 주력 모델
+   - 약관 해석 정확도, 조항/수치 보존, 출처 표기, 응답 안정성 중심
+2. 온톨로지 후보 개념 관련 모델
+   - alias 정제, evidence 정합성 판단, 실무자 표시 설명/예시 질문 생성을 보조할 batch 모델
+   - unsafe approval 방지, 보류/거절 사유 구조화, schema 안정성 중심
+
+이 문서의 평가는 2번만 직접 다룬다. 따라서 이 평가에서 낮은 점수를 받은 모델이라도 답변 생성 평가에서 주력 또는 fallback 역할을 얻으면 삭제하면 안 된다. 반대로 답변 생성 평가에서 낮은 점수를 받은 모델이라도 이 평가에서 온톨로지 batch 역할을 얻으면 삭제하면 안 된다.
+
 ## 핵심 원칙
 
 1. 운영 ontology에는 즉시 반영하지 않는다.
@@ -21,6 +36,7 @@
 4. 외부 API와 Ollama fallback은 사용하지 않는다.
 5. Qwen 80B와 Qwen 30B는 같은 입력, 같은 prompt, 같은 schema로 비교한다.
 6. 모델 선택 기준은 답변이 그럴듯한지가 아니라 "실무자 검토 부담을 줄이면서 위험 후보를 잘 막는지"다.
+7. 답변 생성 모델 ranking과 온톨로지 enrichment 모델 ranking은 별도로 산출한다.
 
 ## 현재 코드상 삽입 지점
 
@@ -272,6 +288,8 @@ Prompt는 보수적으로 작성한다.
 4. 남은 모델 중 Qwen 30B가 80B와 큰 차이가 없으면 30B를 기본으로 선택
 5. 80B가 명확히 우수하면 80B를 온톨로지 batch 전용으로 유지
 
+이 순위는 온톨로지 enrichment 전용 순위다. 답변 생성 모델 최종 순위와 충돌할 경우에는 `docs/221...`의 decision matrix에서 역할을 분리해 기록한다.
+
 ## 구현 단계
 
 ### Phase 1. Shadow evaluator만 구현
@@ -379,6 +397,26 @@ GPT-OSS 20B를 fallback으로 두는 경우:
 
 - Qwen 계열 기동 실패 시에도 JSON은 안정적으로 생성
 - 다만 ontology 고정 모델로는 Qwen 대비 품질 열세가 확인될 가능성이 높음
+
+## 통합 decision matrix 연동
+
+이 평가의 Markdown report는 각 모델에 대해 다음 필드를 산출해야 한다.
+
+```json
+{
+  "model": "qwen3-next-80b-a3b-instruct-fp8",
+  "ontology_role": "primary|fallback|reserved|none",
+  "ontology_score_summary": {
+    "json_validity": 0.99,
+    "unsafe_approval_count": 0,
+    "evidence_mismatch_detection": 0.92,
+    "ownership_conflict_detection": 0.91
+  },
+  "delete_blocker": "ontology_role=primary"
+}
+```
+
+`delete_blocker`는 답변 생성 평가와 통합할 때 사용한다. 온톨로지 평가에서 `primary`, `fallback`, `reserved` 중 하나라도 부여된 모델은 답변 생성 평가 결과와 무관하게 즉시 삭제하지 않는다.
 
 ## 안전장치
 
