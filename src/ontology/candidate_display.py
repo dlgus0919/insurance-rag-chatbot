@@ -127,6 +127,10 @@ def _format_bullets(values: list[str]) -> list[str]:
     return [f"- {item}" for item in items]
 
 
+def _same_string_set(left: list[str], right: list[str]) -> bool:
+    return set(unique_strings(left)) == set(unique_strings(right))
+
+
 def wrap_display_text(text: str, *, width: int = 82) -> str:
     if width <= 0:
         return text
@@ -170,6 +174,8 @@ def format_candidate_for_practitioner(
     page_text = f" / {page}쪽" if page else ""
     similar = display.get("similar_expressions") if isinstance(display.get("similar_expressions"), list) else []
     questions = display.get("example_questions") if isinstance(display.get("example_questions"), list) else []
+    similar_texts = [str(item) for item in similar]
+    show_similar_reference = bool(similar_texts) and not _same_string_set(candidate.candidate_aliases, similar_texts)
 
     lines = [
         f"후보 개념: {candidate.canonical_name}",
@@ -193,13 +199,22 @@ def format_candidate_for_practitioner(
                 all_candidates=all_candidates,
             )
         ),
-        "",
-        "참고 유사 표현(자동 표시용):",
-        "승인 대상과 같을 수 있지만, 화면 설명/예시 질문 생성을 위해 별도로 보관된 참고 표현입니다.",
-        *_format_bullets([str(item) for item in similar]),
-        "",
-        "예시 질문:",
     ]
+    if show_similar_reference:
+        lines.extend(
+            [
+                "",
+                "참고 유사 표현(자동 표시용):",
+                "승인 대상 표현과 별도로, 화면 설명/예시 질문 생성을 위해 보관된 참고 표현입니다.",
+                *_format_bullets(similar_texts),
+            ]
+        )
+    lines.extend(
+        [
+            "",
+        "예시 질문:",
+        ]
+    )
     if questions:
         lines.extend(f"- {_clean_text(question)}" for question in questions)
     else:

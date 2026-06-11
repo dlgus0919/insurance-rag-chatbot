@@ -75,3 +75,43 @@ def test_format_candidate_for_practitioner_includes_guide_quality_warning_and_wr
     assert "여러 후보 concept" in text
     assert "보류한 뒤 target concept" in text
     assert max(len(line) for line in text.splitlines()) <= 46
+
+
+def test_format_candidate_hides_reference_similar_expressions_when_same_as_aliases() -> None:
+    candidate = OntologyCandidate(
+        candidate_id="cand",
+        concept_id="cov.rider",
+        canonical_name="특약",
+        candidate_aliases=["특약 등", "운전자한정특약"],
+        properties={
+            "display": {
+                "similar_expressions": ["운전자한정특약", "특약 등"],
+                "example_questions": [],
+            }
+        },
+    )
+
+    text = format_candidate_for_practitioner(candidate)
+
+    assert "승인 대상 표현(후보 alias)" in text
+    assert "참고 유사 표현" not in text
+
+
+def test_format_candidate_shows_reference_similar_expressions_when_different_from_aliases() -> None:
+    candidate = OntologyCandidate(
+        candidate_id="cand",
+        concept_id="cov.rider",
+        canonical_name="특약",
+        candidate_aliases=["특약 등"],
+        properties={
+            "display": {
+                "similar_expressions": ["운전자한정특약"],
+                "example_questions": [],
+            }
+        },
+    )
+
+    text = format_candidate_for_practitioner(candidate)
+
+    assert "참고 유사 표현(자동 표시용)" in text
+    assert "운전자한정특약" in text
