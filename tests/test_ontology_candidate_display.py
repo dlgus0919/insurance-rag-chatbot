@@ -71,6 +71,7 @@ def test_format_candidate_for_practitioner_includes_guide_quality_warning_and_wr
     assert "승인 대상 표현(후보 alias)" in text
     assert "실무자 판단 기준" in text
     assert "품질 경고" in text
+    assert "보류 사유 분류 기준" in text
     assert "문장 조각" in text
     assert "여러 후보 concept" in text
     assert "보류한 뒤 target concept" in text
@@ -115,3 +116,29 @@ def test_format_candidate_shows_reference_similar_expressions_when_different_fro
 
     assert "참고 유사 표현(자동 표시용)" in text
     assert "운전자한정특약" in text
+
+
+def test_format_candidate_shows_prior_hold_feedback() -> None:
+    candidate = OntologyCandidate(
+        candidate_id="cand",
+        concept_id="cov.rider",
+        canonical_name="특약",
+        candidate_aliases=["특약 등"],
+        properties={
+            "extraction": {
+                "prior_hold_feedback": [
+                    {
+                        "candidate_id": "old-cand",
+                        "hold_reason_labels": ["원문 근거 연결 부적절"],
+                        "note": "근거가 자동차보험 문맥입니다.",
+                    }
+                ]
+            }
+        },
+    )
+
+    text = format_candidate_for_practitioner(candidate)
+
+    assert "이전 보류 피드백" in text
+    assert "old-cand" in text
+    assert "근거가 자동차보험 문맥입니다" in text

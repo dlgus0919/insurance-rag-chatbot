@@ -5,6 +5,7 @@ import textwrap
 from typing import Any
 
 from src.ontology.candidate_quality import CandidateQualityIssue, analyze_candidate_quality
+from src.ontology.hold_feedback import hold_reason_guidance_lines
 from src.ontology.review_store import OntologyCandidate
 
 
@@ -127,6 +128,24 @@ def _format_bullets(values: list[str]) -> list[str]:
     return [f"- {item}" for item in items]
 
 
+def _format_prior_hold_feedback(items: Any) -> list[str]:
+    if not isinstance(items, list) or not items:
+        return []
+    lines = ["", "이전 보류 피드백:"]
+    for item in items[:5]:
+        if not isinstance(item, dict):
+            continue
+        labels = item.get("hold_reason_labels") if isinstance(item.get("hold_reason_labels"), list) else []
+        label_text = ", ".join(_clean_text(label) for label in labels if _clean_text(label)) or "보류 사유 미분류"
+        candidate_id = _clean_text(item.get("candidate_id")) or "-"
+        note = _clean_text(item.get("note"))
+        line = f"- {candidate_id}: {label_text}"
+        if note:
+            line = f"{line} / 메모: {note}"
+        lines.append(line)
+    return lines if len(lines) > 1 else []
+
+
 def _same_string_set(left: list[str], right: list[str]) -> bool:
     return set(unique_strings(left)) == set(unique_strings(right))
 
@@ -176,6 +195,7 @@ def format_candidate_for_practitioner(
     questions = display.get("example_questions") if isinstance(display.get("example_questions"), list) else []
     similar_texts = [str(item) for item in similar]
     show_similar_reference = bool(similar_texts) and not _same_string_set(candidate.candidate_aliases, similar_texts)
+    extraction = candidate.properties.get("extraction") if isinstance(candidate.properties.get("extraction"), dict) else {}
 
     lines = [
         f"후보 개념: {candidate.canonical_name}",
@@ -199,6 +219,10 @@ def format_candidate_for_practitioner(
                 all_candidates=all_candidates,
             )
         ),
+        "",
+        "보류 사유 분류 기준:",
+        *hold_reason_guidance_lines(),
+        *_format_prior_hold_feedback(extraction.get("prior_hold_feedback")),
     ]
     if show_similar_reference:
         lines.extend(

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from src.ontology.hold_feedback import build_hold_feedback_payload, normalize_hold_reason_codes
 from src.ontology.policy import OntologyReviewPolicy, load_review_policy
 from src.ontology.registry import ONTOLOGY_DIR
 
@@ -268,9 +269,11 @@ class OntologyReviewStore:
         reviewer: str = "unknown",
         reviewer_type: str = "practitioner",
         reason: str = "",
+        hold_reason_codes: list[str] | None = None,
     ) -> OntologyCandidate:
         if decision not in VALID_DECISIONS:
             raise ValueError(f"invalid decision: {decision}")
+        normalized_hold_reason_codes = normalize_hold_reason_codes(hold_reason_codes)
         candidates = self.load_candidates()
         updated: OntologyCandidate | None = None
         after_status = {
@@ -283,20 +286,32 @@ class OntologyReviewStore:
                 continue
             before_status = candidate.status
             candidate.status = after_status
-            updated = candidate
-            self._append_review_log(
-                {
-                    "review_id": str(uuid.uuid4()),
-                    "candidate_id": candidate_id,
-                    "decision": decision,
+            if decision == "hold":
+                candidate.properties = dict(candidate.properties)
+                candidate.properties["review_feedback"] = {
+                    **build_hold_feedback_payload(
+                        reason_codes=normalized_hold_reason_codes,
+                        note=reason,
+                    ),
                     "reviewer": reviewer,
                     "reviewer_type": reviewer_type,
-                    "reason": reason,
                     "created_at": utc_now_iso(),
-                    "before_status": before_status,
-                    "after_status": after_status,
                 }
-            )
+            updated = candidate
+            log_row = {
+                "review_id": str(uuid.uuid4()),
+                "candidate_id": candidate_id,
+                "decision": decision,
+                "reviewer": reviewer,
+                "reviewer_type": reviewer_type,
+                "reason": reason,
+                "created_at": utc_now_iso(),
+                "before_status": before_status,
+                "after_status": after_status,
+            }
+            if decision == "hold":
+                log_row["hold_reason_codes"] = normalized_hold_reason_codes
+            self._append_review_log(log_row)
             break
         if updated is None:
             raise KeyError(f"candidate not found: {candidate_id}")

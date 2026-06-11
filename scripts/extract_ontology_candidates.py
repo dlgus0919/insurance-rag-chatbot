@@ -95,6 +95,8 @@ def main() -> int:
     )
     selection = maybe_start_llm_server(llm_config, dry_run=args.dry_run)
     try:
+        store = OntologyReviewStore(candidates_path=args.output)
+        previous_review_candidates = store.load_candidates()
         concepts = load_manifest_concepts(args.manifest)
         chunks = load_processed_chunks(sources, limit=args.source_limit)
         graph_limit = max(args.source_limit - len(chunks), 0) if args.source_limit else None
@@ -107,13 +109,13 @@ def main() -> int:
             candidate_type=candidate_type,
             extraction_policy=candidate_policy,
             review_policy=review_policy,
+            previous_review_candidates=previous_review_candidates,
         )
         if args.mark_test_candidates:
             mark_candidates_as_test(result.candidates)
         saved = 0
         skipped_existing: list[str] = []
         if not args.dry_run:
-            store = OntologyReviewStore(candidates_path=args.output)
             for candidate in result.candidates:
                 try:
                     store.add_candidate(candidate, replace=args.replace_existing)

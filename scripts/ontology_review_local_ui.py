@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.ontology.candidate_display import format_candidate_for_practitioner
+from src.ontology.hold_feedback import HOLD_REASONS, normalize_hold_reason_codes
 from src.ontology.review_store import (
     DEFAULT_APPLIED_REVIEWS_PATH,
     DEFAULT_CANDIDATES_PATH,
@@ -146,6 +147,30 @@ textarea {
   padding: 8px;
   font: inherit;
 }
+.hold-reasons {
+  flex: 1 1 100%;
+  border: 1px solid #d9dee7;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.hold-reasons legend {
+  padding: 0 4px;
+  font-weight: 600;
+  font-size: 13px;
+}
+.hold-reasons label {
+  display: block;
+  margin: 7px 0;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.hold-reasons input {
+  margin-right: 6px;
+}
+.hold-reasons .muted {
+  display: block;
+  margin-left: 22px;
+}
 .message {
   margin-bottom: 12px;
   padding: 10px 12px;
@@ -185,6 +210,19 @@ def _candidate_summary(candidate: OntologyCandidate) -> str:
     if len(candidate.candidate_aliases) > 2:
         aliases = f"{aliases} 외 {len(candidate.candidate_aliases) - 2}개"
     return aliases or candidate.concept_id
+
+
+def _hold_reason_options() -> str:
+    items = []
+    for reason in HOLD_REASONS:
+        items.append(
+            "<label>"
+            f'<input type="checkbox" name="hold_reason_codes" value="{html.escape(reason.code)}">'
+            f"{html.escape(reason.label)}"
+            f'<span class="muted">{html.escape(reason.description)}</span>'
+            "</label>"
+        )
+    return "\n".join(items)
 
 
 class OntologyReviewHandler(BaseHTTPRequestHandler):
@@ -257,6 +295,11 @@ class OntologyReviewHandler(BaseHTTPRequestHandler):
   <input type="hidden" name="candidate_id" value="{html.escape(selected.candidate_id)}">
   <input type="hidden" name="status" value="{html.escape(status_filter)}">
   <textarea name="reason" placeholder="판단 사유를 남기려면 입력하세요."></textarea>
+  <fieldset class="hold-reasons">
+    <legend>보류 사유 분류</legend>
+    <div class="muted">보류를 선택할 때 해당하는 사유를 하나 이상 고르세요. 다음 후보 생성/검토에서 alias 제외, 근거 재탐색, target concept 재검토 힌트로 사용됩니다.</div>
+    {_hold_reason_options()}
+  </fieldset>
   <button class="approve" type="submit" name="decision" value="approve">승인</button>
   <button class="hold" type="submit" name="decision" value="hold">보류</button>
   <button class="reject" type="submit" name="decision" value="reject">거절</button>
@@ -296,6 +339,7 @@ class OntologyReviewHandler(BaseHTTPRequestHandler):
         candidate_id = (form.get("candidate_id") or [""])[0]
         decision = (form.get("decision") or [""])[0]
         reason = (form.get("reason") or [""])[0]
+        hold_reason_codes = normalize_hold_reason_codes(form.get("hold_reason_codes") or [])
         status_filter = (form.get("status") or [self.server.status_filter])[0]
         try:
             self.server.store.decide(
@@ -304,6 +348,7 @@ class OntologyReviewHandler(BaseHTTPRequestHandler):
                 reviewer=self.server.reviewer,
                 reviewer_type="practitioner_local_ui",
                 reason=reason,
+                hold_reason_codes=hold_reason_codes,
             )
             message = f"{candidate_id} 후보를 {decision} 처리했습니다."
         except Exception as exc:  # pragma: no cover - handler safety path.

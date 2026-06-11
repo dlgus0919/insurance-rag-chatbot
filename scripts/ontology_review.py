@@ -18,6 +18,7 @@ if str(ROOT) not in sys.path:
 from src.ontology.manifest_merge import ManifestMergeResult, merge_approved_candidates
 from src.ontology.candidate_display import format_candidate_for_practitioner
 from src.ontology.candidate_quality import sanitize_candidate_aliases
+from src.ontology.hold_feedback import HOLD_REASON_BY_CODE, normalize_hold_reason_codes
 from src.ontology.policy import load_review_policy
 from src.ontology.registry import ACTIVE_ONTOLOGY_MANIFEST, BASE_ONTOLOGY_MANIFEST
 from src.ontology.review_store import (
@@ -156,6 +157,13 @@ def main() -> int:
     parser.add_argument("--reviewer", default="practitioner", help="Reviewer name for audit log.")
     parser.add_argument("--reviewer-type", default="practitioner", help="Reviewer type for audit log.")
     parser.add_argument("--reason", default="", help="Decision reason.")
+    parser.add_argument(
+        "--hold-reason-code",
+        action="append",
+        default=[],
+        choices=sorted(HOLD_REASON_BY_CODE),
+        help="Structured hold reason code. Can be repeated with --decision hold.",
+    )
     parser.add_argument("--auto-approve-test", action="store_true", help="Approve pending test_candidate=true candidates only.")
     parser.add_argument(
         "--sanitize-candidate-aliases",
@@ -238,6 +246,7 @@ def main() -> int:
                 reviewer=args.reviewer,
                 reviewer_type=args.reviewer_type,
                 reason=args.reason,
+                hold_reason_codes=normalize_hold_reason_codes(args.hold_reason_code),
             )
             print(_json({"updated": candidate.to_dict()}))
 

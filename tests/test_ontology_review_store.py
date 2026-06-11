@@ -41,6 +41,33 @@ def test_review_store_decision_logs_status_transition(tmp_path: Path) -> None:
     assert '"reviewer": "tester"' in log_text
 
 
+def test_review_store_records_structured_hold_feedback(tmp_path: Path) -> None:
+    store = make_store(tmp_path)
+    store.add_candidate(
+        OntologyCandidate(
+            candidate_id="cand-1",
+            concept_id="cond.new",
+            canonical_name="신규 조건",
+            candidate_aliases=["잘못된 표현"],
+        )
+    )
+
+    updated = store.decide(
+        "cand-1",
+        "hold",
+        reviewer="tester",
+        reason="근거가 다른 문맥입니다.",
+        hold_reason_codes=["evidence_mismatch", "alias_mismatch", "unknown"],
+    )
+
+    feedback = updated.properties["review_feedback"]
+    assert feedback["hold_reason_codes"] == ["evidence_mismatch", "alias_mismatch"]
+    assert "원문 근거 연결 부적절" in feedback["hold_reason_labels"]
+    assert feedback["note"] == "근거가 다른 문맥입니다."
+    log_text = (tmp_path / "review_log.jsonl").read_text(encoding="utf-8")
+    assert '"hold_reason_codes": ["evidence_mismatch", "alias_mismatch"]' in log_text
+
+
 def test_auto_approve_test_candidates_excludes_production_candidates(tmp_path: Path) -> None:
     store = make_store(tmp_path)
     store.add_candidate(build_test_candidate("test-cand"))
