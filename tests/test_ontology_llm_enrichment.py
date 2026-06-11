@@ -11,6 +11,7 @@ from src.ontology.llm_enrichment import (
     validate_enrichment_output,
 )
 from src.ontology.review_store import HELD, OntologyCandidate
+from scripts.eval_ontology_llm_enrichment import evaluate_expected_enrichment
 
 
 def _candidate(**kwargs) -> OntologyCandidate:
@@ -159,6 +160,8 @@ def test_summary_counts_status_regressions():
             "json_valid": True,
             "schema_valid": True,
             "unsafe_approval": True,
+            "has_expected_enrichment": True,
+            "expected_checks_ok": False,
         }
     ]
 
@@ -168,6 +171,8 @@ def test_summary_counts_status_regressions():
     assert item["unsafe_approval_count"] == 1
     assert item["held_as_approve"] == 1
     assert item["json_validity"] == 1.0
+    assert item["expected_total"] == 1
+    assert item["expected_pass"] == 0
 
 
 def test_build_enrichment_prompt_contains_candidate_payload():
@@ -177,3 +182,25 @@ def test_build_enrichment_prompt_contains_candidate_payload():
     assert "candidate_aliases" in prompt
     assert "reason_codes는 반드시" in prompt
     assert "ownership_conflict" in prompt
+
+
+def test_evaluate_expected_enrichment_checks_expected_and_forbidden_decisions():
+    candidate = _candidate(
+        properties={
+            "expected_enrichment": {
+                "expected_decisions": ["reject", "hold"],
+                "forbidden_decisions": ["approve"],
+                "required_reason_codes": ["policy_risk"],
+            }
+        }
+    )
+    payload = {
+        "overall_decision": "reject",
+        "alias_assessments": [{"reason_codes": ["policy_risk"]}],
+    }
+
+    result = evaluate_expected_enrichment(candidate, payload)
+
+    assert result["has_expected_enrichment"] is True
+    assert result["expected_checks_ok"] is True
+    assert result["emitted_reason_codes"] == ["policy_risk"]

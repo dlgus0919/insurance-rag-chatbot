@@ -467,6 +467,8 @@ def summarize_enrichment_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         applied_as_reject = sum(
             1 for row in model_rows if row.get("candidate_status") in {APPROVED, APPLIED} and row.get("overall_decision") == "reject"
         )
+        expected_rows = [row for row in model_rows if row.get("has_expected_enrichment") is True]
+        expected_pass = sum(1 for row in expected_rows if row.get("expected_checks_ok") is True)
         summaries[model] = {
             "total": total,
             "decision_counts": dict(sorted(decisions.items())),
@@ -476,5 +478,8 @@ def summarize_enrichment_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "held_as_approve": held_as_approve,
             "rejected_as_approve": rejected_as_approve,
             "applied_as_reject": applied_as_reject,
+            "expected_total": len(expected_rows),
+            "expected_pass": expected_pass,
+            "expected_pass_rate": expected_pass / len(expected_rows) if expected_rows else 0.0,
         }
     return summaries

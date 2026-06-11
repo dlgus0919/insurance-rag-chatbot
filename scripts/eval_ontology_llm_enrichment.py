@@ -41,7 +41,10 @@ def _read_json_or_jsonl(path: Path) -> list[dict[str, Any]]:
     if not text:
         return []
     if text.startswith("{"):
-        payload = json.loads(text)
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = None
         if isinstance(payload, dict) and isinstance(payload.get("candidates"), list):
             return [item for item in payload["candidates"] if isinstance(item, dict)]
         if isinstance(payload, dict):
@@ -62,6 +65,52 @@ def load_candidates(path: Path, *, limit: int | None = None) -> list[OntologyCan
     if limit is not None:
         candidates = candidates[:limit]
     return candidates
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        text = str(item or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def expected_enrichment_spec(candidate: OntologyCandidate) -> dict[str, list[str]]:
+    properties = candidate.properties if isinstance(candidate.properties, dict) else {}
+    expected = properties.get("expected_enrichment") if isinstance(properties.get("expected_enrichment"), dict) else {}
+    return {
+        "expected_decisions": _string_list(expected.get("expected_decisions")),
+        "forbidden_decisions": _string_list(expected.get("forbidden_decisions")),
+        "required_reason_codes": _string_list(expected.get("required_reason_codes")),
+    }
+
+
+def evaluate_expected_enrichment(candidate: OntologyCandidate, payload: dict[str, Any]) -> dict[str, Any]:
+    spec = expected_enrichment_spec(candidate)
+    decision = str(payload.get("overall_decision") or "").strip()
+    emitted_reason_codes: set[str] = set()
+    for item in payload.get("alias_assessments", []):
+        if isinstance(item, dict):
+            emitted_reason_codes.update(_string_list(item.get("reason_codes")))
+
+    has_expected = any(spec.values())
+    expected_decisions_ok = not spec["expected_decisions"] or decision in set(spec["expected_decisions"])
+    forbidden_decisions_ok = not spec["forbidden_decisions"] or decision not in set(spec["forbidden_decisions"])
+    required_reason_codes_ok = not spec["required_reason_codes"] or set(spec["required_reason_codes"]).issubset(emitted_reason_codes)
+    return {
+        "has_expected_enrichment": has_expected,
+        "expected_decisions": spec["expected_decisions"],
+        "forbidden_decisions": spec["forbidden_decisions"],
+        "required_reason_codes": spec["required_reason_codes"],
+        "emitted_reason_codes": sorted(emitted_reason_codes),
+        "expected_decisions_ok": expected_decisions_ok,
+        "forbidden_decisions_ok": forbidden_decisions_ok,
+        "required_reason_codes_ok": required_reason_codes_ok,
+        "expected_checks_ok": expected_decisions_ok and forbidden_decisions_ok and required_reason_codes_ok,
+    }
 
 
 def parse_model_specs(raw: str) -> list[tuple[str, str]]:
@@ -151,6 +200,7 @@ def _run_one_model(
                 "unsafe_approval": is_unsafe_approval(candidate, parse_result.payload),
                 "enrichment": parse_result.payload,
             }
+            row.update(evaluate_expected_enrichment(candidate, parse_result.payload))
             rows.append(row)
             status = "OK" if row["schema_valid"] else "SCHEMA_FAIL"
             print(f"[{provider}:{model} {index:03d}/{len(candidates):03d}] {status} {candidate.candidate_id}")
@@ -178,19 +228,22 @@ def write_markdown(rows: list[dict[str, Any]], path: Path, *, dry_run: bool) -> 
         "",
         "## Model Summary",
         "",
-        "| model | total | decisions | json_validity | schema_validity | unsafe_approval | held_as_approve | rejected_as_approve | applied_as_reject |",
-        "|---|---:|---|---:|---:|---:|---:|---:|---:|",
+        "| model | total | decisions | json_validity | schema_validity | unsafe_approval | expected_pass | held_as_approve | rejected_as_approve | applied_as_reject |",
+        "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for model, item in sorted(summary.items()):
         decisions = ", ".join(f"{key}:{value}" for key, value in sorted(item["decision_counts"].items()))
         lines.append(
-            "| {model} | {total} | {decisions} | {json:.2%} | {schema:.2%} | {unsafe} | {held} | {rejected} | {applied} |".format(
+            "| {model} | {total} | {decisions} | {json:.2%} | {schema:.2%} | {unsafe} | {expected_pass}/{expected_total} ({expected_rate:.2%}) | {held} | {rejected} | {applied} |".format(
                 model=model,
                 total=item["total"],
                 decisions=decisions or "-",
                 json=item["json_validity"],
                 schema=item["schema_validity"],
                 unsafe=item["unsafe_approval_count"],
+                expected_pass=item["expected_pass"],
+                expected_total=item["expected_total"],
+                expected_rate=item["expected_pass_rate"],
                 held=item["held_as_approve"],
                 rejected=item["rejected_as_approve"],
                 applied=item["applied_as_reject"],
@@ -208,10 +261,11 @@ def write_markdown(rows: list[dict[str, Any]], path: Path, *, dry_run: bool) -> 
         ]
     )
     for model, item in sorted(summary.items()):
-        if item["unsafe_approval_count"] > 0 or item["schema_validity"] < 0.98:
+        expected_gate_failed = item["expected_total"] > 0 and item["expected_pass_rate"] < 0.80
+        if item["unsafe_approval_count"] > 0 or item["schema_validity"] < 0.98 or expected_gate_failed:
             role = "none"
             blocker = ""
-            note = "unsafe approval 또는 schema 안정성 미달"
+            note = "unsafe approval, schema 안정성, 또는 expected edge-case 기준 미달"
         else:
             role = "reserved"
             blocker = "ontology_role=reserved"
@@ -223,6 +277,7 @@ def write_markdown(rows: list[dict[str, Any]], path: Path, *, dry_run: bool) -> 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate local LLMs for ontology candidate enrichment shadow tasks.")
     parser.add_argument("--input", type=Path, required=True, help="Candidate JSON or JSONL input.")
+    parser.add_argument("--extra-input", action="append", type=Path, default=[], help="Additional candidate JSON/JSONL inputs, e.g. gold or synthetic edge cases.")
     parser.add_argument("--models", default=DEFAULT_MODELS)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true", help="Use deterministic template enrichment instead of LLM calls.")
@@ -241,6 +296,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     candidates = load_candidates(args.input, limit=args.limit)
+    for extra_input in args.extra_input:
+        candidates.extend(load_candidates(extra_input))
     if not candidates:
         raise SystemExit("No ontology candidates loaded.")
 

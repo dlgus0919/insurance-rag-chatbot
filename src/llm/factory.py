@@ -75,14 +75,14 @@ SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
     "qwen3-30b-a3b-instruct-2507-fp8": {
         "family": "Qwen3 Instruct",
         "size": "30B A3B FP8",
-        "status": "staged",
-        "use_case": "SGLang 신규 비교 모델",
+        "status": "ontology_primary",
+        "use_case": "온톨로지 후보 enrichment 주력 batch 모델",
     },
     "qwen3-next-80b-a3b-instruct-fp8": {
         "family": "Qwen3 Next Instruct",
         "size": "80B A3B FP8",
-        "status": "staged",
-        "use_case": "SGLang 장문/고성능 비교 모델",
+        "status": "optional",
+        "use_case": "온톨로지 enrichment 비교 후 Optional: Qwen3 30B 대비 edge-case 사유 구조화 열세",
     },
     "qwen3-next-80b-a3b-thinking-fp8": {
         "family": "Qwen3 Next Thinking",
@@ -396,6 +396,7 @@ def format_model_label(model: str, provider: str) -> str:
         if info:
             status_labels = {
                 "validated": "검증완료",
+                "ontology_primary": "온톨로지 주력",
                 "staged": "검증대상",
                 "disabled": "비활성",
                 "optional": "Optional(삭제 가능)",
@@ -408,6 +409,7 @@ def format_model_label(model: str, provider: str) -> str:
         if info:
             status_labels = {
                 "validated": "검증완료",
+                "ontology_primary": "온톨로지 주력",
                 "staged": "검증대상",
                 "disabled": "비활성",
                 "optional": "Optional(삭제 가능)",
