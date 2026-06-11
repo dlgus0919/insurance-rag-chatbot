@@ -9,7 +9,7 @@ from fastapi import APIRouter
 
 from src import config
 from src.api.schemas.system import HealthResponse, ModelInfo, ModelListResponse, SystemStatusResponse
-from src.llm.factory import format_model_label, list_runtime_available_models as _list_runtime_available_models
+from src.llm.factory import format_model_label, get_local_model_info, list_runtime_available_models as _list_runtime_available_models
 from src.retrieval.index_mode import resolve_index_paths
 
 router = APIRouter(tags=["system"])
@@ -43,13 +43,33 @@ async def models() -> ModelListResponse:
     for model in grouped.get("sglang", []):
         prefixed_id = f"sglang:{model}"
         label = format_model_label(model, "sglang")
-        local.append(ModelInfo(provider="local", id=prefixed_id, label=label))
+        info = get_local_model_info(model, "sglang")
+        local.append(
+            ModelInfo(
+                provider="local",
+                id=prefixed_id,
+                label=label,
+                status=info["status"] or None,
+                use_case=info["use_case"] or None,
+                optional=info["optional"] == "true",
+            )
+        )
 
     # 2. vLLM models
     for model in grouped.get("vllm", []):
         prefixed_id = f"vllm:{model}"
         label = format_model_label(model, "vllm")
-        local.append(ModelInfo(provider="local", id=prefixed_id, label=label))
+        info = get_local_model_info(model, "vllm")
+        local.append(
+            ModelInfo(
+                provider="local",
+                id=prefixed_id,
+                label=label,
+                status=info["status"] or None,
+                use_case=info["use_case"] or None,
+                optional=info["optional"] == "true",
+            )
+        )
 
     # 3. Ollama models
     for model in grouped.get("ollama", []):

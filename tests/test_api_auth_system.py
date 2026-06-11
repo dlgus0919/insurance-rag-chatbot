@@ -59,6 +59,22 @@ async def test_health_and_models(monkeypatch) -> None:
     assert models.providers["openai"][0].id == "gpt-5-mini"
 
 
+@pytest.mark.anyio
+async def test_models_include_local_optional_metadata(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.api.routes.system.list_available_models",
+        lambda: {"sglang": [], "vllm": ["gemma-4-26b-a4b-nvfp4"], "ollama": [], "openai": []},
+    )
+
+    models = await system.models()
+
+    local = models.providers["local"][0]
+    assert local.id == "vllm:gemma-4-26b-a4b-nvfp4"
+    assert local.status == "optional"
+    assert local.optional is True
+    assert local.use_case
+
+
 def test_create_app_registers_week1_routes() -> None:
     app = create_app()
     paths = {route.path for route in app.routes}

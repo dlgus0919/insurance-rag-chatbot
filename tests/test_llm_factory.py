@@ -45,7 +45,10 @@ def test_model_info_and_label_for_known_and_custom_models() -> None:
     assert info["size"] == "mini"
     assert "Cloud · OpenAI · GPT-5 mini" in factory.format_model_label("gpt-5-mini", "openai")
     assert "Local · SGLang · GPT-OSS · 20B · 검증완료" == factory.format_model_label("gpt-oss-20b", "sglang")
-    assert "삭제검토" in factory.format_model_label("gemma-4-26b-a4b-nvfp4", "vllm")
+    assert "Optional(삭제 가능)" in factory.format_model_label("gemma-4-26b-a4b-nvfp4", "vllm")
+    local_info = factory.get_local_model_info("gemma-4-26b-a4b-nvfp4", "vllm")
+    assert local_info["status"] == "optional"
+    assert local_info["optional"] == "true"
     assert custom["use_case"] == "사용자 정의"
 
 

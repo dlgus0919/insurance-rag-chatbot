@@ -30,7 +30,7 @@ LOCAL_LARGE_MODEL_INFO: dict[str, dict[str, str]] = {
     "gemma-4-26b-a4b-nvfp4": {
         "family": "Gemma 4",
         "size": "26B A4B NVFP4",
-        "status": "deletion_candidate",
+        "status": "optional",
         "use_case": "vLLM 로컬 답변 후보: Gemma 4 31B 대체 가능성 검토",
     },
     "gemma-4-31b-it-nvfp4": {
@@ -361,6 +361,28 @@ def get_openai_model_info(model: str) -> dict:
     return {"model": normalized, "family": family, "size": size, "use_case": "사용자 정의"}
 
 
+def get_local_model_info(model: str, provider: str) -> dict[str, str]:
+    """Return provider-scoped local model metadata."""
+
+    normalized = normalize_model_id(model)
+    if provider == "sglang":
+        info = SGLANG_MODEL_INFO.get(normalized, {})
+    elif provider == "vllm":
+        info = LOCAL_LARGE_MODEL_INFO.get(normalized, SGLANG_MODEL_INFO.get(normalized, {}))
+    else:
+        info = {}
+    status = str(info.get("status") or "").strip()
+    return {
+        "model": normalized,
+        "provider": provider,
+        "family": str(info.get("family") or normalized),
+        "size": str(info.get("size") or ""),
+        "status": status,
+        "use_case": str(info.get("use_case") or ""),
+        "optional": "true" if status == "optional" else "false",
+    }
+
+
 def format_model_label(model: str, provider: str) -> str:
     """Return a display label for a provider/model pair."""
 
@@ -372,14 +394,24 @@ def format_model_label(model: str, provider: str) -> str:
     if provider == "sglang":
         info = SGLANG_MODEL_INFO.get(normalized)
         if info:
-            status_labels = {"validated": "검증완료", "staged": "검증대상", "disabled": "비활성", "deletion_candidate": "삭제검토"}
+            status_labels = {
+                "validated": "검증완료",
+                "staged": "검증대상",
+                "disabled": "비활성",
+                "optional": "Optional(삭제 가능)",
+            }
             status = status_labels.get(info["status"], "검증대상")
             return f"Local · SGLang · {info['family']} · {info['size']} · {status}"
         return f"Local · SGLang · {normalized}"
     if provider == "vllm":
         info = LOCAL_LARGE_MODEL_INFO.get(normalized, SGLANG_MODEL_INFO.get(normalized))
         if info:
-            status_labels = {"validated": "검증완료", "staged": "검증대상", "disabled": "비활성", "deletion_candidate": "삭제검토"}
+            status_labels = {
+                "validated": "검증완료",
+                "staged": "검증대상",
+                "disabled": "비활성",
+                "optional": "Optional(삭제 가능)",
+            }
             status = status_labels.get(info["status"], "검증대상")
             return f"Local · vLLM · {info['family']} · {info['size']} · {status}"
         return f"Local · vLLM · {normalized}"
