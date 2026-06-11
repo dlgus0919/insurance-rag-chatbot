@@ -98,6 +98,34 @@ def test_ontology_sync_check_rejects_retrieval_only_concept(tmp_path) -> None:
     assert errors == ["bad.retrieval_only: retrieval expansion exists without planner mapping"]
 
 
+def test_ontology_sync_check_rejects_candidate_alias_quality_issues(tmp_path) -> None:
+    manifest = {
+        "schema_version": "1.0",
+        "version": "test",
+        "concepts": [
+            {
+                "concept_id": "cov.one",
+                "canonical_name": "첫 보장",
+                "candidate_aliases": ["즉 비급여 도수치료", "비급여 주사제"],
+                "planner": {"coverage_topics": ["첫 보장"]},
+            },
+            {
+                "concept_id": "cov.two",
+                "canonical_name": "둘째 보장",
+                "candidate_aliases": ["비급여 주사제"],
+                "planner": {"coverage_topics": ["둘째 보장"]},
+            },
+        ],
+    }
+    manifest_path = tmp_path / "concepts.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+    errors = check_registry(OntologyRegistry(manifest_path))
+
+    assert any("sentence-like evidence text" in error for error in errors)
+    assert any("maps to multiple concepts" in error for error in errors)
+
+
 def test_resolve_default_ontology_manifest_prefers_env(monkeypatch, tmp_path) -> None:
     manifest_path = tmp_path / "custom_concepts.json"
     manifest_path.write_text('{"schema_version":"1.0","version":"test","concepts":[]}', encoding="utf-8")

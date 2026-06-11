@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import textwrap
 from typing import Any
 
+from src.ontology.candidate_quality import CandidateQualityIssue, analyze_candidate_quality
 from src.ontology.review_store import OntologyCandidate
 
 
@@ -96,7 +98,63 @@ def build_display_metadata(
     }
 
 
-def format_candidate_for_practitioner(candidate: OntologyCandidate, *, include_details: bool = False) -> str:
+PRACTITIONER_DECISION_GUIDE = [
+    "승인: 후보 표현이 후보 개념과 같은 보험 업무 개념을 가리키고, 원문 근거의 사용 맥락도 그 개념과 맞으며, 다른 개념으로 해석될 가능성이 낮을 때 선택합니다.",
+    "보류: 유사 표현 자체는 쓸 만하지만 원문 근거가 다른 개념과 섞여 있거나, 소유권 충돌/문장 조각/추가 근거 확인이 필요할 때 선택합니다.",
+    "거절: 표현이 너무 넓거나 지급·면책·감액·계산 판단으로 이어지거나, 후보 개념과 연결이 잘못됐거나, 단순 문장 조각일 때 선택합니다.",
+    "근거는 후보 개념과 연결이 어긋났지만 유사 표현은 적절해 보이면 바로 승인하지 말고 보류한 뒤 target concept 또는 표현 정제를 요청합니다.",
+]
+
+
+def _format_quality_issues(issues: list[CandidateQualityIssue]) -> list[str]:
+    if not issues:
+        return ["- 감지된 중복 후보/소유권 충돌/문장 조각 경고가 없습니다."]
+    lines: list[str] = []
+    for issue in issues:
+        prefix = "주의" if issue.severity == "warning" else "차단"
+        lines.append(f"- [{prefix}] {issue.message}")
+        if issue.related:
+            lines.append(f"  관련 후보: {', '.join(issue.related)}")
+        if issue.recommendation:
+            lines.append(f"  권장 판단: {issue.recommendation}")
+    return lines
+
+
+def wrap_display_text(text: str, *, width: int = 82) -> str:
+    if width <= 0:
+        return text
+    wrapped: list[str] = []
+    for line in text.splitlines():
+        if not line.strip():
+            wrapped.append("")
+            continue
+        indent = ""
+        stripped = line
+        if line.startswith("- "):
+            indent = "  "
+        elif line.startswith("  "):
+            indent = "  "
+            stripped = line.strip()
+        wrapped.extend(
+            textwrap.wrap(
+                stripped,
+                width=width,
+                subsequent_indent=indent,
+                break_long_words=True,
+                break_on_hyphens=False,
+            )
+            or [line]
+        )
+    return "\n".join(wrapped)
+
+
+def format_candidate_for_practitioner(
+    candidate: OntologyCandidate,
+    *,
+    include_details: bool = False,
+    all_candidates: list[OntologyCandidate] | None = None,
+    wrap_width: int | None = 82,
+) -> str:
     display = candidate.properties.get("display") if isinstance(candidate.properties.get("display"), dict) else {}
     evidence = candidate.source_evidence[0] if candidate.source_evidence else {}
     doc = _clean_text(evidence.get("doc_short") or evidence.get("doc_name")) or "-"
@@ -108,12 +166,28 @@ def format_candidate_for_practitioner(candidate: OntologyCandidate, *, include_d
 
     lines = [
         f"후보 개념: {candidate.canonical_name}",
+        f"후보 ID: {candidate.candidate_id}",
+        f"대상 concept: {candidate.concept_id}",
         "",
         "설명:",
         _clean_text(display.get("summary")) or "-",
         "",
+        "실무자 판단 기준:",
+        *[f"- {item}" for item in PRACTITIONER_DECISION_GUIDE],
+        "",
+        "품질 경고:",
+        *_format_quality_issues(
+            analyze_candidate_quality(
+                candidate,
+                all_candidates=all_candidates,
+            )
+        ),
+        "",
         "유사 표현:",
         ", ".join(unique_strings([str(item) for item in similar])) if similar else "-",
+        "",
+        "후보 alias:",
+        ", ".join(unique_strings(candidate.candidate_aliases)) if candidate.candidate_aliases else "-",
         "",
         "예시 질문:",
     ]
@@ -144,4 +218,5 @@ def format_candidate_for_practitioner(candidate: OntologyCandidate, *, include_d
         }
         lines.extend(["", "상세 metadata:", json.dumps(detail, ensure_ascii=False, indent=2, sort_keys=True)])
 
-    return "\n".join(lines)
+    text = "\n".join(lines)
+    return wrap_display_text(text, width=wrap_width) if wrap_width else text

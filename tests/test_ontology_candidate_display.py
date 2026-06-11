@@ -48,3 +48,28 @@ def test_format_candidate_for_practitioner_uses_display_metadata() -> None:
     assert "교통 관련 상해 표현" in text
     assert "교통상해" in text
     assert "[약관 / 12쪽]" in text
+
+
+def test_format_candidate_for_practitioner_includes_guide_quality_warning_and_wraps() -> None:
+    candidate = OntologyCandidate(
+        candidate_id="cand-a",
+        concept_id="cov.a",
+        canonical_name="A 개념",
+        candidate_aliases=["즉 비급여 도수치료"],
+        source_evidence=[{"doc_short": "약관", "excerpt": "즉 비급여 도수치료"}],
+    )
+    other = OntologyCandidate(
+        candidate_id="cand-b",
+        concept_id="cov.b",
+        canonical_name="B 개념",
+        candidate_aliases=["즉 비급여 도수치료"],
+    )
+
+    text = format_candidate_for_practitioner(candidate, all_candidates=[candidate, other], wrap_width=46)
+
+    assert "실무자 판단 기준" in text
+    assert "품질 경고" in text
+    assert "문장 조각" in text
+    assert "여러 후보 concept" in text
+    assert "보류한 뒤 target concept" in text
+    assert max(len(line) for line in text.splitlines()) <= 46
