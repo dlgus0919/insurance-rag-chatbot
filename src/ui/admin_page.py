@@ -267,7 +267,8 @@ def _tab_system(_log) -> None:
     with col2:
         st.markdown("**LLM**")
         st.write("Ollama 허용:", is_ollama_allowed())
-        st.write("기본 로컬 모델:", config.OLLAMA_MODEL)
+        st.write("기본 SGLang 모델:", config.SGLANG_DEFAULT_MODEL)
+        st.write("Ollama fallback 모델:", config.OLLAMA_MODEL)
         st.write("기본 OpenAI 모델:", config.OPENAI_DEFAULT_MODEL)
         st.write("선택 가능 모델:", list_available_models())
         st.markdown("**임베딩**")

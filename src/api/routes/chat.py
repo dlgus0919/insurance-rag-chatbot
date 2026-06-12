@@ -247,7 +247,7 @@ def _select_model(request: ChatRequest) -> str:
         return MODEL_ALIAS.get(request.model, request.model)
     if request.provider == "openai":
         return config.OPENAI_DEFAULT_MODEL
-    return config.OLLAMA_MODEL
+    return f"sglang:{config.SGLANG_DEFAULT_MODEL}"
 
 
 def _get_pipeline(model: str, top_k: int, index_mode: str):

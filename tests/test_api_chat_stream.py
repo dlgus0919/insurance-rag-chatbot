@@ -6,6 +6,7 @@ from src.api.db import Base
 from src.api.models import AuditLog, ChatMessage, ChatSession
 from src.api.rag_service import prepare_retrieved_context
 from src.api.routes import chat, sessions
+from src.api.routes.chat import _select_model as select_chat_model
 from src.api.schemas.chat import ChatRequest
 from src.api.schemas.sessions import SessionCreateRequest
 from src.auth.users import User
@@ -108,6 +109,14 @@ class FakePipeline:
 
     def build_prompt(self, question, chunks, graph_context=None):
         return f"질문: {question}\n근거 수: {len(chunks)}"
+
+
+def test_chat_default_model_uses_answer_primary_sglang(monkeypatch) -> None:
+    monkeypatch.setattr(chat.config, "SGLANG_DEFAULT_MODEL", "qwen3-next-80b-a3b-instruct-fp8")
+
+    selected = select_chat_model(ChatRequest(query="기본 모델 테스트"))
+
+    assert selected == "sglang:qwen3-next-80b-a3b-instruct-fp8"
 
 
 class FakeGraphRetriever:

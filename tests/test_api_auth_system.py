@@ -63,16 +63,36 @@ async def test_health_and_models(monkeypatch) -> None:
 async def test_models_include_local_optional_metadata(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.api.routes.system.list_available_models",
-        lambda: {"sglang": [], "vllm": ["gemma-4-26b-a4b-nvfp4"], "ollama": [], "openai": []},
+        lambda: {"sglang": [], "vllm": ["gemma-4-31b-it-nvfp4"], "ollama": [], "openai": []},
     )
 
     models = await system.models()
 
     local = models.providers["local"][0]
-    assert local.id == "vllm:gemma-4-26b-a4b-nvfp4"
-    assert local.status == "optional"
-    assert local.optional is True
+    assert local.id == "vllm:gemma-4-31b-it-nvfp4"
+    assert local.status == "vision_candidate"
+    assert local.optional is False
     assert local.use_case
+
+
+@pytest.mark.anyio
+async def test_models_default_prefers_answer_primary_sglang(monkeypatch) -> None:
+    monkeypatch.setattr(system.config, "SGLANG_DEFAULT_MODEL", "qwen3-next-80b-a3b-instruct-fp8")
+    monkeypatch.setattr(system.config, "VLLM_DEFAULT_MODEL", "gemma-4-31b-it-nvfp4")
+    monkeypatch.setattr(system.config, "OLLAMA_MODEL", "exaone3.5:7.8b")
+    monkeypatch.setattr(
+        "src.api.routes.system.list_available_models",
+        lambda: {
+            "sglang": ["qwen3-next-80b-a3b-instruct-fp8"],
+            "vllm": ["gemma-4-31b-it-nvfp4"],
+            "ollama": ["exaone3.5:7.8b"],
+            "openai": [],
+        },
+    )
+
+    models = await system.models()
+
+    assert models.defaults["local"] == "sglang:qwen3-next-80b-a3b-instruct-fp8"
 
 
 def test_create_app_registers_week1_routes() -> None:

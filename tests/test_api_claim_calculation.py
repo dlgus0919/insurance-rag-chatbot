@@ -10,6 +10,16 @@ def _employee() -> User:
     return User("employee01", "hash", users.ROLE_EMPLOYEE, "직원", "2026-05-20T00:00:00Z", "2026-05-20T00:00:00Z")
 
 
+def test_claim_default_model_uses_answer_primary_sglang(monkeypatch) -> None:
+    monkeypatch.setattr(claim.config, "SGLANG_DEFAULT_MODEL", "qwen3-next-80b-a3b-instruct-fp8")
+
+    selected = claim._select_model(
+        ClaimCalculationRequest(items=[ClaimItemRequest(input_name="도수치료")])
+    )
+
+    assert selected == "sglang:qwen3-next-80b-a3b-instruct-fp8"
+
+
 @pytest.mark.anyio
 async def test_claim_calculation_route_returns_payable_amount(monkeypatch) -> None:
     """4세대 도수치료 단일 보상 코드의 순수 계산 route를 검증한다.

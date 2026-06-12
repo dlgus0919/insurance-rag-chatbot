@@ -89,7 +89,7 @@ async def models() -> ModelListResponse:
 
     # Determine defaults
     local_default = None
-    for prefix, model_id in [("vllm", config.VLLM_DEFAULT_MODEL), ("sglang", config.SGLANG_DEFAULT_MODEL), ("ollama", config.OLLAMA_MODEL)]:
+    for prefix, model_id in [("sglang", config.SGLANG_DEFAULT_MODEL), ("vllm", config.VLLM_DEFAULT_MODEL), ("ollama", config.OLLAMA_MODEL)]:
         pref = f"{prefix}:{model_id}"
         if any(m.id == pref for m in local):
             local_default = pref

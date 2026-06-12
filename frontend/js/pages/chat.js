@@ -1291,7 +1291,7 @@ export {
 };
 
 function getSelectedModel() {
-  return localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'ollama:exaone3.5:7.8b';
+  return localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'sglang:qwen3-next-80b-a3b-instruct-fp8';
 }
 
 function isReasoningSupportedModel(modelId) {
@@ -1319,6 +1319,7 @@ function formatSelectedModelLabel(modelId) {
   if (!value) return '미확인';
 
   const [, raw = value] = value.split(':', 2);
+  if (value === 'sglang:qwen3-next-80b-a3b-instruct-fp8') return 'SGLang · Qwen3 Next 80B Instruct';
   if (value === 'sglang:gpt-oss-20b') return 'SGLang · GPT-OSS 20B';
   if (value === 'ollama:exaone3.5:7.8b') return 'Ollama · exaone3.5:7.8b';
   if (value.startsWith('sglang:')) return `SGLang · ${raw}`;

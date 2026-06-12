@@ -103,7 +103,7 @@ def _select_model(payload: ClaimCalculationRequest) -> str:
         return MODEL_ALIAS.get(payload.model, payload.model)
     if payload.provider == "openai":
         return config.OPENAI_DEFAULT_MODEL
-    return f"vllm:{config.VLLM_DEFAULT_MODEL}"
+    return f"sglang:{config.SGLANG_DEFAULT_MODEL}"
 
 
 def _provider_from_model(model: str, requested_provider: str | None) -> str:
