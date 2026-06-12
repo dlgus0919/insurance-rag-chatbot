@@ -13,14 +13,17 @@
   - 요청에 모델이 없을 때 Ollama fallback이 아니라 `sglang:{SGLANG_DEFAULT_MODEL}`를 사용한다.
 - Claim calculation API
   - 요청에 모델이 없을 때 vLLM 기본값이 아니라 `sglang:{SGLANG_DEFAULT_MODEL}`를 사용한다.
-- Streamlit UI
-  - 로그인 시 대형 로컬 모델 기본 선택을 vLLM이 아니라 SGLang 기본 모델로 변경했다.
 - Frontend SPA
   - localStorage에 모델 선택값이 없을 때 fallback 기본값을 `sglang:qwen3-next-80b-a3b-instruct-fp8`로 변경했다.
   - Qwen3 Next 80B instruct 표시 라벨을 추가하고 번들 `frontend/dist/app.min.js`를 재빌드했다.
+- DGX 운영 wrapper
+  - `ops/bin/insurance-rag-common`, `ops/bin/insurance-rag-up`의 FastAPI + SPA 기동 기본값을 `qwen3-next-80b-a3b-instruct-fp8`로 변경했다.
 - 환경/운영 스크립트
-  - `.env.example`, `scripts/run_offline_streamlit_test.sh`, `scripts/prepare_offline_assets.py`의 기본 모델 설정을 평가 결론과 맞췄다.
+  - `.env.example`, `scripts/prepare_offline_assets.py`의 기본 모델 설정을 평가 결론과 맞췄다.
   - vLLM 기본 후보는 이미지 인식 후보인 `gemma-4-31b-it-nvfp4`로 축소했다.
+- Streamlit legacy 경로
+  - 현재 정식 앱은 FastAPI + SPA이므로 Streamlit UI 파일은 기본 모델 변경 대상으로 보지 않는다.
+  - Streamlit 관련 코드는 명시 요청이 없는 한 앞으로 업데이트하지 않는다.
 
 ## 3. 80B Thinking 모델이 낮게 평가된 이유
 
@@ -50,8 +53,9 @@ DGX 기준 검증:
 ```bash
 .venv/bin/python -m pytest tests/test_api_auth_system.py tests/test_api_chat_stream.py tests/test_api_claim_calculation.py tests/test_llm_factory.py -q
 node --test tests/test_frontend_model_selection_sync.mjs
-.venv/bin/python -m py_compile src/api/routes/system.py src/api/routes/chat.py src/api/routes/claim.py src/ui/streamlit_app.py src/ui/admin_page.py scripts/prepare_offline_assets.py
-git diff --check -- .env.example frontend/js/pages/chat.js frontend/dist/app.min.js scripts/run_offline_streamlit_test.sh scripts/prepare_offline_assets.py src/api/routes/system.py src/api/routes/chat.py src/api/routes/claim.py src/ui/streamlit_app.py src/ui/admin_page.py tests/test_api_auth_system.py tests/test_api_chat_stream.py tests/test_api_claim_calculation.py tests/test_frontend_model_selection_sync.mjs
+.venv/bin/python -m py_compile src/api/routes/system.py src/api/routes/chat.py src/api/routes/claim.py scripts/prepare_offline_assets.py
+bash -n ops/bin/insurance-rag-common ops/bin/insurance-rag-up
+git diff --check -- .env.example frontend/js/pages/chat.js frontend/dist/app.min.js scripts/prepare_offline_assets.py ops/bin/insurance-rag-common ops/bin/insurance-rag-up src/api/routes/system.py src/api/routes/chat.py src/api/routes/claim.py tests/test_api_auth_system.py tests/test_api_chat_stream.py tests/test_api_claim_calculation.py tests/test_frontend_model_selection_sync.mjs
 ```
 
 결과:

@@ -11,7 +11,7 @@ APP_HOST="${INSURANCE_RAG_APP_HOST:-127.0.0.1}"
 APP_PORT="${INSURANCE_RAG_APP_PORT:-18080}"
 APP_SESSION="${INSURANCE_RAG_APP_SESSION:-insurance-rag-api}"
 DEFAULT_PROVIDER="${INSURANCE_RAG_PROVIDER:-sglang}"
-DEFAULT_MODEL="${INSURANCE_RAG_MODEL:-gpt-oss-20b}"
+DEFAULT_MODEL="${INSURANCE_RAG_MODEL:-qwen3-next-80b-a3b-instruct-fp8}"
 APP_LOG_DIR="${INSURANCE_RAG_LOG_DIR:-$PROJECT_DIR/logs}"
 
 log() {
@@ -110,9 +110,10 @@ setup_fastapi_env() {
     export SGLANG_DEFAULT_MODEL="$selected_sglang_model"
     export SGLANG_CANDIDATE_MODELS="$selected_sglang_model"
   else
-    export SGLANG_DEFAULT_MODEL="${SGLANG_DEFAULT_MODEL:-gpt-oss-20b}"
-    export SGLANG_CANDIDATE_MODELS="${SGLANG_CANDIDATE_MODELS:-gpt-oss-20b,gpt-oss-120b,qwen3-30b-a3b-instruct-2507-fp8,qwen3-next-80b-a3b-instruct-fp8,qwen3-next-80b-a3b-thinking-fp8}"
+    export SGLANG_DEFAULT_MODEL="${SGLANG_DEFAULT_MODEL:-qwen3-next-80b-a3b-instruct-fp8}"
+    export SGLANG_CANDIDATE_MODELS="${SGLANG_CANDIDATE_MODELS:-qwen3-next-80b-a3b-instruct-fp8,qwen3-30b-a3b-instruct-2507-fp8,gpt-oss-20b}"
   fi
+  export SGLANG_DISABLED_MODELS="${SGLANG_DISABLED_MODELS:-gemma-4-26b-a4b-nvfp4,nemotron-3-nano-30b-a3b-nvfp4,gpt-oss-120b,qwen3-next-80b-a3b-thinking-fp8}"
   export SGLANG_STRICT_AVAILABLE_MODELS="${SGLANG_STRICT_AVAILABLE_MODELS:-true}"
   export SGLANG_ENABLE_APP_SWITCH="${SGLANG_ENABLE_APP_SWITCH:-true}"
   export SGLANG_SWITCH_SCRIPT="${SGLANG_SWITCH_SCRIPT:-$AI_OPS_ROOT/bin/switch-sglang-model}"
@@ -124,9 +125,10 @@ setup_fastapi_env() {
     export VLLM_DEFAULT_MODEL="$selected_vllm_model"
     export VLLM_CANDIDATE_MODELS="$selected_vllm_model"
   else
-    export VLLM_DEFAULT_MODEL="${VLLM_DEFAULT_MODEL:-gemma-4-26b-a4b-nvfp4}"
-    export VLLM_CANDIDATE_MODELS="${VLLM_CANDIDATE_MODELS:-gemma-4-26b-a4b-nvfp4,gemma-4-31b-it-nvfp4,nemotron-3-nano-30b-a3b-nvfp4,exaone-4.0-32b-awq}"
+    export VLLM_DEFAULT_MODEL="${VLLM_DEFAULT_MODEL:-gemma-4-31b-it-nvfp4}"
+    export VLLM_CANDIDATE_MODELS="${VLLM_CANDIDATE_MODELS:-gemma-4-31b-it-nvfp4}"
   fi
+  export VLLM_DISABLED_MODELS="${VLLM_DISABLED_MODELS:-gemma-4-26b-a4b-nvfp4,nemotron-3-nano-30b-a3b-nvfp4,exaone-4.0-32b-awq}"
   export VLLM_STRICT_AVAILABLE_MODELS="${VLLM_STRICT_AVAILABLE_MODELS:-true}"
   export VLLM_ENABLE_APP_SWITCH="${VLLM_ENABLE_APP_SWITCH:-true}"
   export VLLM_SWITCH_SCRIPT="${VLLM_SWITCH_SCRIPT:-$AI_OPS_ROOT/bin/switch-vllm-model}"
@@ -142,7 +144,7 @@ setup_fastapi_env() {
     export VLLM_STRICT_AVAILABLE_MODELS=false
   else
     export OLLAMA_MODEL="${OLLAMA_MODEL:-exaone3.5:7.8b}"
-    export OLLAMA_CANDIDATE_MODELS="${OLLAMA_CANDIDATE_MODELS:-exaone3.5:7.8b,llama-3.3-70b-instruct-q4-k-m}"
+    export OLLAMA_CANDIDATE_MODELS="${OLLAMA_CANDIDATE_MODELS:-exaone3.5:7.8b}"
   fi
 
   export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"

@@ -114,11 +114,19 @@ CLI:
 python scripts/cli.py
 ```
 
-Streamlit:
+FastAPI + SPA:
+
+```bash
+python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000
+```
+
+Legacy Streamlit UI:
 
 ```bash
 streamlit run src/ui/streamlit_app.py
 ```
+
+현재 정식 앱 경로는 FastAPI가 `frontend/` SPA와 API를 함께 제공하는 구조입니다. Streamlit UI는 과거 검증/참고용 legacy 경로로 남아 있으며, 신규 기능 개발과 운영 검증은 FastAPI + SPA 기준으로 진행합니다.
 
 OpenAI 모델 사용 예시:
 

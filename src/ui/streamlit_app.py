@@ -196,7 +196,7 @@ def _ensure_selected_large_model_ready() -> None:
         return
     selected = st.session_state.get("selected_large_model")
     if not selected:
-        selected = provider_prefixed_model("sglang", config.SGLANG_DEFAULT_MODEL) if ("sglang", config.SGLANG_DEFAULT_MODEL) in models else provider_prefixed_model(*models[0])
+        selected = provider_prefixed_model("vllm", config.VLLM_DEFAULT_MODEL) if ("vllm", config.VLLM_DEFAULT_MODEL) in models else provider_prefixed_model(*models[0])
     provider, model = split_model_selection(selected)
     if (provider, model) not in models:
         provider, model = models[0]
@@ -319,7 +319,7 @@ def _check_auth(session_id: str) -> bool:
         large_models = [provider_prefixed_model(provider, model) for provider, model in list_startup_large_models()]
         selected_large_model = None
         if large_models:
-            default_large = st.session_state.get("selected_large_model") or provider_prefixed_model("sglang", config.SGLANG_DEFAULT_MODEL)
+            default_large = st.session_state.get("selected_large_model") or provider_prefixed_model("vllm", config.VLLM_DEFAULT_MODEL)
             default_index = large_models.index(default_large) if default_large in large_models else 0
             selected_large_model = st.selectbox(
                 "대형 로컬 모델",

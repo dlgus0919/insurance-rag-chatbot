@@ -98,7 +98,7 @@ FastAPI + SPA 서비스를 `127.0.0.1:18080`에 tmux 세션으로 기동한다.
 기본값:
 
 - provider: `sglang`
-- model: `gpt-oss-20b`
+- model: `qwen3-next-80b-a3b-instruct-fp8`
 - app port: `18080`
 - tmux session: `insurance-rag-api`
 - app log: `logs/fastapi_YYYYmmdd_HHMMSS.log`
