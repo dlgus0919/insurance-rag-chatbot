@@ -4,8 +4,11 @@ from scripts.eval_large_model_rag import (
     _output_health_ok,
     _regex_all,
     _required_groups_ok,
+    CaseResult,
     ModelSpec,
+    parse_args,
     parse_model_specs,
+    result_to_dict,
     stop_model_server,
 )
 
@@ -76,3 +79,35 @@ def test_large_eval_stop_model_server_targets_provider_tmux_session(monkeypatch)
         (["tmux", "kill-session", "-t", "sglang-local"], False),
         (["tmux", "kill-session", "-t", "vllm-gemma4"], False),
     ]
+
+
+def test_large_eval_accepts_v2_only_index_mode():
+    args = parse_args(["--cases", "eval/policy_xlsx_qa.jsonl", "--models", "sglang:gpt-oss-20b", "--index-mode", "v2_only"])
+
+    assert args.index_mode == "v2_only"
+
+
+def test_large_eval_defaults_to_corrected_ocr_index_mode(monkeypatch):
+    monkeypatch.delenv("LARGE_RAG_EVAL_INDEX_MODE", raising=False)
+
+    args = parse_args(["--cases", "eval/policy_xlsx_qa.jsonl", "--models", "sglang:gpt-oss-20b"])
+
+    assert args.index_mode == "v2_only"
+
+
+def test_large_eval_result_serializes_index_mode():
+    result = CaseResult(
+        model="sglang:gpt-oss-20b",
+        index_mode="v2_only",
+        case_id="case-1",
+        category="cat",
+        question="question",
+        passed=True,
+        checks={"ok": True},
+        failures=[],
+        answer="answer",
+        top_sources=[],
+        timing={"elapsed_s": 1.0},
+    )
+
+    assert result_to_dict(result)["index_mode"] == "v2_only"

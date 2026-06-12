@@ -27,6 +27,7 @@ from src.llm.openai_compatible_client import OpenAICompatibleClient
 from src.rag.pipeline import RagPipeline
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
+from src.retrieval.index_mode import INDEX_MODES, resolve_index_paths
 from src.retrieval.vector_store import VectorStore
 
 DEFAULT_CASE_PATH = ROOT / "eval" / "large_model_rag_qa.jsonl"
@@ -44,6 +45,7 @@ HANGUL_RE = re.compile(r"[가-힣]")
 @dataclass
 class CaseResult:
     model: str
+    index_mode: str
     case_id: str
     category: str
     question: str
@@ -340,8 +342,9 @@ def make_pipeline(spec: ModelSpec, args) -> RagPipeline:
         # Large SGLang servers reserve most GPU memory. Keep retrieval embedding on CPU for evaluation.
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
     embedder = Embedder(config.EMBEDDING_MODEL, allow_remote_download=config.HF_MODEL_DOWNLOAD)
-    vector_store = VectorStore(config.CHROMA_DIR)
-    bm25 = BM25Index.load(config.BM25_PATH)
+    bm25_path, chroma_dir = resolve_index_paths(args.index_mode)
+    vector_store = VectorStore(chroma_dir)
+    bm25 = BM25Index.load(bm25_path)
     return RagPipeline(
         embedder=embedder,
         vector_store=vector_store,
@@ -375,6 +378,7 @@ def evaluate_model(spec: ModelSpec, cases: list[dict[str, Any]], args) -> list[C
                 passed = not failures
                 result = CaseResult(
                     model=spec.id,
+                    index_mode=args.index_mode,
                     case_id=case["id"],
                     category=case.get("category", ""),
                     question=case["question"],
@@ -388,6 +392,7 @@ def evaluate_model(spec: ModelSpec, cases: list[dict[str, Any]], args) -> list[C
             except Exception as exc:
                 result = CaseResult(
                     model=spec.id,
+                    index_mode=args.index_mode,
                     case_id=case["id"],
                     category=case.get("category", ""),
                     question=case["question"],
@@ -411,6 +416,7 @@ def evaluate_model(spec: ModelSpec, cases: list[dict[str, Any]], args) -> list[C
 def result_to_dict(result: CaseResult) -> dict[str, Any]:
     return {
         "model": result.model,
+        "index_mode": result.index_mode,
         "case_id": result.case_id,
         "category": result.category,
         "question": result.question,
@@ -435,7 +441,8 @@ def write_reports(results: list[CaseResult], report_dir: Path, label: str) -> tu
     by_model: dict[str, list[CaseResult]] = {}
     for result in results:
         by_model.setdefault(result.model, []).append(result)
-    lines = ["# Large Model RAG Evaluation", "", f"Generated: {label}", ""]
+    index_modes = sorted({result.index_mode for result in results})
+    lines = ["# Large Model RAG Evaluation", "", f"Generated: {label}", f"Index mode: {', '.join(index_modes) or '-'}", ""]
     for model, model_results in by_model.items():
         passed = sum(1 for result in model_results if result.passed)
         total = len(model_results)
@@ -458,6 +465,12 @@ def parse_args(argv: list[str] | None = None):
     parser = argparse.ArgumentParser(description="Evaluate large local LLM models on insurance RAG QA cases.")
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASE_PATH)
     parser.add_argument("--models", default=os.getenv("LARGE_RAG_EVAL_MODELS", DEFAULT_MODELS))
+    parser.add_argument(
+        "--index-mode",
+        choices=INDEX_MODES,
+        default=os.getenv("LARGE_RAG_EVAL_INDEX_MODE", "v2_only"),
+        help="Retrieval index mode. Use v2_only for manual-corrected OCR evaluation.",
+    )
     parser.add_argument("--base-url", default=os.getenv("SGLANG_BASE_URL", "http://127.0.0.1:30000/v1"))
     parser.add_argument("--vllm-base-url", default=os.getenv("VLLM_BASE_URL", "http://127.0.0.1:30001/v1"))
     parser.add_argument("--switch-command", default=os.getenv("SGLANG_SWITCH_SCRIPT", "/srv/ai-ops/bin/switch-sglang-model"))
