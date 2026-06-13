@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import time
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,7 @@ from src.rag.search_intent import SearchIntentPlan, classify_search_intent, extr
 from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
-from src.retrieval.reranker import build_reranker
+from src.retrieval.reranker import RerankResult, build_reranker
 try:
     from src.graph.retriever import GraphRetriever
     from src.graph.context import build_graph_context
@@ -222,6 +222,7 @@ class StageHit:
     page_start: int | None
     page_end: int | None
     text_preview: str
+    rank: int | None = None
 
 
 @dataclass
@@ -235,6 +236,7 @@ class DebugInfo:
     search_intent: SearchIntentPlan | None = None
     retrieval_execution: "RetrievalExecutionInfo | None" = None
     graph_result: Any = None
+    reranker_scores: list[StageHit] = field(default_factory=list)
 
 
 @dataclass
@@ -298,6 +300,23 @@ def _hits_to_stage(hits: list[Hit]) -> list[StageHit]:
             text_preview=hit.document[:100],
         )
         for hit in hits
+    ]
+
+
+def _rerank_results_to_stage(results: list[RerankResult]) -> list[StageHit]:
+    """Reranker 점수 목록을 관리자 진단용 StageHit 목록으로 변환한다."""
+
+    return [
+        StageHit(
+            chunk_id=result.hit.id,
+            doc_short=result.hit.metadata.get("doc_short", ""),
+            score=round(float(result.score), 4),
+            page_start=result.hit.metadata.get("page_start"),
+            page_end=result.hit.metadata.get("page_end"),
+            text_preview=result.hit.document[:100],
+            rank=result.rank,
+        )
+        for result in results
     ]
 
 
@@ -1245,8 +1264,17 @@ class RagPipeline:
                 limit=max(rrf_top_k, final_top_k),
             )
 
+        reranker_results: list[RerankResult] = []
         if self.reranker is not None:
-            final_hits = self.reranker.rerank(question, fused_hits, top_k=final_top_k)
+            if hasattr(self.reranker, "rerank_with_scores"):
+                reranker_results = self.reranker.rerank_with_scores(question, fused_hits, top_k=final_top_k)
+                final_hits = [result.hit for result in reranker_results]
+            else:
+                final_hits = self.reranker.rerank(question, fused_hits, top_k=final_top_k)
+                reranker_results = [
+                    RerankResult(hit=hit, score=float(hit.score), rank=index + 1)
+                    for index, hit in enumerate(final_hits)
+                ]
         else:
             final_hits = fused_hits[:final_top_k]
 
@@ -1264,6 +1292,7 @@ class RagPipeline:
                 final_hits=_hits_to_stage(final_hits),
                 search_intent=search_intent,
                 retrieval_execution=execution_info,
+                reranker_scores=_rerank_results_to_stage(reranker_results),
             )
             if return_debug
             else None

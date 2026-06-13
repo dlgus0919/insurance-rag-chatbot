@@ -202,7 +202,7 @@ def _user(username: str = "employee01") -> User:
 
 @pytest.mark.anyio
 async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: FakePipeline())
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
     created = await sessions.create_session(SessionCreateRequest(title="도수치료"), _user(), db_session)
 
     response = await chat.chat_stream(
@@ -235,13 +235,62 @@ async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkey
     assert audit_entry.detail["reasoning_mode"] == "off"
     assert audit_entry.detail["reasoning_supported"] is False
     assert audit_entry.detail["reasoning_filtered"] is False
+    assert audit_entry.detail["index_mode"] == "v2_only"
+    assert audit_entry.detail["effective_index_mode"] == "v2_only"
     assert audit_entry.detail["rag_diagnostics"]["steps"][-1]["label"] == "LLM 답변 생성"
+
+
+@pytest.mark.anyio
+async def test_chat_stream_applies_auto_params_and_records_requested_values(db_session, monkeypatch) -> None:
+    captured = {}
+
+    def fake_pipeline(model, top_k, index_mode="v2_only"):
+        captured["model"] = model
+        captured["top_k"] = top_k
+        captured["index_mode"] = index_mode
+        return FakePipeline()
+
+    monkeypatch.setattr(chat.config, "AUTO_RAG_PARAMS_MODE", "apply")
+    monkeypatch.setattr(chat, "get_rag_pipeline", fake_pipeline)
+    created = await sessions.create_session(SessionCreateRequest(title="자동 파라미터"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="도수치료 보상돼?",
+            session_id=created.id,
+            model="gemma3:4b",
+            top_k=20,
+            temperature=1.3,
+            auto_params=True,
+            index_mode="default",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    async for _chunk in response.body_iterator:
+        pass
+
+    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
+    audit_entry = audit_result.scalar_one()
+
+    assert captured["top_k"] == 10
+    assert captured["index_mode"] == "v2_only"
+    assert audit_entry.detail["top_k"] == 10
+    assert audit_entry.detail["temperature"] == 0.0
+    assert audit_entry.detail["requested_top_k"] == 20
+    assert audit_entry.detail["requested_temperature"] == 1.3
+    assert audit_entry.detail["index_mode"] == "default"
+    assert audit_entry.detail["effective_index_mode"] == "v2_only"
+    assert audit_entry.detail["auto_params"]["effective"] is True
+    assert audit_entry.detail["auto_params"]["profile"] == "coverage_judgment"
+    assert audit_entry.detail["rag_diagnostics"]["auto_params"]["effective_top_k"] == 10
 
 
 @pytest.mark.anyio
 async def test_chat_stream_passes_reasoning_mode_and_records_audit(db_session, monkeypatch) -> None:
     pipeline = ReasoningFakePipeline()
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: pipeline)
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": pipeline)
     created = await sessions.create_session(SessionCreateRequest(title="Qwen"), _user(), db_session)
 
     response = await chat.chat_stream(
@@ -277,7 +326,7 @@ async def test_chat_stream_passes_reasoning_mode_and_records_audit(db_session, m
 
 @pytest.mark.anyio
 async def test_chat_stream_preserves_model_structured_template_when_graph_payload_is_empty(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: StructuredTemplatePipeline())
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": StructuredTemplatePipeline())
 
     async def fake_prepare(*_args, **_kwargs):
         return [], [], "prompt", {"graph_review_paths": [], "facts": [], "plan": {}}, [], None, None
@@ -308,7 +357,7 @@ async def test_chat_stream_preserves_model_structured_template_when_graph_payloa
 
 @pytest.mark.anyio
 async def test_chat_stream_strips_model_structured_template_when_graph_payload_is_renderable(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: StructuredTemplatePipeline())
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": StructuredTemplatePipeline())
 
     async def fake_prepare(*_args, **_kwargs):
         return (
@@ -359,7 +408,7 @@ async def test_chat_stream_strips_model_structured_template_when_graph_payload_i
 
 @pytest.mark.anyio
 async def test_formal_chat_stream_records_search_type_in_audit_log(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: FakePipeline())
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
     created = await sessions.create_session(SessionCreateRequest(title="약관정형"), _user(), db_session)
 
     response = await chat.chat_stream(
@@ -387,7 +436,7 @@ async def test_formal_chat_stream_records_search_type_in_audit_log(db_session, m
 
 @pytest.mark.anyio
 async def test_general_chat_auto_routes_quickcode_and_records_strategy(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: FakePipeline())
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
     captured = {}
 
     async def fake_prepare(_pipeline, query, filters):
@@ -424,7 +473,7 @@ async def test_general_chat_auto_routes_quickcode_and_records_strategy(db_sessio
 
 @pytest.mark.anyio
 async def test_general_chat_auto_routes_formal_and_records_strategy(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: FakePipeline())
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
     captured = {}
 
     async def fake_prepare(_pipeline, query, top_k, history, filters, memo):
@@ -486,7 +535,7 @@ async def test_persist_turn_stores_graph_payload_for_history_restore(db_session)
 
 @pytest.mark.anyio
 async def test_chat_stream_recovers_from_stale_session_id(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k: FakePipeline())
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
 
     response = await chat.chat_stream(
         ChatRequest(query="기관지 식도루 폐쇄술 종수는?", session_id="stale-session", model="gemma3:4b"),

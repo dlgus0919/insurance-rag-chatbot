@@ -29,6 +29,7 @@ from src.api.rag_service import (
 )
 from src.api.schemas.chat import ChatRequest
 from src.auth.users import User
+from src.rag.auto_params import AutoRagParams, resolve_auto_rag_params
 from src.rag.pipeline import DebugInfo
 from src.rag.query_router import resolve_query_route
 
@@ -66,11 +67,13 @@ async def chat_stream(
         debug_info: DebugInfo | None = None
         tokens: list[str] = []
         selected_model = _select_model(chat_request)
-        effective_index_mode = resolve_effective_index_mode(chat_request.query, chat_request.index_mode)
+        requested_index_mode, effective_index_mode = _resolve_chat_index_modes(
+            chat_request.query,
+            chat_request.index_mode,
+        )
         started = time.perf_counter()
         try:
             yield _sse("status", "searching")
-            pipeline = _get_pipeline(selected_model, chat_request.top_k, effective_index_mode)
             system_prompt = SYSTEM_PROMPT
             resolved_mode = chat_request.mode
             effective_filters = dict(chat_request.filters or {})
@@ -84,6 +87,20 @@ async def chat_stream(
                 resolved_intent = route.intent
                 route_reason = route.route_reason
                 matched_cues = route.matched_cues
+            auto_decision = resolve_auto_rag_params(
+                question=chat_request.query,
+                mode=resolved_mode,
+                filters=effective_filters,
+                requested_top_k=chat_request.top_k,
+                requested_temperature=chat_request.temperature,
+                auto_params=chat_request.auto_params,
+                config_mode=config.AUTO_RAG_PARAMS_MODE,
+                allow_manual_override=config.AUTO_RAG_ALLOW_MANUAL_OVERRIDE,
+                max_temperature=config.AUTO_RAG_MAX_TEMPERATURE,
+            )
+            effective_top_k = auto_decision.effective_top_k
+            effective_temperature = auto_decision.effective_temperature
+            pipeline = _get_pipeline(selected_model, effective_top_k, effective_index_mode)
             doc_filter = None
             if resolved_mode == "quickcode":
                 chunks, sources, prompt, system_prompt, doc_filter = await prepare_quickcode_context(
@@ -95,7 +112,7 @@ async def chat_stream(
                 chunks, sources, prompt, doc_filter = await prepare_formal_context(
                     pipeline,
                     chat_request.query,
-                    chat_request.top_k,
+                    effective_top_k,
                     history,
                     effective_filters,
                     chat_request.memo,
@@ -104,7 +121,7 @@ async def chat_stream(
                 chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug_info = await prepare_retrieved_context(
                     pipeline,
                     chat_request.query,
-                    chat_request.top_k,
+                    effective_top_k,
                     history,
                     effective_filters,
                 )
@@ -129,7 +146,7 @@ async def chat_stream(
                     pipeline.llm,
                     prompt,
                     system_prompt,
-                    chat_request.temperature,
+                    effective_temperature,
                     chat_request.reasoning_mode,
                 )
                 for token in llm_stream:
@@ -178,15 +195,18 @@ async def chat_stream(
                         if resolved_mode == "formal"
                         else None
                     ),
-                    "top_k": chat_request.top_k,
-                    "temperature": chat_request.temperature,
+                    "top_k": effective_top_k,
+                    "temperature": effective_temperature,
+                    "requested_top_k": chat_request.top_k,
+                    "requested_temperature": chat_request.temperature,
+                    "auto_params": auto_decision.to_payload(),
                     "reasoning_mode": chat_request.reasoning_mode,
                     "reasoning_supported": bool(getattr(pipeline.llm, "last_reasoning_supported", False)),
                     "reasoning_filtered": bool(getattr(pipeline.llm, "last_reasoning_filtered", False)),
                     "finish_reason": getattr(pipeline.llm, "last_finish_reason", None),
                     "final_retry_finish_reason": getattr(pipeline.llm, "last_final_retry_finish_reason", None),
                     "warning_codes": [warning.get("code") for warning in warnings if warning.get("code")],
-                    "index_mode": chat_request.index_mode,
+                    "index_mode": requested_index_mode,
                     "effective_index_mode": effective_index_mode,
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
                     "session_id": chat_session.id,
@@ -196,8 +216,9 @@ async def chat_stream(
                     "rag_diagnostics": _build_rag_diagnostics(
                         question=chat_request.query,
                         model=selected_model,
-                        index_mode=chat_request.index_mode,
+                        index_mode=requested_index_mode,
                         effective_index_mode=effective_index_mode,
+                        auto_params=auto_decision,
                         debug=debug_info,
                         source_count=len(sources),
                         warnings=warnings,
@@ -248,6 +269,18 @@ def _select_model(request: ChatRequest) -> str:
     if request.provider == "openai":
         return config.OPENAI_DEFAULT_MODEL
     return f"sglang:{config.SGLANG_DEFAULT_MODEL}"
+
+
+def _resolve_chat_index_modes(question: str, requested_index_mode: str) -> tuple[str, str]:
+    """Resolve chat index modes without allowing OCR-backed data to be skipped."""
+
+    requested = (requested_index_mode or "v2_only").strip().lower()
+    if requested not in {"default", "v2_only", "v1_v2_combined"}:
+        requested = "v2_only"
+    effective = resolve_effective_index_mode(question, requested)
+    if effective == "default":
+        effective = "v2_only"
+    return requested, effective
 
 
 def _get_pipeline(model: str, top_k: int, index_mode: str):
@@ -315,11 +348,13 @@ def _build_rag_diagnostics(
     source_count: int,
     warnings: list[dict],
     elapsed_ms: float,
+    auto_params: AutoRagParams | None = None,
 ) -> dict:
     dense_hits = list(getattr(debug, "dense_hits", []) or [])
     bm25_hits = list(getattr(debug, "bm25_hits", []) or [])
     rrf_hits = list(getattr(debug, "rrf_hits", []) or [])
     final_hits = list(getattr(debug, "final_hits", []) or [])
+    reranker_scores = list(getattr(debug, "reranker_scores", []) or [])
     search_intent = getattr(debug, "search_intent", None) if debug is not None else None
     search_intent_payload = search_intent.to_payload() if hasattr(search_intent, "to_payload") else None
     retrieval_execution = getattr(debug, "retrieval_execution", None) if debug is not None else None
@@ -333,6 +368,7 @@ def _build_rag_diagnostics(
         "model": model,
         "index_mode": index_mode,
         "effective_index_mode": effective_index_mode,
+        "auto_params": auto_params.to_payload() if auto_params else None,
         "warnings": warnings,
         "normalized_terms": dict(getattr(graph_plan, "normalized_terms", {}) or {}),
         "term_correction_candidates": list(getattr(graph_plan, "term_correction_candidates", []) or []),
@@ -340,6 +376,7 @@ def _build_rag_diagnostics(
         "clarification_questions": list(getattr(graph_plan, "clarification_questions", []) or []),
         "search_intent": search_intent_payload,
         "retrieval_execution": retrieval_execution_payload,
+        "reranker_scores": [_stage_hit_payload(hit) for hit in reranker_scores],
         "graph_review_path_count": len(getattr(graph_result, "review_paths", []) or []) if graph_result is not None else 0,
         "steps": [
             {
@@ -372,6 +409,7 @@ def _build_rag_diagnostics(
                 ),
             ),
             _build_hit_step("rrf", "후보 융합", rrf_hits),
+            _build_hit_step("reranker", "Reranker 점수", reranker_scores),
             _build_hit_step("final", "최종 검색 후보", final_hits, source_count=source_count),
             {
                 "key": "llm",
@@ -402,6 +440,18 @@ def _format_search_intent_result(intent: dict | None, execution: dict | None = N
         f"BM25 {intent.get('bm25_weight')} · Chroma {intent.get('dense_weight')} / "
         f"skip_general_dense={intent.get('skip_general_dense')}"
     )
+
+
+def _stage_hit_payload(hit) -> dict:
+    return {
+        "chunk_id": getattr(hit, "chunk_id", ""),
+        "doc_short": getattr(hit, "doc_short", ""),
+        "score": getattr(hit, "score", None),
+        "rank": getattr(hit, "rank", None),
+        "page_start": getattr(hit, "page_start", None),
+        "page_end": getattr(hit, "page_end", None),
+        "text_preview": getattr(hit, "text_preview", ""),
+    }
 
 
 def _build_hit_step(

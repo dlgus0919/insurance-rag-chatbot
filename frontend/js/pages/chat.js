@@ -202,6 +202,19 @@ function setupSettingsHandlers() {
         : input.value;
     });
   });
+  const autoParamToggle = document.getElementById('auto-param-toggle');
+  if (autoParamToggle && !autoParamToggle.dataset.autoParamBound) {
+    autoParamToggle.dataset.autoParamBound = 'true';
+    autoParamToggle.checked = isAutoParamsEnabled();
+    autoParamToggle.addEventListener('change', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.AUTO_RAG_PARAMS,
+        autoParamToggle.checked ? 'on' : 'off'
+      );
+      syncAutoParamControls();
+    });
+  }
+  syncAutoParamControls();
 
   const page = document.getElementById('page-chat');
   if (page && !page.dataset.exportCloseBound) {
@@ -696,6 +709,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
       reasoning_mode: getReasoningMode(),
       top_k: getTopK(),
       temperature: getTemperature(),
+      auto_params: isAutoParamsEnabled(),
       filters,
       index_mode: getIndexMode(),
     };
@@ -1330,7 +1344,8 @@ function formatSelectedModelLabel(modelId) {
 }
 
 function getIndexMode() {
-  return document.querySelector('input[name="ocr-index"]:checked')?.value || 'v2_only';
+  const mode = document.querySelector('input[name="ocr-index"]:checked')?.value || 'v2_only';
+  return mode === 'default' ? 'v2_only' : mode;
 }
 
 function getTopK() {
@@ -1339,4 +1354,17 @@ function getTopK() {
 
 function getTemperature() {
   return Number((document.querySelector('.range-input[min="0"]')?.value || 3) / 10);
+}
+
+function isAutoParamsEnabled() {
+  return localStorage.getItem(STORAGE_KEYS.AUTO_RAG_PARAMS) !== 'off';
+}
+
+function syncAutoParamControls() {
+  const enabled = isAutoParamsEnabled();
+  const toggle = document.getElementById('auto-param-toggle');
+  if (toggle) toggle.checked = enabled;
+  document.querySelectorAll('.manual-param-control, #manual-param-divider').forEach((element) => {
+    element.classList.toggle('hidden', enabled);
+  });
 }

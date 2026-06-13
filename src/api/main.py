@@ -30,7 +30,7 @@ async def _warm_claim_rag_pipelines() -> None:
     """Warm claim-calculation retrieval pipelines in the background after startup."""
 
     model = f"sglang:{config.SGLANG_DEFAULT_MODEL}"
-    for index_mode in ("default", "v2_only"):
+    for index_mode in ("v2_only",):
         try:
             await asyncio.to_thread(get_rag_pipeline, model, CLAIM_RAG_TOP_K, index_mode)
             logger.info("Prewarmed claim RAG pipeline: model=%s index_mode=%s top_k=%s", model, index_mode, CLAIM_RAG_TOP_K)
@@ -43,7 +43,7 @@ async def _warm_primary_chat_rag_pipelines() -> None:
 
     model = f"sglang:{config.SGLANG_DEFAULT_MODEL}"
     top_k = 10
-    for index_mode in ("default", "v2_only"):
+    for index_mode in ("v2_only",):
         try:
             await asyncio.to_thread(get_rag_pipeline, model, top_k, index_mode)
             logger.info("Prewarmed chat RAG pipeline: model=%s index_mode=%s top_k=%s", model, index_mode, top_k)

@@ -41,9 +41,10 @@ async def calculate_claim(
 
     started = time.perf_counter()
     selected_model = _select_model(payload)
+    index_mode = _resolve_claim_index_mode(payload.index_mode)
     warnings: list[str] = []
     try:
-        pipeline = get_rag_pipeline(selected_model, CLAIM_RAG_TOP_K, payload.index_mode)
+        pipeline = get_rag_pipeline(selected_model, CLAIM_RAG_TOP_K, index_mode)
     except Exception as exc:
         pipeline = None
         warnings.append("RAG 근거 초기화에 실패하여 구조화 계산만 수행했습니다.")
@@ -88,7 +89,8 @@ async def calculate_claim(
             ip_address=request.client.host if request and request.client else None,
             detail={
                 "model": selected_model,
-                "index_mode": payload.index_mode,
+                "index_mode": index_mode,
+                "requested_index_mode": payload.index_mode,
                 "item_count": len(items),
                 "requires_review": response.requires_review,
                 "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
@@ -104,6 +106,15 @@ def _select_model(payload: ClaimCalculationRequest) -> str:
     if payload.provider == "openai":
         return config.OPENAI_DEFAULT_MODEL
     return f"sglang:{config.SGLANG_DEFAULT_MODEL}"
+
+
+def _resolve_claim_index_mode(index_mode: str) -> str:
+    normalized = (index_mode or "v2_only").strip().lower()
+    if normalized == "default":
+        return "v2_only"
+    if normalized in {"v2_only", "v1_v2_combined"}:
+        return normalized
+    return "v2_only"
 
 
 def _provider_from_model(model: str, requested_provider: str | None) -> str:

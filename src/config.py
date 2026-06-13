@@ -168,6 +168,9 @@ if EMBEDDING_DEVICE == "":
     EMBEDDING_DEVICE = None
 HF_MODEL_DOWNLOAD: bool = os.getenv("HF_MODEL_DOWNLOAD", "false").lower() == "true"
 RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+AUTO_RAG_PARAMS_MODE: str = os.getenv("AUTO_RAG_PARAMS_MODE", "apply").strip().lower()
+AUTO_RAG_ALLOW_MANUAL_OVERRIDE: bool = os.getenv("AUTO_RAG_ALLOW_MANUAL_OVERRIDE", "true").lower() == "true"
+AUTO_RAG_MAX_TEMPERATURE: float = float(os.getenv("AUTO_RAG_MAX_TEMPERATURE", "0.2"))
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "exaone3.5:7.8b")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))

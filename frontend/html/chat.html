@@ -48,15 +48,20 @@
 
   <main class="chat-main">
     <div class="settings-bar">
-      <div class="s-group">
+      <label class="auto-param-toggle" id="auto-param-toggle-wrap" title="질의 유형에 따라 Top-K와 온도를 자동으로 조절합니다.">
+        <input type="checkbox" id="auto-param-toggle" checked>
+        <span class="auto-param-toggle-text">검색/답변 자동 설정</span>
+      </label>
+      <div class="s-divider" id="manual-param-divider"></div>
+      <div class="s-group manual-param-control">
         <span class="s-label">Top-K</span>
         <div class="range-wrap">
           <input type="range" class="range-input" min="1" max="20" value="10" data-range-format="integer">
           <span class="range-val">10</span>
         </div>
       </div>
-      <div class="s-divider"></div>
-      <div class="s-group">
+      <div class="s-divider manual-param-control"></div>
+      <div class="s-group manual-param-control">
         <span class="s-label">온도</span>
         <div class="range-wrap">
           <input type="range" class="range-input" min="0" max="10" value="2" data-range-format="decimal">
@@ -98,10 +103,6 @@
 
     <div class="ocr-index-bar">
       <span class="mode-label">OCR 인덱스</span>
-      <label class="radio-pill">
-        <input type="radio" name="ocr-index" value="default">
-        <span>기본 운영 인덱스</span>
-      </label>
       <label class="radio-pill">
         <input type="radio" name="ocr-index" value="v2_only" checked>
         <span>보정본 OCR만</span>

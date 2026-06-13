@@ -196,7 +196,7 @@ async def test_claim_calculation_route_uses_fixed_rag_top_k(monkeypatch) -> None
                 )
             ],
             top_k=17,
-            index_mode="v2_only",
+            index_mode="default",
         ),
         request=None,
         user=_employee(),
