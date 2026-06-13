@@ -638,6 +638,229 @@ CRAG/Self-RAG/FLARE식 반복 검색은 매력적이지만 현재 보험 실무 
 - 반복 생성 중 잘못된 query rewrite가 보험 판단 근거를 왜곡할 가능성
 - 현재 병목은 이미 모델보다 retrieval/index 품질과 context 선택에 가깝다.
 
+## 위험 대응 보완 계획
+
+2026-06-13 추가 검토에서 확인한 위험을 다음처럼 보완한다. 기본 방향은 "자동 파라미터 조절은 기본값으로 제공하되, 일반 질의 UI에서 즉시 끌 수 있어야 한다"는 것이다.
+
+### 1. 참고 자료 기반 보완 근거
+
+- Azure AI Search의 hybrid search 문서는 RRF가 여러 검색 결과 순위를 결합하고, `debug`를 통해 vector/semantic subscore를 확인해 weighting 또는 threshold 조정에 활용할 수 있음을 설명한다. 따라서 우리도 reranker/RRF score를 숨기지 말고 debug/audit에 노출해야 한다.
+- vLLM `SamplingParams` 문서는 `temperature=0`이 greedy sampling으로 처리됨을 명시한다. 보험 약관 질의에서는 낮은 temperature가 여전히 가장 안전한 기본 방향이다.
+- LlamaIndex 문서는 retriever가 query에 대한 relevant context를 가져오는 핵심 구성요소이며, retriever mode와 kwargs로 구성을 바꿀 수 있음을 설명한다. 이는 우리 프로젝트의 `SearchIntentPlan` 기반 profile별 retrieval 설정과 방향이 맞다.
+- Adaptive-RAG, Self-RAG, CRAG 계열 연구는 고정 검색보다 질의별 검색 전략/검색 품질 평가가 중요하다는 근거를 제공한다. 단, CRAG의 web search 확장이나 Self-RAG식 자기반성 생성은 현재 망분리/보험 근거 통제 요구와 충돌할 수 있으므로 이번 적용 범위에서는 제외한다.
+
+### 2. 기본 자동화와 즉시 수동 전환 UI
+
+자동 파라미터 조절은 기본값으로 한다.
+
+단, 일반 질의 UI에는 항상 다음 control을 노출한다.
+
+```text
+[자동 검색/답변 설정 토글: ON/OFF]
+```
+
+동작:
+
+- 기본값: `ON`
+- `ON`: 시스템이 `effective_top_k`, `effective_temperature`를 자동 산출한다.
+- `OFF`: 사용자가 Top-K와 temperature를 직접 조작한다.
+- `OFF`로 전환하면 기존 슬라이더가 즉시 보인다.
+- `ON`일 때도 현재 적용된 값을 작은 badge로 표시한다.
+
+표시 예시:
+
+```text
+자동 설정 ON · profile=coverage_judgment · Top-K=10 · 온도=0.0
+```
+
+수동 모드 예시:
+
+```text
+자동 설정 OFF · 수동 Top-K=12 · 수동 온도=0.1
+```
+
+API 계약:
+
+```python
+auto_params: bool | None = None
+```
+
+의미:
+
+- `None`: 서버 환경변수 `AUTO_RAG_PARAMS_MODE`를 따른다.
+- `True`: 자동 설정 사용 요청. 단, 서버 mode가 `off`이면 observe만 한다.
+- `False`: 일반 질의에서도 수동 `top_k`, `temperature`를 그대로 사용한다.
+
+주의:
+
+- `auto_params`를 schema 기본값 `True`로 고정하지 않는다.
+- 실제 기본 활성화 여부는 서버 config가 결정한다.
+- audit에는 `auto_params_requested`, `auto_params_effective`, `manual_override`를 모두 남긴다.
+
+### 3. 모든 테스트 DB 기준 고정
+
+자동 파라미터 테스트의 기본 DB는 항상 보정본 OCR 데이터 편입본으로 고정한다.
+
+기준:
+
+```text
+index_mode = v2_only
+```
+
+테스트 명령은 반드시 `--index-mode v2_only`를 포함한다.
+
+금지:
+
+- 기본 OCR index와 혼합한 결과를 자동 파라미터 최적값의 근거로 사용하지 않는다.
+- `v1_v2_combined` 결과를 주 평가 근거로 사용하지 않는다.
+- 보정본 OCR 편입 전/후 결과를 같은 표에서 비교할 때는 명시적으로 label을 분리한다.
+
+이유:
+
+- 실무자 기대답안 40문항은 OCR 보정 문서까지 포함한 전체 데이터베이스 기준이다.
+- 이전 일반 질의 모델 평가도 `v2_only` 기준으로 재수행했을 때 의미 있는 결론이 나왔다.
+
+### 4. 단일 모델 기준 장시간 테스트 허용
+
+테스트 비용 폭증 위험은 이번 작업에서 다음 전제로 완화한다.
+
+전제:
+
+```text
+LLM = sglang:qwen3-next-80b-a3b-instruct-fp8
+```
+
+즉, 자동 파라미터 최적화는 모델 비교 작업이 아니다. 일반 질의 기본 모델 하나를 고정하고, 그 모델에서 `Top-K`와 `temperature`만 비교한다.
+
+장시간 실행은 허용한다. 대신 결과 기록과 재개 가능성이 필수다.
+
+필수 기록:
+
+```text
+reports/auto_rag_params_eval/<label>.jsonl
+reports/auto_rag_params_eval/<label>.md
+reports/auto_rag_params_eval/<label>_checkpoint.json
+```
+
+각 row에 기록할 필드:
+
+- `case_id`
+- `profile`
+- `index_mode`
+- `model`
+- `strategy`
+- `top_k_strategy`
+- `effective_top_k`
+- `temperature`
+- `repeat_index`
+- `answer`
+- `sources`
+- `expected_checks`
+- `pass`
+- `failure_reasons`
+- `latency_ms`
+- `prompt_context_char_count`
+- `reranker_scores`
+- `cutoff_reason`
+
+실행 방식:
+
+1. profile 분류와 retrieval-only 결과를 먼저 캐시한다.
+2. temperature grid는 같은 retrieval 결과를 재사용할 수 있으면 재사용한다.
+3. 반복 실행 결과를 append-only JSONL로 저장한다.
+4. 중단되면 checkpoint를 기준으로 미완료 case만 재개한다.
+5. 모델 서버와 프로세스 상태를 실험 구간마다 점검하되, 결과 파일은 누락 없이 남긴다.
+
+### 5. 테스트 비용 대응: 기록 가능한 staged grid
+
+단일 모델 전제에서는 시간이 오래 걸려도 괜찮지만, 해석 가능한 결과를 위해 staged grid를 사용한다.
+
+권장 순서:
+
+1. `temperature only`
+   - `top_k=10` 고정
+   - profile별 temperature 후보 반복 실행
+   - 목적: temperature 정책만으로 품질 안정성이 개선되는지 확인
+2. `rule top-k only`
+   - temperature는 선택된 temperature policy로 고정
+   - deterministic rule 기반 Top-K 비교
+   - 목적: rule 기반 자동화가 baseline보다 나쁜 profile 확인
+3. `threshold adaptive-k`
+   - rule top-k가 안전한 profile에서만 threshold grid 실행
+   - 목적: context noise 감소와 source recall 보존 동시 확인
+4. `combined final`
+   - 선택된 temperature policy와 profile별 Top-K/adaptive-k를 결합
+   - 목적: 실제 배포 후보 산출
+
+전체 grid를 한 번에 곱하지 않는다. 각 단계 결과를 보고 다음 단계 후보를 줄인다.
+
+### 6. Reranker score API 선행 보완
+
+adaptive-k 구현 전 필수 선행 작업:
+
+- `Reranker.rerank()`는 현재 hit 목록만 반환한다.
+- threshold 탐색에는 score가 필요하므로 `rerank_with_scores()` 또는 `RerankResult`를 추가한다.
+
+권장 구조:
+
+```python
+@dataclass
+class RerankResult:
+    hit: Hit
+    score: float
+    rank: int
+```
+
+파이프라인 반영:
+
+- 기존 `rerank()`는 하위 호환을 위해 유지한다.
+- adaptive-k 경로만 `rerank_with_scores()`를 사용한다.
+- `DebugInfo`에는 score를 직접 남긴다.
+- score scale drift를 추적하기 위해 profile별 score histogram을 report에 포함한다.
+
+### 7. 평가셋 과적합 대응
+
+실무자 기대답안 셋은 핵심 근거지만, 최적값 선택과 최종 검증에 같은 문항만 쓰면 과적합 위험이 있다.
+
+대응:
+
+- 기존 40문항을 profile별로 나눈다.
+- profile별 문항 수가 충분하면 selection/holdout을 분리한다.
+- 문항 수가 부족하면 leave-one-profile-group-out 또는 failure replay 방식으로 보완한다.
+- 최종 정책은 selection set에서 고르고, holdout/regression set에서 악화가 없어야 한다.
+- 추후 실제 사용자 negative feedback 문항을 regression set에 추가한다.
+
+### 8. Temperature 상한 정리
+
+일반 질의 실험에서 `general_explanation` 후보에 `0.3`을 넣을 수는 있다. 그러나 배포 상한은 별도로 둔다.
+
+정책:
+
+```text
+experiment_max_temperature = 0.3
+production_max_temperature = 0.2
+```
+
+따라서 `0.3`은 연구/비교용 후보일 뿐, 기본 배포 정책에는 들어가지 않는다. `0.3`이 실험에서 좋아 보여도 수치/근거 정확성, 반복 안정성, 근거 밖 표현이 모두 안전할 때만 별도 승인 대상으로 둔다.
+
+### 9. Rollback과 장애 대응
+
+운영 config:
+
+```text
+AUTO_RAG_PARAMS_MODE=off|observe|apply
+AUTO_RAG_ALLOW_MANUAL_OVERRIDE=true
+AUTO_RAG_FORCE_MANUAL_FOR_PROFILES=
+AUTO_RAG_FORCE_AUTO_FOR_PROFILES=
+```
+
+장애 대응:
+
+- source recall 하락이 감지되면 해당 profile만 manual/baseline으로 되돌린다.
+- reranker score 누락 또는 reranker 비활성화 시 `rule_only` 또는 baseline으로 fallback한다.
+- GraphDB source chunk가 있는 경우 adaptive cutoff를 적용하지 않고 보존 우선 경로를 사용한다.
+- 자동 설정 토글 OFF 요청은 서버 config보다 우선한다. 단, 관리자 정책으로 수동 override 금지 상태인 경우에는 UI에 명확히 표시한다.
+
 ## 안정성 평가
 
 ### 편입 자체의 안정성
