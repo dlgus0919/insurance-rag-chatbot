@@ -298,6 +298,7 @@ strategy:
 temperature_policy:
   - current_0.2
   - conservative_by_profile
+  - temperature_grid_by_profile
 
 threshold_grid:
   min_k: [4, 5, 6, 8]
@@ -305,6 +306,15 @@ threshold_grid:
   drop_abs: [0.05, 0.10, 0.15, 0.20]
   drop_ratio: [0.10, 0.20, 0.30]
   score_floor: reranker score 분포 관측 후 후보 산정
+
+temperature_grid:
+  exact_code_lookup: [0.0, 0.05, 0.1]
+  clause_or_appendix_lookup: [0.0, 0.05, 0.1]
+  clause_detail_lookup: [0.0, 0.05, 0.1]
+  coverage_judgment: [0.0, 0.05, 0.1, 0.2]
+  cross_doc_compare: [0.0, 0.05, 0.1]
+  ambiguous_medical_term: [0.0, 0.05, 0.1, 0.2]
+  general_explanation: [0.0, 0.1, 0.2, 0.3]
 ```
 
 산출물:
@@ -336,6 +346,119 @@ reports/auto_rag_params_eval/<label>.md
 5. latency가 악화되지 않거나, 악화되더라도 품질 개선 근거가 있을 것
 6. profile별 결과가 불안정하면 해당 profile은 `rule_only` 또는 baseline 유지
 
+### 4-1. temperature 최적값 탐색 방법
+
+`temperature`도 `Top-K`와 별개로 profile별 탐색 대상에 포함한다. 특히 우리 프로젝트에는 실무자가 제시한 테스트 질문과 기대 답안 셋이 있으므로, 단순 문체 선호가 아니라 "기대 답안의 필수 수치/조항/조건을 얼마나 안정적으로 재현하는가"를 기준으로 평가할 수 있다.
+
+기본 원칙:
+
+- 보험금 지급, 면책, 감액, 한도, 자기부담금, 수가코드, 조문 질의는 낮은 temperature를 우선한다.
+- 일반 설명형 질의는 답변 가독성/어조를 위해 약간 높은 후보도 평가한다.
+- temperature 평가는 stochastic성이 있으므로 같은 설정을 1회만 돌려 결론 내리지 않는다.
+- 답변 품질이 동률이면 더 낮은 temperature를 선택한다.
+
+profile별 초기 가설:
+
+| Profile | 후보 temperature | 1차 가설 |
+|---|---:|---|
+| `exact_code_lookup` | 0.0, 0.05, 0.1 | `0.0` 우선. 코드/점수/표 항목은 변형 여지가 작다. |
+| `clause_or_appendix_lookup` | 0.0, 0.05, 0.1 | `0.0` 우선. 조문 번호와 조건 누락 방지가 중요하다. |
+| `clause_detail_lookup` | 0.0, 0.05, 0.1 | `0.0~0.05` 후보. 문장 자연성보다 정확성이 우선이다. |
+| `coverage_judgment` | 0.0, 0.05, 0.1, 0.2 | `0.0~0.1` 후보. 검토 필요/조건부 판단 표현 안정성이 중요하다. |
+| `cross_doc_compare` | 0.0, 0.05, 0.1 | `0.0` 우선. 문서별 차이를 섞으면 안 된다. |
+| `ambiguous_medical_term` | 0.0, 0.05, 0.1, 0.2 | `0.05~0.1` 후보. 용어 설명은 약간의 유연성이 유리할 수 있다. |
+| `general_explanation` | 0.0, 0.1, 0.2, 0.3 | `0.1~0.2` 후보. 단, 근거 밖 표현 증가 시 낮춘다. |
+
+평가 반복:
+
+```text
+temperature_eval_repeats:
+  deterministic_profiles:
+    exact_code_lookup: 2
+    clause_or_appendix_lookup: 2
+    cross_doc_compare: 2
+  judgment_profiles:
+    coverage_judgment: 3
+    ambiguous_medical_term: 3
+    general_explanation: 3
+```
+
+반복 실행을 두는 이유:
+
+- `temperature=0.0`은 대부분 deterministic에 가깝지만 backend/model template에 따라 완전 동일하지 않을 수 있다.
+- `temperature>0`은 같은 질문에서도 답변 길이, 조건 표현, 검토 필요 문구가 흔들릴 수 있다.
+- 보험 실무 질의에서는 평균 점수보다 최악 반복 결과가 중요하다. 한 번이라도 근거 밖 단정이나 수치 오류가 나오면 해당 profile의 후보 temperature를 낮춘다.
+
+평가 지표:
+
+- `expected_answer_pass`: 기대 답안 필수 조건 충족 여부
+- `required_number_pass`: 금액, 비율, 횟수, 코드, 조문 번호 일치
+- `required_clause_pass`: 기대 조항/별표/문서 근거 포함
+- `forbidden_claim_absent`: 기대 답안에 없는 보상 단정/면책 단정 미발생
+- `tone_fit`: 실무자-facing 답변 어조, 과도한 장황함/모호함/마케팅 문구 여부
+- `answer_length_fit`: profile별 권장 길이 범위
+- `repeat_stability`: 반복 실행 간 필수 결론 일관성
+- `worst_run_pass`: 반복 실행 중 최저 품질 결과도 gate 통과 여부
+
+선택 기준:
+
+1. profile별 `worst_run_pass`가 baseline 이상이어야 한다.
+2. 필수 수치/조항/조건 정확도는 temperature 상승으로 절대 악화되면 안 된다.
+3. 답변 어조/가독성 개선이 있더라도 factual score가 동률 이상일 때만 higher temperature를 선택한다.
+4. `coverage_judgment`에서 "검토 필요"를 "지급 가능"으로 단정하는 사례가 나오면 해당 temperature 후보는 즉시 탈락한다.
+5. `general_explanation`에서도 근거 밖 일반론이 늘어나면 `0.2` 이상은 배제한다.
+6. 최종값은 전역 하나가 아니라 profile별 `temperature_policy`로 저장한다.
+
+temperature 실험 산출물:
+
+```text
+reports/auto_rag_params_eval/<label>_temperature_grid.jsonl
+reports/auto_rag_params_eval/<label>_temperature_grid.md
+config/auto_rag_temperature_policy.json
+```
+
+`config/auto_rag_temperature_policy.json` 예시:
+
+```json
+{
+  "default": 0.0,
+  "profiles": {
+    "exact_code_lookup": 0.0,
+    "clause_or_appendix_lookup": 0.0,
+    "coverage_judgment": 0.05,
+    "ambiguous_medical_term": 0.1,
+    "general_explanation": 0.2
+  },
+  "max_allowed": 0.2,
+  "fallback_on_low_confidence": 0.0
+}
+```
+
+### 4-2. Top-K와 temperature의 결합 평가
+
+Top-K와 temperature는 독립 변수가 아니다. 낮은 Top-K로 근거가 부족한 상태에서 temperature가 높으면 근거 밖 추론이 늘 수 있고, 높은 Top-K로 잡음이 많은 상태에서 temperature가 높으면 엉뚱한 조건을 섞을 위험이 커진다.
+
+따라서 최종 적용 전에는 다음 순서로 결합 평가한다.
+
+1. `fixed_baseline`: 현재 `top_k=10`, `temperature=0.2`
+2. `rule_topk + fixed_temp`: Top-K만 자동화하고 temperature는 0.2 유지
+3. `fixed_topk + temp_policy`: Top-K는 10 유지, temperature만 profile별 자동화
+4. `rule_topk + temp_policy`: deterministic rule 기반 통합 자동화
+5. `threshold_topk + temp_policy`: threshold 기반 adaptive-k까지 포함
+
+결합 평가에서 확인할 질문:
+
+- 성능 개선이 Top-K 때문인지, temperature 때문인지 구분되는가?
+- temperature를 낮춘 것만으로 hallucination이 줄었는가?
+- adaptive-k가 context noise를 줄였지만 source recall을 낮추지는 않았는가?
+- 두 자동화가 결합될 때 특정 profile에서 악화되는가?
+
+최종 채택 기준:
+
+- `rule_topk + temp_policy`가 baseline보다 안정적으로 좋으면 먼저 적용한다.
+- `threshold_topk + temp_policy`는 추가 이득이 명확한 profile에만 제한 적용한다.
+- 결합 평가에서 원인 분리가 안 되면 temperature 정책만 먼저 적용하고 adaptive-k는 observe에 남긴다.
+
 ### 5. 개발 단계
 
 #### Step A. 계측 기반 확장
@@ -350,6 +473,8 @@ reports/auto_rag_params_eval/<label>.md
   - `requested_temperature`
   - `effective_temperature`
   - `suggested_temperature`
+  - `temperature_policy`
+  - `temperature_eval_profile`
   - `auto_profile`
   - `auto_cutoff_reason`
 
@@ -367,6 +492,8 @@ reports/auto_rag_params_eval/<label>.md
 - `--auto-params-mode off|observe|apply`
 - `--auto-topk-strategy rule|reranker_threshold`
 - `--threshold-grid` 또는 config JSON 입력 지원
+- `--temperature-grid` 또는 temperature policy JSON 입력 지원
+- `--repeat-per-case`로 temperature 후보 반복 실행 지원
 - profile별 결과표와 악화 문항 목록 생성
 
 #### Step D. UI 반영
@@ -429,11 +556,42 @@ reports/auto_rag_params_eval/<label>.md
   --label auto_params_threshold_grid_v1
 ```
 
+temperature grid 평가:
+
+```bash
+.venv/bin/python scripts/eval_large_model_rag.py \
+  --eval-set eval/policy_xlsx_qa.jsonl \
+  --index-mode v2_only \
+  --model sglang:qwen3-next-80b-a3b-instruct-fp8 \
+  --auto-params-mode apply \
+  --auto-topk-strategy rule \
+  --temperature-grid config/auto_rag_temperature_grid.json \
+  --repeat-per-case 3 \
+  --label auto_params_temperature_grid_v1
+```
+
+결합 평가:
+
+```bash
+.venv/bin/python scripts/eval_large_model_rag.py \
+  --eval-set eval/policy_xlsx_qa.jsonl \
+  --index-mode v2_only \
+  --model sglang:qwen3-next-80b-a3b-instruct-fp8 \
+  --auto-params-mode apply \
+  --auto-topk-strategy reranker_threshold \
+  --threshold-grid config/auto_rag_threshold_grid.json \
+  --temperature-policy config/auto_rag_temperature_policy.json \
+  --repeat-per-case 3 \
+  --label auto_params_combined_grid_v1
+```
+
 수동 점검:
 
 - baseline에서 맞고 자동 모드에서 틀린 문항 전수 확인
 - source recall 하락 문항은 자동 적용 차단 profile로 되돌림
 - 일반 설명형에서만 context noise 감소 이득이 있는지 확인
+- temperature 상승 후보에서 근거 밖 단정, 과장 표현, 불필요한 장문 답변이 늘었는지 확인
+- 반복 실행 중 한 번이라도 위험 답변이 나온 profile은 더 낮은 temperature로 되돌림
 
 ### 7. 피드백 루프
 
@@ -462,9 +620,12 @@ reports/auto_rag_params_eval/<date>_feedback_regression.md
 - profile별 요청 수
 - 자동 선택 Top-K 분포
 - 평균 temperature
+- profile별 temperature 분포
+- temperature별 negative feedback rate
 - feedback negative rate
 - source recall 하락 사례
 - threshold 변경 제안
+- temperature policy 변경 제안
 
 ### Phase 4. Corrective retrieval는 보류
 
