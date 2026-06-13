@@ -198,6 +198,274 @@ Phase 2에서는 고정 rule table만 쓰지 말고, reranker 이후 최종 후�
 
 위험도: 중간. 잘못 자르면 필요한 근거가 빠질 수 있다.
 
+## 확장 적용 계획: threshold 탐색 기반 adaptive-k
+
+사용자 검토 의견에 따라, `adaptive-k`는 단일 고정 규칙으로 바로 편입하지 않는다. reranker 점수 분포에서 "몇 번째 후보 이후부터 관련성이 급격히 떨어지는가"를 판단하는 threshold 계열 로직을 만들고, 실제 평가 후 profile별 최적 후보값을 선택한다.
+
+### 1. 조절 가능한 threshold 후보
+
+초기 구현에서는 다음 파라미터를 feature flag와 환경변수로 분리한다.
+
+| 파라미터 | 의미 | 초기 탐색 범위 | 비고 |
+|---|---|---:|---|
+| `min_k` | 어떤 경우에도 유지할 최소 context 수 | 4, 5, 6 | profile별 override |
+| `max_k` | 어떤 경우에도 넘지 않을 최대 context 수 | 8, 10, 12, 14 | cross-doc은 더 높게 허용 |
+| `score_floor` | 이 점수 미만 후보는 tail로 간주 | profile별 grid | reranker score scale 확인 후 결정 |
+| `drop_abs` | `score[i] - score[i+1]` 절대 하락폭 | 0.05~0.25 | 급락점 탐지 |
+| `drop_ratio` | 다음 후보와의 상대 하락비 | 0.10~0.40 | score scale 차이 보정 |
+| `plateau_window` | 완만한 tail 감지를 위한 window 크기 | 2, 3 | 급락이 없는 경우 보조 |
+| `coverage_required_docs` | 문서 비교에서 보존해야 할 문서 수 | 질문 기반 | 자동 cutoff보다 우선 |
+| `graph_preserve` | GraphDB source chunk 보존 여부 | true | 항상 true 권장 |
+
+초기 env/config 후보:
+
+```text
+AUTO_RAG_PARAMS_MODE=off|observe|apply
+AUTO_RAG_TOPK_STRATEGY=rule|reranker_threshold
+AUTO_RAG_RERANK_SCORE_FLOOR=...
+AUTO_RAG_RERANK_DROP_ABS=...
+AUTO_RAG_RERANK_DROP_RATIO=...
+AUTO_RAG_MIN_K_BY_PROFILE=...
+AUTO_RAG_MAX_K_BY_PROFILE=...
+AUTO_RAG_TEMPERATURE_POLICY=conservative
+```
+
+### 2. adaptive-k 판단 원리
+
+기본 흐름:
+
+1. `SearchIntentPlan`으로 query profile을 정한다.
+2. profile별 `min_k`, `base_k`, `max_k`를 선택한다.
+3. dense/BM25/RRF 후보 pool을 기존보다 넓게 만든다.
+4. reranker가 후보별 score를 반환한다.
+5. 점수 내림차순 curve에서 cutoff 후보를 찾는다.
+6. `min_k <= cutoff_k <= max_k`로 clamp한다.
+7. GraphDB source chunk, 문서별 coverage chunk, exact code/chunk는 cutoff 이후라도 보존한다.
+8. 보존 후 context 수가 `max_k`를 넘으면 낮은 신뢰도 일반 chunk부터 제거한다.
+
+간단한 의사코드:
+
+```python
+scores = rerank(question, candidates, top_k=pool_k)
+cutoff = base_k
+for i in range(min_k - 1, min(len(scores) - 1, max_k - 1)):
+    drop_abs = scores[i] - scores[i + 1]
+    drop_ratio = drop_abs / max(abs(scores[i]), 1e-6)
+    if scores[i + 1] < score_floor or drop_abs >= threshold_abs or drop_ratio >= threshold_ratio:
+        cutoff = i + 1
+        break
+selected = preserve_required_hits(scores[:cutoff], graph_hits, coverage_hits, exact_hits)
+selected = trim_noise_preserving_required(selected, max_k=max_k)
+```
+
+주의점:
+
+- reranker score는 모델/배치/입력 길이에 따라 scale이 달라질 수 있으므로 절대 score만으로 결정하지 않는다.
+- `drop_abs`, `drop_ratio`, `min/max_k`를 함께 사용한다.
+- coverage 판단이 필요한 질문은 "관련성 낮아 보이는 chunk"라도 특정 문서의 유일한 근거일 수 있으므로 보존 규칙이 우선한다.
+
+### 3. profile별 초기 가설
+
+| Profile | 초기 전략 | threshold 적용 강도 |
+|---|---|---|
+| `exact_code_lookup` | 낮은 `max_k`, 높은 BM25/코드 보존 | 강하게 적용 |
+| `clause_or_appendix_lookup` | exact 조문/별표 chunk 보존 | 중간 |
+| `clause_detail_lookup` | 조문 본문 + 세부 조건 chunk 보존 | 중간 이하 |
+| `coverage_judgment` | 근거 누락 위험이 높아 `min_k` 높게 유지 | 약하게 적용 |
+| `cross_doc_compare` | 문서별 coverage가 우선 | 매우 약하게 적용 |
+| `ambiguous_medical_term` | 동의어/표현 차이 때문에 후보 폭 유지 | 약하게 적용 |
+| `general_explanation` | 잡음 감소 목적의 cutoff 유효 | 중간~강함 |
+
+### 4. threshold 최적값 탐색 방법
+
+`threshold 최적값`은 전체 질의에 하나로 고정하지 않는다. profile별로 후보값을 비교하고, pass rate와 위험 지표를 동시에 만족하는 Pareto 후보를 선택한다.
+
+평가 입력:
+
+- 기존 일반 질의 평가셋: `eval/policy_xlsx_qa.jsonl`
+- 인덱스: `--index-mode v2_only`
+- 모델: 기본 일반 질의 모델 `sglang:qwen3-next-80b-a3b-instruct-fp8`
+- baseline: 현재 기본값 `top_k=10`, `temperature=0.2`
+
+실험 matrix:
+
+```text
+strategy:
+  - fixed_baseline
+  - rule_only
+  - reranker_threshold
+
+temperature_policy:
+  - current_0.2
+  - conservative_by_profile
+
+threshold_grid:
+  min_k: [4, 5, 6, 8]
+  max_k: [8, 10, 12, 14]
+  drop_abs: [0.05, 0.10, 0.15, 0.20]
+  drop_ratio: [0.10, 0.20, 0.30]
+  score_floor: reranker score 분포 관측 후 후보 산정
+```
+
+산출물:
+
+```text
+reports/auto_rag_params_eval/<label>.jsonl
+reports/auto_rag_params_eval/<label>.md
+```
+
+필수 지표:
+
+- answer pass rate
+- expected source recall
+- required number/term/clause hit rate
+- retrieval miss count
+- context noise count
+- average selected top_k
+- average prompt context length
+- latency
+- output health
+- profile별 개선/악화 문항
+
+선택 기준:
+
+1. baseline 대비 answer pass rate가 하락하지 않을 것
+2. source recall이 하락하지 않을 것
+3. 보상/면책/한도/수가/조문 질의에서 critical miss가 증가하지 않을 것
+4. context noise와 평균 context 길이가 의미 있게 줄어들 것
+5. latency가 악화되지 않거나, 악화되더라도 품질 개선 근거가 있을 것
+6. profile별 결과가 불안정하면 해당 profile은 `rule_only` 또는 baseline 유지
+
+### 5. 개발 단계
+
+#### Step A. 계측 기반 확장
+
+- reranker가 최종 score를 반환하도록 debug payload 확장
+- `DebugInfo`에 `reranker_scores`, `candidate_rank`, `selected_by_auto_params`, `cutoff_reason` 추가
+- API audit log에 다음 필드 추가
+  - `auto_params_mode`
+  - `requested_top_k`
+  - `effective_top_k`
+  - `suggested_top_k`
+  - `requested_temperature`
+  - `effective_temperature`
+  - `suggested_temperature`
+  - `auto_profile`
+  - `auto_cutoff_reason`
+
+#### Step B. `AutoRagParams` 구현
+
+- `src/rag/auto_params.py` 추가
+- 입력은 `question`, `mode`, `filters`, `SearchIntentPlan`, reranker score summary
+- 출력은 `AutoRagParams`
+- 초기에는 `rule_only`와 `observe`만 구현
+- `quickcode`, `formal`, `claim`은 적용 대상에서 제외하거나 별도 profile로 격리
+
+#### Step C. 평가 스크립트 확장
+
+- `scripts/eval_large_model_rag.py`에 자동 파라미터 모드 추가
+- `--auto-params-mode off|observe|apply`
+- `--auto-topk-strategy rule|reranker_threshold`
+- `--threshold-grid` 또는 config JSON 입력 지원
+- profile별 결과표와 악화 문항 목록 생성
+
+#### Step D. UI 반영
+
+- 기본 실무자 화면은 "자동 설정" badge만 표시
+- 수동 Top-K/온도 슬라이더는 "고급 설정" 접힘 영역으로 이동
+- 자동 적용값을 관리자 진단 또는 응답 metadata에서 확인 가능하게 표시
+- 수동 override가 켜진 경우에는 badge를 "수동 설정"으로 표시
+
+#### Step E. feature flag 적용
+
+권장 rollout:
+
+1. `AUTO_RAG_PARAMS_MODE=observe`
+2. 평가셋과 실제 로그에서 suggested/effective 차이 분석
+3. `rule_only`를 일부 profile에만 `apply`
+4. `reranker_threshold`는 profile별로 제한 적용
+5. 문제 발생 시 env만 바꿔 즉시 `off`로 rollback
+
+### 6. 검증 단계
+
+단위 테스트:
+
+- `tests/test_auto_rag_params.py`
+  - profile별 Top-K/temperature 선택
+  - min/max clamp
+  - exact/GraphDB/coverage 보존
+  - threshold 급락점 탐지
+  - threshold가 없을 때 base_k fallback
+
+통합 테스트:
+
+- `tests/test_api_chat_stream.py`
+  - 자동 모드에서 `effective_top_k`, `effective_temperature`가 audit/debug에 남는지 확인
+  - 수동 override가 기존 동작을 보존하는지 확인
+
+평가:
+
+```bash
+.venv/bin/python scripts/eval_large_model_rag.py \
+  --eval-set eval/policy_xlsx_qa.jsonl \
+  --index-mode v2_only \
+  --model sglang:qwen3-next-80b-a3b-instruct-fp8 \
+  --auto-params-mode apply \
+  --auto-topk-strategy rule \
+  --temperature-policy conservative \
+  --label auto_params_rule_v1
+```
+
+추가 threshold 평가:
+
+```bash
+.venv/bin/python scripts/eval_large_model_rag.py \
+  --eval-set eval/policy_xlsx_qa.jsonl \
+  --index-mode v2_only \
+  --model sglang:qwen3-next-80b-a3b-instruct-fp8 \
+  --auto-params-mode apply \
+  --auto-topk-strategy reranker_threshold \
+  --threshold-grid config/auto_rag_threshold_grid.json \
+  --label auto_params_threshold_grid_v1
+```
+
+수동 점검:
+
+- baseline에서 맞고 자동 모드에서 틀린 문항 전수 확인
+- source recall 하락 문항은 자동 적용 차단 profile로 되돌림
+- 일반 설명형에서만 context noise 감소 이득이 있는지 확인
+
+### 7. 피드백 루프
+
+운영/개발 피드백은 다음 형태로 누적한다.
+
+- 사용자 thumbs up/down 또는 "근거 부족" feedback
+- 관리자 진단의 자동 parameter trace
+- `CHAT_QUERY` audit log의 profile/effective parameter/result metadata
+- 평가 실패 문항 회귀셋 편입
+
+피드백 처리 원칙:
+
+- 개별 실패를 즉시 threshold에 반영하지 않는다.
+- 같은 profile/문서유형/실패유형이 반복될 때만 rule table 또는 threshold 후보를 조정한다.
+- 조정 후 반드시 기존 40문항 평가셋과 새 회귀셋을 함께 돌린다.
+- 최적값은 전역 하나가 아니라 profile별 config로 관리한다.
+
+권장 정기 산출물:
+
+```text
+reports/auto_rag_params_eval/<date>_feedback_regression.md
+```
+
+포함 내용:
+
+- profile별 요청 수
+- 자동 선택 Top-K 분포
+- 평균 temperature
+- feedback negative rate
+- source recall 하락 사례
+- threshold 변경 제안
+
 ### Phase 4. Corrective retrieval는 보류
 
 CRAG/Self-RAG/FLARE식 반복 검색은 매력적이지만 현재 보험 실무 앱에는 즉시 적용하지 않는다.
