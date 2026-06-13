@@ -12,6 +12,7 @@ from src.api.models import ChatMessage
 from src.graph.context import build_graph_context
 from src.llm.factory import build_llm
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
+from src.rag.auto_params import AutoRagParams, apply_adaptive_k_to_hits
 from src.rag.evidence import append_evidence_validation_warning
 from src.rag.pipeline import RagPipeline, _deterministic_guard_answer, _hit_to_chunk
 from src.rag.quick_code import build_quick_code_prompt, retrieve_quick_code_chunks
@@ -221,6 +222,8 @@ async def prepare_retrieved_context(
     top_k: int,
     history: list[ChatMessage],
     filters: dict | None = None,
+    *,
+    auto_params: AutoRagParams | None = None,
 ):
     """Retrieve chunks, GraphDB facts, source metadata, and a prompt for generation."""
 
@@ -270,6 +273,22 @@ async def prepare_retrieved_context(
         graph_hits=graph_hits,
         return_debug=True,
     )
+    if auto_params is not None:
+        preserve_ids = {hit.id for hit in graph_hits}
+        hits, cutoff = apply_adaptive_k_to_hits(
+            hits,
+            list(getattr(debug, "reranker_scores", []) or []),
+            auto_params,
+            score_floor=config.AUTO_RAG_RERANK_SCORE_FLOOR,
+            drop_abs=config.AUTO_RAG_RERANK_DROP_ABS,
+            drop_ratio=config.AUTO_RAG_RERANK_DROP_RATIO,
+            preserve_chunk_ids=preserve_ids,
+            preserve_doc_shorts=set(doc_filter or []),
+        )
+        if debug is not None:
+            selected_ids = {hit.id for hit in hits}
+            debug.final_hits = [item for item in debug.final_hits if item.chunk_id in selected_ids]
+            debug.auto_cutoff = cutoff
     chunks = [_hit_to_chunk(hit) for hit in hits]
     sources = chunks_to_sources(chunks)
     prompt = pipeline.build_prompt(question, chunks, graph_context=graph_context)

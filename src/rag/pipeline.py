@@ -13,6 +13,7 @@ from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.ontology.registry import get_default_ontology_registry
 from src.parser.chunker import Chunk
+from src.rag.auto_params import AutoRagParams, apply_adaptive_k_to_hits
 from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context, detect_retrieval_conflicts
 from src.rag.search_intent import SearchIntentPlan, classify_search_intent, extract_code_terms
 from src.rag.table_store import TableStore
@@ -237,6 +238,7 @@ class DebugInfo:
     retrieval_execution: "RetrievalExecutionInfo | None" = None
     graph_result: Any = None
     reranker_scores: list[StageHit] = field(default_factory=list)
+    auto_cutoff: Any = None
 
 
 @dataclass
@@ -1306,6 +1308,7 @@ class RagPipeline:
         top_k: int | None = None,
         doc_filter: list[str] | None = None,
         return_debug: bool = False,
+        auto_params: AutoRagParams | None = None,
     ) -> RagAnswer:
         """질문에 대해 답변과 사용한 청크를 반환한다."""
 
@@ -1374,6 +1377,22 @@ class RagPipeline:
             return_debug=return_debug,
             graph_hits=graph_hits,
         )
+        if auto_params is not None:
+            preserve_ids = {hit.id for hit in graph_hits}
+            fused_hits, cutoff = apply_adaptive_k_to_hits(
+                fused_hits,
+                list(getattr(debug, "reranker_scores", []) or []),
+                auto_params,
+                score_floor=config.AUTO_RAG_RERANK_SCORE_FLOOR,
+                drop_abs=config.AUTO_RAG_RERANK_DROP_ABS,
+                drop_ratio=config.AUTO_RAG_RERANK_DROP_RATIO,
+                preserve_chunk_ids=preserve_ids,
+                preserve_doc_shorts=set(doc_filter or []),
+            )
+            if debug is not None:
+                selected_ids = {hit.id for hit in fused_hits}
+                debug.final_hits = [hit for hit in debug.final_hits if hit.chunk_id in selected_ids]
+                debug.auto_cutoff = cutoff
         if debug is not None and graph_result is not None:
             debug.graph_result = graph_result
 

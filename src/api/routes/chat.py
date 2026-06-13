@@ -97,10 +97,13 @@ async def chat_stream(
                 config_mode=config.AUTO_RAG_PARAMS_MODE,
                 allow_manual_override=config.AUTO_RAG_ALLOW_MANUAL_OVERRIDE,
                 max_temperature=config.AUTO_RAG_MAX_TEMPERATURE,
+                top_k_strategy=config.AUTO_RAG_TOPK_STRATEGY,
+                temperature_policy_path=config.AUTO_RAG_TEMPERATURE_POLICY_PATH,
             )
             effective_top_k = auto_decision.effective_top_k
+            retrieval_top_k = auto_decision.retrieval_top_k or effective_top_k
             effective_temperature = auto_decision.effective_temperature
-            pipeline = _get_pipeline(selected_model, effective_top_k, effective_index_mode)
+            pipeline = _get_pipeline(selected_model, retrieval_top_k, effective_index_mode)
             doc_filter = None
             if resolved_mode == "quickcode":
                 chunks, sources, prompt, system_prompt, doc_filter = await prepare_quickcode_context(
@@ -121,9 +124,10 @@ async def chat_stream(
                 chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug_info = await prepare_retrieved_context(
                     pipeline,
                     chat_request.query,
-                    effective_top_k,
+                    retrieval_top_k,
                     history,
                     effective_filters,
+                    auto_params=auto_decision,
                 )
             yield _sse("sources", sources)
             if graph_payload is not None:
@@ -196,6 +200,8 @@ async def chat_stream(
                         else None
                     ),
                     "top_k": effective_top_k,
+                    "retrieval_top_k": retrieval_top_k,
+                    "final_top_k": len(chunks) if resolved_mode == "general" and chunks else effective_top_k,
                     "temperature": effective_temperature,
                     "requested_top_k": chat_request.top_k,
                     "requested_temperature": chat_request.temperature,
@@ -355,6 +361,7 @@ def _build_rag_diagnostics(
     rrf_hits = list(getattr(debug, "rrf_hits", []) or [])
     final_hits = list(getattr(debug, "final_hits", []) or [])
     reranker_scores = list(getattr(debug, "reranker_scores", []) or [])
+    auto_cutoff = getattr(debug, "auto_cutoff", None) if debug is not None else None
     search_intent = getattr(debug, "search_intent", None) if debug is not None else None
     search_intent_payload = search_intent.to_payload() if hasattr(search_intent, "to_payload") else None
     retrieval_execution = getattr(debug, "retrieval_execution", None) if debug is not None else None
@@ -377,6 +384,7 @@ def _build_rag_diagnostics(
         "search_intent": search_intent_payload,
         "retrieval_execution": retrieval_execution_payload,
         "reranker_scores": [_stage_hit_payload(hit) for hit in reranker_scores],
+        "auto_cutoff": auto_cutoff.to_payload() if hasattr(auto_cutoff, "to_payload") else None,
         "graph_review_path_count": len(getattr(graph_result, "review_paths", []) or []) if graph_result is not None else 0,
         "steps": [
             {

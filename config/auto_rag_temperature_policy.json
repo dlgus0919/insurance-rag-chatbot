@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "default": 0.0,
+  "max_allowed": 0.2,
+  "profiles": {
+    "exact_code_lookup": 0.0,
+    "exact_code_compound_lookup": 0.0,
+    "procedure_code_lookup": 0.0,
+    "clause_or_appendix_lookup": 0.0,
+    "clause_detail_lookup": 0.0,
+    "coverage_judgment": 0.0,
+    "cross_doc_compare": 0.0,
+    "ambiguous_medical_term": 0.1,
+    "general_explanation": 0.2
+  },
+  "selection_basis": "Initial conservative policy. Final profile thresholds should be updated only after reports/auto_rag_params_eval results are reviewed."
+}
