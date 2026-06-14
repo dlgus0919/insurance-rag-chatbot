@@ -98,8 +98,27 @@ _CLAUSE_DETAIL_QUERY_CUES = (
 _CLAUSE_DETAIL_CONTEXT_TERMS = {
     "diagnosis": ("진단확정", "정의 및 진단확정", "병력", "신경학적 검진", "CT", "MRI", "의사"),
     "documents": ("보험금의 청구", "청구서", "사고증명서", "진단서", "신분증", "구비서류", "제출서류"),
-    "deductible": ("자기부담금", "자기부담", "보험금 등의 지급한도", "지급한도", "대물", "대인"),
+    "deductible": (
+        "자기부담금",
+        "자기부담",
+        "공제금액",
+        "공제",
+        "보장대상의료비",
+        "보험금 등의 지급한도",
+        "지급한도",
+        "대물",
+        "대인",
+    ),
 }
+_CLAUSE_DETAIL_NUMBER_PATTERN = re.compile(
+    r"\d+\s*[~∼-]\s*\d+\s*(?:만원|원|%|회|년|세)|"
+    r"\d+(?:,\d{3})*(?:\.\d+)?\s*(?:%|만원|원|회|년|세)"
+)
+_CLAUSE_DETAIL_ARTICLE_PATTERN = re.compile(r"제\s*\d+\s*조|[<＜]\s*표\s*\d+\s*[>＞]|표\s*\d+")
+_CLAUSE_DETAIL_ROW_BOUNDARY_PATTERN = re.compile(
+    r"(?=(?:[-•]\s*)?(?:3대\s*비급여|3대비급여|비급여|급여|상해|질병)\s*[\(（])|"
+    r"(?=(?:[-•]\s*)?(?:입원|통원|외래|처방조제)\s*(?:치료|의료비|비|1회))"
+)
 _HIRA_CHUNKS_PATH = Path("data/processed/chunks.jsonl")
 _HIRA_TERM_ALIASES: dict[str, tuple[str, ...]] = {
     "췌장 이식수술": ("췌이식술", "췌장이식술"),
@@ -281,6 +300,20 @@ class RagAnswer:
     chunks: list[Chunk]
     timing: dict
     debug: DebugInfo | None = None
+
+
+@dataclass(frozen=True)
+class ClauseDetailEvidenceRow:
+    """질문과 매칭된 조항·표 세부 근거 후보."""
+
+    score: int
+    text: str
+    numbers: list[str]
+    doc_short: str
+    page_start: int | None
+    page_end: int | None
+    chunk_id: str
+    section: str
 
 
 def _hit_to_chunk(hit: Hit) -> Chunk:
@@ -602,6 +635,290 @@ def _split_evidence_lines(text: str) -> list[str]:
     return lines
 
 
+def _extract_clause_detail_numbers(text: str) -> list[str]:
+    """근거 문장에 실제로 존재하는 수치 표현만 순서대로 반환한다."""
+
+    numbers: list[str] = []
+    for match in _CLAUSE_DETAIL_NUMBER_PATTERN.finditer(text or ""):
+        value = re.sub(r"\s+", "", match.group(0))
+        if value not in numbers:
+            numbers.append(value)
+    return numbers
+
+
+def _clause_detail_question_facets(question: str) -> list[str]:
+    """조항 세부 질문에서 row 매칭에 쓸 일반 facet을 추출한다."""
+
+    compact = _compact_text(question)
+    facet_groups = (
+        ("3대비급여", "비급여", "급여"),
+        ("상해", "질병"),
+        ("입원", "통원", "외래", "처방조제"),
+        ("1회", "자기부담금", "자기부담", "공제금액", "공제", "보상비율", "보상", "지급한도", "필요서류", "청구서류", "진단확정"),
+    )
+    facets: list[str] = []
+    for group in facet_groups:
+        for term in group:
+            if term in compact and term not in facets:
+                facets.append(term)
+    for match in _CLAUSE_DETAIL_ARTICLE_PATTERN.findall(question):
+        normalized = _compact_text(match)
+        if normalized and normalized not in facets:
+            facets.append(normalized)
+    return facets
+
+
+def _clause_detail_required_facet_groups(question_facets: list[str]) -> list[tuple[str, ...]]:
+    groups: list[tuple[str, ...]] = []
+    if any(facet in question_facets for facet in ("입원", "통원", "외래", "처방조제")):
+        groups.append(("입원", "통원", "외래", "처방조제"))
+    if "1회" in question_facets:
+        groups.append(("1회",))
+    return groups
+
+
+def _clause_detail_contains_facet(compact_row: str, facet: str) -> bool:
+    if facet == "급여":
+        return "급여" in compact_row and "비급여" not in compact_row
+    if facet == "비급여":
+        return "비급여" in compact_row
+    if facet == "3대비급여":
+        return "3대비급여" in compact_row or "비급여(3대)" in compact_row
+    return facet in compact_row
+
+
+def _clause_detail_row_matches_required_groups(
+    compact_row: str,
+    question_facets: list[str],
+    groups: list[tuple[str, ...]],
+) -> bool:
+    for group in groups:
+        required = [facet for facet in group if facet in question_facets]
+        if required and not any(_clause_detail_contains_facet(compact_row, facet) for facet in required):
+            return False
+    return True
+
+
+def _clause_detail_has_coverage_conflict(compact_row: str, question_facets: list[str]) -> bool:
+    wants_three_nonpay = "3대비급여" in question_facets
+    wants_nonpay = wants_three_nonpay or "비급여" in question_facets
+    wants_pay = "급여" in question_facets and not wants_nonpay
+    row_has_three_nonpay = _clause_detail_contains_facet(compact_row, "3대비급여")
+    row_has_nonpay = _clause_detail_contains_facet(compact_row, "비급여")
+    row_has_pay = _clause_detail_contains_facet(compact_row, "급여")
+    if wants_three_nonpay and row_has_pay and not row_has_three_nonpay:
+        return True
+    if wants_nonpay and row_has_pay and not row_has_nonpay:
+        return True
+    if wants_pay and row_has_nonpay:
+        return True
+    return False
+
+
+def _split_clause_detail_row_candidates(text: str) -> list[str]:
+    """OCR/table-like paragraph를 조항·표 row 후보 단위로 나눈다."""
+
+    normalized = re.sub(r"[ \t]+", " ", text or "")
+    normalized = _CLAUSE_DETAIL_ROW_BOUNDARY_PATTERN.sub("\n", normalized)
+    candidates: list[str] = []
+    context_prefix = ""
+    for line in _split_evidence_lines(normalized):
+        if len(line) > 340:
+            parts = [
+                part.strip(" \t-•*")
+                for part in re.split(r"(?<=(?:%|만원|원|큰 금액|공제|보상|제출해야 합니다|확인원))\s+", line)
+                if part.strip(" \t-•*")
+            ]
+        else:
+            parts = [line]
+        for part in parts:
+            if not part:
+                continue
+            compact_part = _compact_text(part)
+            is_row_prefix = (
+                len(part) <= 80
+                and not _extract_clause_detail_numbers(part)
+                and bool(re.search(r"(?:3대\s*비급여|3대비급여|비급여|급여|상해|질병)\s*[\(（]", part))
+            )
+            candidate = f"{context_prefix} {part}".strip() if context_prefix and not is_row_prefix else part
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+            if is_row_prefix:
+                context_prefix = part
+            elif _extract_clause_detail_numbers(part) or any(term in compact_part for term in ("입원", "통원", "외래", "처방조제")):
+                context_prefix = ""
+    return candidates
+
+
+def _score_clause_detail_row(
+    row_text: str,
+    *,
+    question_facets: list[str],
+    category_keywords: tuple[str, ...],
+) -> int:
+    compact_row = _compact_text(row_text)
+    score = 0
+    for facet in question_facets:
+        if facet and _clause_detail_contains_facet(compact_row, facet):
+            score += 3
+    for keyword in category_keywords:
+        compact_keyword = _compact_text(keyword)
+        if compact_keyword and compact_keyword in compact_row:
+            score += 2
+    if _extract_clause_detail_numbers(row_text):
+        score += 3
+    if _CLAUSE_DETAIL_ARTICLE_PATTERN.search(row_text):
+        score += 1
+    return score
+
+
+def _extract_clause_detail_source_label(text: str) -> str:
+    labels: list[str] = []
+    for match in _CLAUSE_DETAIL_ARTICLE_PATTERN.findall(text or ""):
+        label = re.sub(r"\s+", "", match)
+        table_match = re.search(r"표(\d+)", label)
+        if table_match:
+            label = f"<표{table_match.group(1)}>"
+        if label and label not in labels:
+            labels.append(label)
+        if len(labels) >= 2:
+            break
+    return " ".join(labels)
+
+
+def _extract_clause_detail_evidence_rows(
+    question: str,
+    chunks: list[Chunk],
+    categories: list[str],
+    *,
+    limit: int = 5,
+) -> list[ClauseDetailEvidenceRow]:
+    """검색된 chunk에서 질문 facet과 숫자를 함께 가진 source-grounded row를 찾는다."""
+
+    question_facets = _clause_detail_question_facets(question)
+    required_facet_groups = _clause_detail_required_facet_groups(question_facets)
+    category_keywords = tuple(
+        dict.fromkeys(
+            keyword
+            for category in categories
+            for keyword in _CLAUSE_DETAIL_CONTEXT_TERMS.get(category, ())
+        )
+    )
+    rows: list[ClauseDetailEvidenceRow] = []
+    seen: set[tuple[str, str, str]] = set()
+    for chunk in chunks:
+        doc_short = str(chunk.metadata.get("doc_short") or "문서")
+        page_start = chunk.metadata.get("page_start")
+        page_end = chunk.metadata.get("page_end", page_start)
+        metadata_section = str(
+            chunk.metadata.get("section")
+            or chunk.metadata.get("chapter")
+            or chunk.metadata.get("part")
+            or ""
+        )
+        source_label = _extract_clause_detail_source_label(chunk.text)
+        if source_label and source_label not in metadata_section:
+            section = f"{source_label}, {metadata_section}" if metadata_section else source_label
+        else:
+            section = metadata_section
+        for row_text in _split_clause_detail_row_candidates(chunk.text):
+            compact_row = _compact_text(row_text)
+            numbers = _extract_clause_detail_numbers(row_text)
+            if "deductible" in categories and not numbers:
+                continue
+            if not _clause_detail_row_matches_required_groups(
+                compact_row,
+                question_facets,
+                required_facet_groups,
+            ):
+                continue
+            if _clause_detail_has_coverage_conflict(compact_row, question_facets):
+                continue
+            score = _score_clause_detail_row(
+                row_text,
+                question_facets=question_facets,
+                category_keywords=category_keywords,
+            )
+            if source_label:
+                score += 4
+            if score < 5:
+                continue
+            if question_facets and not any(
+                _clause_detail_contains_facet(compact_row, facet) for facet in question_facets
+            ):
+                continue
+            key = (doc_short, str(page_start), _compact_text(row_text)[:220])
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(
+                ClauseDetailEvidenceRow(
+                    score=score,
+                    text=row_text[:360] + ("..." if len(row_text) > 360 else ""),
+                    numbers=numbers,
+                    doc_short=doc_short,
+                    page_start=page_start,
+                    page_end=page_end,
+                    chunk_id=chunk.id,
+                    section=section,
+                )
+            )
+    rows.sort(key=lambda row: (-row.score, row.doc_short, row.page_start or 0, row.chunk_id))
+    return rows[:limit]
+
+
+def _format_clause_detail_source(row: ClauseDetailEvidenceRow) -> str:
+    page = "p.?"
+    if row.page_start is not None and row.page_end is not None and row.page_end != row.page_start:
+        page = f"p.{row.page_start}-{row.page_end}"
+    elif row.page_start is not None:
+        page = f"p.{row.page_start}"
+    section = f", {row.section}" if row.section else ""
+    return f"{row.doc_short}{section}, {page}, chunk={row.chunk_id}"
+
+
+def _build_clause_detail_evidence_answer(
+    question: str,
+    rows: list[ClauseDetailEvidenceRow],
+    categories: list[str],
+) -> str | None:
+    if not rows:
+        return None
+
+    category_labels = {
+        "diagnosis": "진단확정 기준",
+        "documents": "청구 필요 서류",
+        "deductible": "자기부담금/공제 기준",
+    }
+    label = " / ".join(category_labels.get(category, "조항 세부 기준") for category in categories)
+    displayed_rows = rows[:3]
+    all_numbers: list[str] = []
+    for row in displayed_rows:
+        for number in row.numbers:
+            if number not in all_numbers:
+                all_numbers.append(number)
+
+    lines = [
+        "제공된 문서 근거에서 확인되는 범위로 답변드립니다.",
+        "",
+        f"{label}: 아래 원문 근거 행을 우선 확인했습니다.",
+    ]
+    for index, row in enumerate(displayed_rows, start=1):
+        lines.append(f"- 근거 {index}: {row.text}")
+        if row.numbers:
+            lines.append(f"  - 확인된 수치: {', '.join(row.numbers)}")
+        lines.append(f"  - 출처: {_format_clause_detail_source(row)}")
+    if all_numbers:
+        lines.extend(["", f"확인된 수치 요약: {', '.join(all_numbers)}"])
+    lines.extend(
+        [
+            "",
+            "위 내용은 선택된 원문 근거 기준의 구조화 요약입니다. 실제 지급 여부는 가입 담보와 사고/진단 사실 관계를 함께 확인해야 합니다.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _extract_clause_evidence_lines(text: str, keywords: tuple[str, ...], limit: int = 6) -> list[str]:
     compact_keywords = tuple(_compact_text(keyword) for keyword in keywords if keyword)
     selected: list[str] = []
@@ -627,6 +944,11 @@ def _deterministic_clause_detail_answer(question: str, chunks: list[Chunk]) -> s
     categories = _clause_detail_categories(question)
     if not categories:
         return None
+
+    source_rows = _extract_clause_detail_evidence_rows(question, chunks, categories)
+    source_grounded_answer = _build_clause_detail_evidence_answer(question, source_rows, categories)
+    if source_grounded_answer:
+        return source_grounded_answer
 
     category_labels = {
         "diagnosis": "진단확정 기준",

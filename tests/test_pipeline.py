@@ -10,6 +10,7 @@ from src.rag.pipeline import (
     _build_structured_context,
     _boost_surgery_name_table_rows,
     _deterministic_guard_answer,
+    _extract_clause_detail_evidence_rows,
     _extract_disability_region_from_query,
     _expand_retrieval_query,
     _extract_named_code_terms,
@@ -128,6 +129,69 @@ def test_deterministic_guard_digestive_grade5_includes_pancreas_scores() -> None
     assert "147,455.74" in answer
     assert "Q8062" in answer
     assert "159,457.97" in answer
+
+
+def test_clause_detail_deductible_answer_uses_source_rows() -> None:
+    chunk = make_chunk(
+        doc_short="약관",
+        page_start=31,
+        text=(
+            "제3조(보장종목별 보상내용) <표1> "
+            "급여(상해·질병) 입원치료: 보장대상의료비의 80%를 보상하고 "
+            "자기부담금은 보장대상의료비의 20%입니다. "
+            "급여(질병) 통원치료: 통원 1회당 병원급별 공제금액 1~2만원과 "
+            "보장대상의료비의 20% 중 큰 금액을 공제합니다."
+        ),
+    )
+
+    answer = _deterministic_guard_answer("급여(상해·질병) 입원치료의 자기부담금 비율은?", [chunk])
+
+    assert answer is not None
+    assert "80%" in answer
+    assert "20%" in answer
+    assert "제3조" in answer
+    assert "<표1>" in answer
+    assert "chunk=test" in answer
+
+
+def test_clause_detail_rows_require_source_numbers() -> None:
+    chunk = make_chunk(
+        doc_short="약관",
+        page_start=31,
+        text="제3조 급여 통원치료 자기부담금 산정 기준을 설명하지만 구체 수치는 이 줄에 없습니다.",
+    )
+
+    rows = _extract_clause_detail_evidence_rows("급여 통원치료의 자기부담금은 어떻게 산정하나?", [chunk], ["deductible"])
+
+    assert rows == []
+
+
+def test_clause_detail_nonpay_question_rejects_pay_row_fragment() -> None:
+    chunks = [
+        Chunk(
+            id="pay-summary",
+            text="급여(3대) 공제금액(3만원)과 보장대상의료비의 30%중 큰 금액",
+            metadata={"doc_short": "약관", "page_start": 8, "page_end": 8},
+        ),
+        Chunk(
+            id="nonpay-table",
+            text=(
+                "제3조(보장종목별 보상내용) <표1> 공제금액 및 보상한도 "
+                "도수치료 공제금액 1회당 3만원과 보장대상의료비의 30%중 큰 금액"
+            ),
+            metadata={"doc_short": "약관", "page_start": 71, "page_end": 71},
+        ),
+    ]
+
+    rows = _extract_clause_detail_evidence_rows(
+        "3대 비급여 치료의 1회당 공제금액(자기부담금)은?",
+        chunks,
+        ["deductible"],
+    )
+
+    assert rows
+    assert rows[0].chunk_id == "nonpay-table"
+    assert "1회당" in rows[0].text
 
 
 class DummyBM25:
