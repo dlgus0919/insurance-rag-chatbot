@@ -156,6 +156,7 @@ SPREADSHEET_SOURCES: list[SpreadsheetSource] = [
 
 PDF_PATH: Path = PDF_SOURCES[0].path
 CHUNKS_PATH: Path = ROOT_DIR / "data" / "processed" / "chunks.jsonl"
+DIGITAL_PDF_TABLES_DIR: Path = ROOT_DIR / "data" / "extracted_digital_pdf"
 CHROMA_DIR: Path = ROOT_DIR / "data" / "index" / "chroma"
 BM25_PATH: Path = ROOT_DIR / "data" / "index" / "bm25.pkl"
 RELATIONAL_INDEX_DIR: Path = ROOT_DIR / "data" / "index" / "relational"

@@ -918,6 +918,11 @@ def _score_clause_detail_row(
     return score
 
 
+def _clause_detail_has_category_context(row_text: str, category_keywords: tuple[str, ...]) -> bool:
+    compact_row = _compact_text(row_text)
+    return any(_compact_text(keyword) in compact_row for keyword in category_keywords)
+
+
 def _extract_clause_detail_source_label(text: str) -> str:
     labels: list[str] = []
     article_pattern = _clause_detail_pattern("article_pattern", _CLAUSE_DETAIL_ARTICLE_PATTERN)
@@ -1068,6 +1073,8 @@ def _extract_clause_detail_table_rows(
                 continue
             if _clause_detail_has_coverage_conflict(compact_row, question_facets):
                 continue
+            if "deductible" in categories and not _clause_detail_has_category_context(match_text, category_keywords):
+                continue
             score = _score_clause_detail_row(
                 match_text,
                 question_facets=question_facets,
@@ -1164,6 +1171,8 @@ def _extract_clause_detail_text_rows(
                 continue
             if _clause_detail_has_coverage_conflict(compact_row, question_facets):
                 continue
+            if "deductible" in categories and not _clause_detail_has_category_context(row_text, category_keywords):
+                continue
             score = _score_clause_detail_row(
                 row_text,
                 question_facets=question_facets,
@@ -1247,6 +1256,8 @@ def _extract_clause_detail_manifest_rows(
             continue
         if _clause_detail_has_coverage_conflict(compact_row, question_facets):
             continue
+        if "deductible" in categories and not _clause_detail_has_category_context(match_text, category_keywords):
+            continue
         score = _score_clause_detail_row(
             match_text,
             question_facets=question_facets,
@@ -1302,9 +1313,7 @@ def _extract_clause_detail_evidence_rows(
 ) -> list[ClauseDetailEvidenceRow]:
     """검색된 chunk에서 질문 facet과 숫자를 함께 가진 source-grounded row를 찾는다."""
 
-    if manifest_rows and len(manifest_rows) >= limit:
-        return manifest_rows[:limit]
-    table_rows = _extract_clause_detail_table_rows(question, chunks, categories, limit=limit)
+    table_rows = _extract_clause_detail_table_rows(question, chunks, categories, limit=limit * 2)
     combined = list(manifest_rows or [])
     seen = {
         (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
@@ -1316,39 +1325,46 @@ def _extract_clause_detail_evidence_rows(
             continue
         combined.append(row)
         seen.add(key)
-        if len(combined) >= limit:
-            break
-    if len(combined) >= limit:
-        combined.sort(
-            key=lambda row: (
-                0 if row.source_kind in {"clause_detail_rows", "table_json"} else 1,
-                -row.score,
-                row.doc_short,
-                row.page_start or 0,
-                row.chunk_id,
-            )
-        )
-        return combined[:limit]
 
-    text_rows = _extract_clause_detail_text_rows(question, chunks, categories, limit=limit)
+    text_rows = _extract_clause_detail_text_rows(question, chunks, categories, limit=limit * 2)
     for row in text_rows:
         key = (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
         if key in seen:
             continue
         combined.append(row)
         seen.add(key)
-        if len(combined) >= limit:
-            break
-    combined.sort(
+    sorted_rows = sorted(
+        combined,
         key=lambda row: (
             0 if row.source_kind in {"clause_detail_rows", "table_json"} else 1,
             -row.score,
             row.doc_short,
             row.page_start or 0,
             row.chunk_id,
-        )
+        ),
     )
-    return combined[:limit]
+    selected: list[ClauseDetailEvidenceRow] = []
+    selected_keys: set[tuple[str, str, str]] = set()
+    covered_numbers: set[str] = set()
+    for row in sorted_rows:
+        key = (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
+        row_numbers = {number for number in row.numbers if number}
+        if not row_numbers or row_numbers.issubset(covered_numbers):
+            continue
+        selected.append(row)
+        selected_keys.add(key)
+        covered_numbers.update(row_numbers)
+        if len(selected) >= limit:
+            return selected
+    for row in sorted_rows:
+        key = (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
+        if key in selected_keys:
+            continue
+        selected.append(row)
+        selected_keys.add(key)
+        if len(selected) >= limit:
+            break
+    return selected
 
 
 def _format_clause_detail_source(row: ClauseDetailEvidenceRow) -> str:
@@ -1384,7 +1400,7 @@ def _build_clause_detail_evidence_answer(
         "deductible": "자기부담금/공제 기준",
     }
     label = " / ".join(category_labels.get(category, "조항 세부 기준") for category in categories)
-    displayed_rows = rows[:3]
+    displayed_rows = rows[:2]
     all_numbers: list[str] = []
     for row in displayed_rows:
         for number in row.numbers:

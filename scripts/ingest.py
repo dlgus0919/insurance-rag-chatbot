@@ -16,6 +16,7 @@ if str(ROOT) not in sys.path:
 
 from src import config
 from src.parser.chunker import chunk_pages, load_chunks, save_chunks
+from src.parser.digital_pdf_tables import extract_digital_pdf_table_chunks
 from src.parser.ocr_chunker import chunk_from_extracted
 from src.parser.pdf_parser import parse_pdf
 from src.retrieval.bm25 import BM25Index
@@ -23,6 +24,7 @@ from src.retrieval.embedder import Embedder
 from src.retrieval.vector_store import VectorStore
 
 EXTRACTED_BASE = ROOT / "data" / "extracted"
+DIGITAL_TABLE_DOC_TYPES = {"insurance_policy"}
 
 
 def select_sources(cloud_only: bool = False, skip_ocr: bool = True):
@@ -39,7 +41,20 @@ def select_sources(cloud_only: bool = False, skip_ocr: bool = True):
     return sources
 
 
-def build_chunks(sources=None, extracted_root: Path | None = None, chunks_path: Path | None = None) -> None:
+def _should_extract_digital_tables(source: config.PdfSource, enabled: bool) -> bool:
+    return bool(
+        enabled
+        and not source.requires_ocr
+        and source.doc_type in DIGITAL_TABLE_DOC_TYPES
+    )
+
+
+def build_chunks(
+    sources=None,
+    extracted_root: Path | None = None,
+    chunks_path: Path | None = None,
+    include_digital_tables: bool = True,
+) -> None:
     """PDF_SOURCES를 순회하며 통합 chunks.jsonl을 생성한다."""
 
     started = time.perf_counter()
@@ -80,6 +95,20 @@ def build_chunks(sources=None, extracted_root: Path | None = None, chunks_path: 
                 doc_source=source,
                 id_offset=id_offset,
             )
+            if _should_extract_digital_tables(source, include_digital_tables):
+                try:
+                    table_chunks, summary = extract_digital_pdf_table_chunks(
+                        source,
+                        id_offset=id_offset + len(chunks),
+                    )
+                except Exception as exc:
+                    print(f"[M6] 디지털 PDF 표 추출 실패, text chunk만 사용: {source.doc_short} ({exc})")
+                else:
+                    chunks.extend(table_chunks)
+                    print(
+                        f"[M6] {source.doc_short}: 디지털 표 청크 {summary.table_chunks:,}개 "
+                        f"(탐지 table {summary.tables_seen:,}개)"
+                    )
         all_chunks.extend(chunks)
         id_offset += len(chunks)
         doc_counts[source.doc_short] = len(chunks)
@@ -180,6 +209,11 @@ def main() -> None:
         default=config.CHROMA_DIR.parent,
         help="인덱스 출력 루트 경로 (하위에 chroma/, bm25.pkl 생성).",
     )
+    parser.add_argument(
+        "--skip-digital-tables",
+        action="store_true",
+        help="디지털 생성 PDF의 텍스트 레이어 기반 표 chunk 생성을 건너뜁니다.",
+    )
     args = parser.parse_args()
     extracted_root = args.extracted_root if args.extracted_root.is_absolute() else ROOT / args.extracted_root
     chunks_path = args.chunks_path if args.chunks_path.is_absolute() else ROOT / args.chunks_path
@@ -187,7 +221,12 @@ def main() -> None:
     sources = select_sources(args.cloud_only, skip_ocr=not args.include_ocr)
 
     if args.stage in {"chunks", "all"}:
-        build_chunks(sources, extracted_root=extracted_root, chunks_path=chunks_path)
+        build_chunks(
+            sources,
+            extracted_root=extracted_root,
+            chunks_path=chunks_path,
+            include_digital_tables=not args.skip_digital_tables,
+        )
     if args.stage in {"index", "all"}:
         build_index(chunks_path=chunks_path, index_root=index_root)
 
