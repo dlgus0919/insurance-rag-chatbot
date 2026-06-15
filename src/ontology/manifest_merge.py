@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from src.graph.normalizer import normalize_name
+from src.ontology.candidate_quality import find_manifest_candidate_alias_issues
 from src.ontology.registry import ACTIVE_ONTOLOGY_MANIFEST, BASE_ONTOLOGY_MANIFEST
 from src.ontology.review_store import APPLIED, APPROVED, OntologyCandidate, utc_now_iso
 
@@ -160,11 +161,23 @@ def _validate_no_conflicts(base_concepts: list[dict[str, Any]], candidate_concep
                     continue
                 owner = aliases.get(normalized)
                 if owner and owner != concept_id:
-                    raise ValueError(f"alias conflict: {alias} maps to both {owner} and {concept_id}")
+                    message = f"alias conflict: {alias} maps to both {owner} and {concept_id}"
+                    if source == "base":
+                        warnings.append(f"base manifest existing {message}")
+                        continue
+                    raise ValueError(message)
                 aliases[normalized] = concept_id
 
             if source == "candidate" and not raw_aliases:
                 warnings.append(f"{concept_id}: candidate has no aliases")
+
+    quality_issues = find_manifest_candidate_alias_issues([*base_concepts, *candidate_concepts])
+    blocking = [issue for issue in quality_issues if issue.severity == "error"]
+    if blocking:
+        messages = "; ".join(issue.message for issue in blocking[:10])
+        if len(blocking) > 10:
+            messages = f"{messages}; ... {len(blocking) - 10} more"
+        raise ValueError(f"candidate_alias quality conflict: {messages}")
     return warnings
 
 

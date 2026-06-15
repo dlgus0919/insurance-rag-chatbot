@@ -21,10 +21,13 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src import config
+from src.llm.factory import split_model_selection
+from src.llm.ollama_client import OllamaClient
 from src.llm.openai_compatible_client import OpenAICompatibleClient
 from src.rag.pipeline import RagPipeline
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
+from src.retrieval.index_mode import INDEX_MODES, resolve_index_paths
 from src.retrieval.vector_store import VectorStore
 
 DEFAULT_CASE_PATH = ROOT / "eval" / "large_model_rag_qa.jsonl"
@@ -36,11 +39,13 @@ DEFAULT_MODELS = ",".join(
 ) or config.SGLANG_DEFAULT_MODEL
 PAD_RE = re.compile(r"(?:<pad>\s*){3,}")
 SOURCE_RE = re.compile(r"\[출처:")
+HANGUL_RE = re.compile(r"[가-힣]")
 
 
 @dataclass
 class CaseResult:
     model: str
+    index_mode: str
     case_id: str
     category: str
     question: str
@@ -51,6 +56,16 @@ class CaseResult:
     top_sources: list[dict[str, Any]]
     timing: dict[str, float]
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    provider: str
+    model: str
+
+    @property
+    def id(self) -> str:
+        return f"{self.provider}:{self.model}"
 
 
 def load_cases(path: Path) -> list[dict[str, Any]]:
@@ -117,19 +132,35 @@ def _normalize_for_match(text: str) -> str:
     return normalized.strip()
 
 
+def _contains_term(normalized_answer: str, term: str) -> bool:
+    normalized_term = _normalize_for_match(term)
+    if normalized_term in normalized_answer:
+        return True
+    if not HANGUL_RE.search(normalized_term):
+        return False
+    compact_answer = _compact_korean_for_match(normalized_answer)
+    compact_term = _compact_korean_for_match(normalized_term)
+    return bool(compact_term) and compact_term in compact_answer
+
+
+def _compact_korean_for_match(text: str) -> str:
+    compact = text.replace(" ", "")
+    return re.sub(r"(?<=[가-힣])(?:을|를|은|는)(?=[가-힣])", "", compact)
+
+
 def _contains_all(answer: str, terms: list[str]) -> bool:
     normalized = _normalize_for_match(answer)
-    return all(_normalize_for_match(term) in normalized for term in terms)
+    return all(_contains_term(normalized, term) for term in terms)
 
 
 def _contains_any(answer: str, terms: list[str]) -> bool:
     normalized = _normalize_for_match(answer)
-    return any(_normalize_for_match(term) in normalized for term in terms)
+    return any(_contains_term(normalized, term) for term in terms)
 
 
 def _contains_no_any(answer: str, terms: list[str]) -> bool:
     normalized = _normalize_for_match(answer)
-    return not any(_normalize_for_match(term) in normalized for term in terms)
+    return not any(_contains_term(normalized, term) for term in terms)
 
 
 def _regex_all(answer: str, patterns: list[str]) -> bool:
@@ -178,6 +209,18 @@ def _min_keyword_hits_ok(answer: str, spec: dict[str, Any] | None) -> bool:
     return sum(1 for keyword in keywords if _normalize_for_match(keyword) in normalized) >= minimum
 
 
+def _required_groups_ok(answer: str, groups: list[list[str]]) -> bool:
+    """Return whether every group has at least one matching expression."""
+
+    if not groups:
+        return True
+    normalized = _normalize_for_match(answer)
+    for group in groups:
+        if not any(_contains_term(normalized, term) for term in group):
+            return False
+    return True
+
+
 def _output_health_ok(answer: str) -> bool:
     stripped = answer.strip()
     if len(stripped) < 8:
@@ -202,7 +245,10 @@ def evaluate_answer(case: dict[str, Any], answer: str, hits) -> tuple[dict[str, 
     expected_sources = case.get("expected_sources", [])
     checks["retrieval_expected_sources"] = case.get("allow_retrieval_miss", False) or _expected_source_recall(hits, expected_sources)
     checks["required_terms"] = _contains_all(answer, case.get("required_terms", []))
+    checks["required_clause_terms"] = _contains_all(answer, case.get("required_clause_terms", []))
+    checks["required_numbers"] = _contains_all(answer, case.get("required_numbers", []))
     checks["required_any"] = True if not case.get("required_any") else _contains_any(answer, case["required_any"])
+    checks["required_groups"] = _required_groups_ok(answer, case.get("required_groups", []))
     checks["forbidden_terms"] = _contains_no_any(answer, case.get("forbidden_terms", []))
     checks["forbidden_any"] = True if not case.get("forbidden_any") else _contains_no_any(answer, case["forbidden_any"])
     checks["required_regex"] = _regex_all(answer, case.get("required_regex", []))
@@ -220,36 +266,85 @@ def evaluate_answer(case: dict[str, Any], answer: str, hits) -> tuple[dict[str, 
     return checks, failures
 
 
-def switch_model(model: str, command: str, timeout: int) -> None:
+def parse_model_specs(raw: str) -> list[ModelSpec]:
+    specs: list[ModelSpec] = []
+    for item in raw.split(","):
+        text = item.strip()
+        if not text:
+            continue
+        provider, model = split_model_selection(text, default_provider="sglang")
+        specs.append(ModelSpec(provider=provider, model=model))
+    return specs
+
+
+def switch_model(spec: ModelSpec, args) -> None:
+    if spec.provider == "sglang":
+        command = args.switch_command
+        timeout = args.switch_timeout
+    elif spec.provider == "vllm":
+        command = args.vllm_switch_command
+        timeout = args.vllm_switch_timeout
+    elif spec.provider == "ollama":
+        print(f"[model] {spec.id} uses running Ollama runtime; no switch command")
+        return
+    else:
+        raise RuntimeError(f"unsupported local provider for evaluation: {spec.provider}")
     started = time.perf_counter()
-    completed = subprocess.run([command, model], text=True, capture_output=True, timeout=timeout, check=False)
+    completed = subprocess.run([command, spec.model], text=True, capture_output=True, timeout=timeout, check=False)
     if completed.returncode != 0:
         tail = (completed.stdout + "\n" + completed.stderr)[-4000:]
-        raise RuntimeError(f"switch failed for {model} (exit={completed.returncode})\n{tail}")
+        raise RuntimeError(f"switch failed for {spec.id} (exit={completed.returncode})\n{tail}")
     elapsed = time.perf_counter() - started
-    print(f"[model] {model} active after {elapsed:.1f}s")
+    print(f"[model] {spec.id} active after {elapsed:.1f}s")
 
 
-def make_pipeline(model: str, base_url: str, max_tokens: int, embedder_device: str) -> RagPipeline:
-    llm = OpenAICompatibleClient(
-        model=model,
-        base_url=base_url,
-        api_key=os.getenv("SGLANG_API_KEY", "EMPTY"),
-        max_tokens=max_tokens,
-        provider="sglang",
-    )
-    served_models = llm.list_models()
-    if model not in served_models:
-        raise RuntimeError(
-            f"SGLang endpoint is reachable but model {model!r} is not served at {base_url}. "
-            f"served={served_models}"
+def stop_model_server(spec: ModelSpec) -> None:
+    if spec.provider == "sglang":
+        subprocess.run(["tmux", "kill-session", "-t", "sglang-local"], check=False)
+    elif spec.provider == "vllm":
+        subprocess.run(["tmux", "kill-session", "-t", "vllm-gemma4"], check=False)
+
+
+def make_pipeline(spec: ModelSpec, args) -> RagPipeline:
+    if spec.provider == "sglang":
+        llm = OpenAICompatibleClient(
+            model=spec.model,
+            base_url=args.base_url,
+            api_key=os.getenv("SGLANG_API_KEY", "EMPTY"),
+            max_tokens=args.max_tokens,
+            provider="sglang",
         )
-    if embedder_device == "cpu":
+        served_models = llm.list_models()
+        if spec.model not in served_models:
+            raise RuntimeError(
+                f"SGLang endpoint is reachable but model {spec.model!r} is not served at {args.base_url}. "
+                f"served={served_models}"
+            )
+    elif spec.provider == "vllm":
+        llm = OpenAICompatibleClient(
+            model=spec.model,
+            base_url=args.vllm_base_url,
+            api_key=os.getenv("VLLM_API_KEY", "EMPTY"),
+            max_tokens=args.max_tokens,
+            provider="vllm",
+        )
+        served_models = llm.list_models()
+        if spec.model not in served_models:
+            raise RuntimeError(
+                f"vLLM endpoint is reachable but model {spec.model!r} is not served at {args.vllm_base_url}. "
+                f"served={served_models}"
+            )
+    elif spec.provider == "ollama":
+        llm = OllamaClient(config.OLLAMA_HOST, spec.model)
+    else:
+        raise RuntimeError(f"unsupported local provider for evaluation: {spec.provider}")
+    if args.embedder_device == "cpu":
         # Large SGLang servers reserve most GPU memory. Keep retrieval embedding on CPU for evaluation.
         os.environ["CUDA_VISIBLE_DEVICES"] = ""
     embedder = Embedder(config.EMBEDDING_MODEL, allow_remote_download=config.HF_MODEL_DOWNLOAD)
-    vector_store = VectorStore(config.CHROMA_DIR)
-    bm25 = BM25Index.load(config.BM25_PATH)
+    bm25_path, chroma_dir = resolve_index_paths(args.index_mode)
+    vector_store = VectorStore(chroma_dir)
+    bm25 = BM25Index.load(bm25_path)
     return RagPipeline(
         embedder=embedder,
         vector_store=vector_store,
@@ -262,59 +357,66 @@ def make_pipeline(model: str, base_url: str, max_tokens: int, embedder_device: s
     )
 
 
-def evaluate_model(model: str, cases: list[dict[str, Any]], args) -> list[CaseResult]:
-    if not args.no_switch:
-        switch_model(model, args.switch_command, args.switch_timeout)
-    pipeline = make_pipeline(model, args.base_url, args.max_tokens, args.embedder_device)
+def evaluate_model(spec: ModelSpec, cases: list[dict[str, Any]], args) -> list[CaseResult]:
     results: list[CaseResult] = []
-    for index, case in enumerate(cases, start=1):
-        started = time.perf_counter()
-        try:
-            answer = pipeline.answer(
-                case["question"],
-                temperature=args.temperature,
-                top_k=args.top_k,
-                doc_filter=case.get("doc_sources"),
-                return_debug=False,
-            )
-            checks, failures = evaluate_answer(case, answer.answer, answer.chunks)
-            elapsed = time.perf_counter() - started
-            passed = not failures
-            result = CaseResult(
-                model=model,
-                case_id=case["id"],
-                category=case.get("category", ""),
-                question=case["question"],
-                passed=passed,
-                checks=checks,
-                failures=failures,
-                answer=answer.answer,
-                top_sources=_top_sources(answer.chunks),
-                timing={**answer.timing, "elapsed_s": elapsed},
-            )
-        except Exception as exc:
-            result = CaseResult(
-                model=model,
-                case_id=case["id"],
-                category=case.get("category", ""),
-                question=case["question"],
-                passed=False,
-                checks={},
-                failures=["exception"],
-                answer="",
-                top_sources=[],
-                timing={"elapsed_s": time.perf_counter() - started},
-                error=str(exc),
-            )
-        results.append(result)
-        status = "PASS" if result.passed else "FAIL"
-        print(f"[{model} {index:02d}/{len(cases)}] {status} {result.case_id} failures={','.join(result.failures) or '-'}")
+    try:
+        if not args.no_switch:
+            switch_model(spec, args)
+        pipeline = make_pipeline(spec, args)
+        for index, case in enumerate(cases, start=1):
+            started = time.perf_counter()
+            try:
+                answer = pipeline.answer(
+                    case["question"],
+                    temperature=args.temperature,
+                    top_k=args.top_k,
+                    doc_filter=case.get("doc_sources"),
+                    return_debug=False,
+                )
+                checks, failures = evaluate_answer(case, answer.answer, answer.chunks)
+                elapsed = time.perf_counter() - started
+                passed = not failures
+                result = CaseResult(
+                    model=spec.id,
+                    index_mode=args.index_mode,
+                    case_id=case["id"],
+                    category=case.get("category", ""),
+                    question=case["question"],
+                    passed=passed,
+                    checks=checks,
+                    failures=failures,
+                    answer=answer.answer,
+                    top_sources=_top_sources(answer.chunks),
+                    timing={**answer.timing, "elapsed_s": elapsed},
+                )
+            except Exception as exc:
+                result = CaseResult(
+                    model=spec.id,
+                    index_mode=args.index_mode,
+                    case_id=case["id"],
+                    category=case.get("category", ""),
+                    question=case["question"],
+                    passed=False,
+                    checks={},
+                    failures=["exception"],
+                    answer="",
+                    top_sources=[],
+                    timing={"elapsed_s": time.perf_counter() - started},
+                    error=str(exc),
+                )
+            results.append(result)
+            status = "PASS" if result.passed else "FAIL"
+            print(f"[{spec.id} {index:02d}/{len(cases)}] {status} {result.case_id} failures={','.join(result.failures) or '-'}")
+    finally:
+        if args.stop_llm_after and not args.no_switch:
+            stop_model_server(spec)
     return results
 
 
 def result_to_dict(result: CaseResult) -> dict[str, Any]:
     return {
         "model": result.model,
+        "index_mode": result.index_mode,
         "case_id": result.case_id,
         "category": result.category,
         "question": result.question,
@@ -339,7 +441,8 @@ def write_reports(results: list[CaseResult], report_dir: Path, label: str) -> tu
     by_model: dict[str, list[CaseResult]] = {}
     for result in results:
         by_model.setdefault(result.model, []).append(result)
-    lines = ["# Large Model RAG Evaluation", "", f"Generated: {label}", ""]
+    index_modes = sorted({result.index_mode for result in results})
+    lines = ["# Large Model RAG Evaluation", "", f"Generated: {label}", f"Index mode: {', '.join(index_modes) or '-'}", ""]
     for model, model_results in by_model.items():
         passed = sum(1 for result in model_results if result.passed)
         total = len(model_results)
@@ -359,13 +462,23 @@ def write_reports(results: list[CaseResult], report_dir: Path, label: str) -> tu
 
 
 def parse_args(argv: list[str] | None = None):
-    parser = argparse.ArgumentParser(description="Evaluate large local SGLang models on insurance RAG QA cases.")
+    parser = argparse.ArgumentParser(description="Evaluate large local LLM models on insurance RAG QA cases.")
     parser.add_argument("--cases", type=Path, default=DEFAULT_CASE_PATH)
     parser.add_argument("--models", default=os.getenv("LARGE_RAG_EVAL_MODELS", DEFAULT_MODELS))
+    parser.add_argument(
+        "--index-mode",
+        choices=INDEX_MODES,
+        default=os.getenv("LARGE_RAG_EVAL_INDEX_MODE", "v2_only"),
+        help="Retrieval index mode. Use v2_only for manual-corrected OCR evaluation.",
+    )
     parser.add_argument("--base-url", default=os.getenv("SGLANG_BASE_URL", "http://127.0.0.1:30000/v1"))
+    parser.add_argument("--vllm-base-url", default=os.getenv("VLLM_BASE_URL", "http://127.0.0.1:30001/v1"))
     parser.add_argument("--switch-command", default=os.getenv("SGLANG_SWITCH_SCRIPT", "/srv/ai-ops/bin/switch-sglang-model"))
     parser.add_argument("--switch-timeout", type=int, default=int(os.getenv("SGLANG_SWITCH_TIMEOUT", "900")))
+    parser.add_argument("--vllm-switch-command", default=os.getenv("VLLM_SWITCH_SCRIPT", "/srv/ai-ops/bin/switch-vllm-model"))
+    parser.add_argument("--vllm-switch-timeout", type=int, default=int(os.getenv("VLLM_SWITCH_TIMEOUT", "1200")))
     parser.add_argument("--no-switch", action="store_true", help="Do not switch SGLang model before each model run.")
+    parser.add_argument("--stop-llm-after", action="store_true", help="Stop the SGLang/vLLM tmux session after each model run.")
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--top-k", type=int, default=8)
     parser.add_argument("--max-tokens", type=int, default=700)
@@ -389,7 +502,7 @@ def main(argv: list[str] | None = None) -> None:
         cases = cases[: args.limit]
     if not cases:
         raise SystemExit("No evaluation cases loaded.")
-    models = [model.strip() for model in args.models.split(",") if model.strip()]
+    models = parse_model_specs(args.models)
     all_results: list[CaseResult] = []
     for model in models:
         all_results.extend(evaluate_model(model, cases, args))

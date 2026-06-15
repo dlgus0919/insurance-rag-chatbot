@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "description": "General RAG parameter policy. This file stores processing thresholds only, not product-specific benefit values or claim decisions.",
+  "defaults": {
+    "top_k": 8,
+    "min_top_k": 5,
+    "max_top_k": 10,
+    "temperature": 0.1
+  },
+  "profiles": {
+    "exact_code_lookup": {
+      "top_k": 6,
+      "min_top_k": 4,
+      "max_top_k": 8,
+      "temperature": 0.0
+    },
+    "exact_code_compound_lookup": {
+      "top_k": 8,
+      "min_top_k": 6,
+      "max_top_k": 10,
+      "temperature": 0.0
+    },
+    "procedure_code_lookup": {
+      "top_k": 6,
+      "min_top_k": 4,
+      "max_top_k": 8,
+      "temperature": 0.0
+    },
+    "clause_or_appendix_lookup": {
+      "top_k": 7,
+      "min_top_k": 5,
+      "max_top_k": 10,
+      "temperature": 0.0
+    },
+    "clause_detail_lookup": {
+      "top_k": 8,
+      "min_top_k": 6,
+      "max_top_k": 10,
+      "temperature": 0.0
+    },
+    "coverage_judgment": {
+      "top_k": 10,
+      "min_top_k": 8,
+      "max_top_k": 12,
+      "temperature": 0.0
+    },
+    "cross_doc_compare": {
+      "top_k": 12,
+      "min_top_k": 10,
+      "max_top_k": 14,
+      "temperature": 0.0
+    },
+    "ambiguous_medical_term": {
+      "top_k": 10,
+      "min_top_k": 8,
+      "max_top_k": 12,
+      "temperature": 0.1
+    },
+    "general_explanation": {
+      "top_k": 8,
+      "min_top_k": 5,
+      "max_top_k": 10,
+      "temperature": 0.2
+    }
+  }
+}

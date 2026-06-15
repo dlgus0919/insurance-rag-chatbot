@@ -172,10 +172,8 @@ function setupChatDelegatedHandlers() {
 
     if (action === 'toggle-export') {
       toggleExport(event);
-    } else if (action === 'send-quick') {
-      await sendQuick();
-    } else if (action === 'send-formal') {
-      await sendFormal();
+    } else if (action === 'toggle-adaptive-k-settings') {
+      toggleAdaptiveKSettings(event);
     } else if (action === 'send-claim') {
       await sendClaim();
     } else if (action === 'add-claim-line') {
@@ -206,13 +204,43 @@ function setupSettingsHandlers() {
         : input.value;
     });
   });
+  const autoParamToggle = document.getElementById('auto-param-toggle');
+  if (autoParamToggle && !autoParamToggle.dataset.autoParamBound) {
+    autoParamToggle.dataset.autoParamBound = 'true';
+    autoParamToggle.checked = isAutoParamsEnabled();
+    autoParamToggle.addEventListener('change', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.AUTO_RAG_PARAMS,
+        autoParamToggle.checked ? 'on' : 'off'
+      );
+      syncAutoParamControls();
+      syncAdaptiveKControls();
+    });
+  }
+  syncAutoParamControls();
+
+  const adaptiveKToggle = document.getElementById('adaptive-k-toggle');
+  if (adaptiveKToggle && !adaptiveKToggle.dataset.adaptiveKBound) {
+    adaptiveKToggle.dataset.adaptiveKBound = 'true';
+    adaptiveKToggle.checked = isAdaptiveKEnabled();
+    adaptiveKToggle.addEventListener('change', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.ADAPTIVE_K,
+        adaptiveKToggle.checked ? 'on' : 'off'
+      );
+      syncAdaptiveKControls();
+    });
+  }
+  syncAdaptiveKControls();
 
   const page = document.getElementById('page-chat');
   if (page && !page.dataset.exportCloseBound) {
     page.dataset.exportCloseBound = 'true';
     page.addEventListener('click', (event) => {
       if (event.target.closest('.export-wrap')) return;
+      if (event.target.closest('.adaptive-k-wrap')) return;
       document.getElementById('exp-menu')?.classList.remove('open');
+      document.getElementById('adaptive-k-wrap')?.classList.remove('open');
     });
   }
 
@@ -507,34 +535,8 @@ async function sendMsg() {
   appendMsg('user', text);
   input.value = '';
   input.style.height = 'auto';
-  await streamChat(text, currentMode === 'quick' ? 'quickcode' : currentMode, getActiveScopeFilters());
-}
-
-async function sendQuick() {
-  const input = document.querySelector('#panel-quick .p-input');
-  const term = input?.value.trim() || '백내장 수술';
-  const filters = {
-    ...getActiveScopeFilters(),
-    include_summary: document.getElementById('quick-include-summary')?.checked !== false,
-    include_coverage: document.getElementById('quick-include-coverage')?.checked !== false,
-  };
-  appendMsg('user', '[퀵코드 검색] ' + term);
-  await streamChat(term, 'quickcode', filters);
-}
-
-async function sendFormal() {
-  const input = document.querySelector('#panel-formal .p-input');
-  const memo = document.getElementById('formal-memo')?.value.trim() || '';
-  const query = input?.value.trim() || 'N39.3 / 질병급여·비급여·3대비급여';
-  const categories = [...document.querySelectorAll('.scenario-chip.active')].map((item) => item.textContent.trim());
-  const searchType = document.querySelector('input[name="ftype"]:checked')?.value || '보상가능 여부 판정';
-  const filters = {
-    ...getActiveScopeFilters(),
-    product_category: categories,
-    search_type: searchType,
-  };
-  appendMsg('user', '[약관 정형] ' + query);
-  await streamChat(query, 'formal', filters, memo);
+  const mode = currentMode === 'claim' ? 'general' : currentMode;
+  await streamChat(text, mode, getActiveScopeFilters());
 }
 
 async function sendClaim(options = {}) {
@@ -726,6 +728,8 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
       reasoning_mode: getReasoningMode(),
       top_k: getTopK(),
       temperature: getTemperature(),
+      auto_params: isAutoParamsEnabled(),
+      adaptive_k: isAdaptiveKEnabled(),
       filters,
       index_mode: getIndexMode(),
     };
@@ -1243,11 +1247,7 @@ function setMode(mode, element) {
   currentMode = mode;
   document.querySelectorAll('.mode-tab').forEach((tab) => tab.classList.remove('active'));
   element.classList.add('active');
-  document.getElementById('panel-quick')?.classList.remove('visible');
-  document.getElementById('panel-formal')?.classList.remove('visible');
   document.getElementById('panel-claim')?.classList.remove('visible');
-  if (mode === 'quick') document.getElementById('panel-quick')?.classList.add('visible');
-  if (mode === 'formal') document.getElementById('panel-formal')?.classList.add('visible');
   if (mode === 'claim') document.getElementById('panel-claim')?.classList.add('visible');
   msgs = [];
   renderWelcome();
@@ -1325,7 +1325,7 @@ export {
 };
 
 function getSelectedModel() {
-  return localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'ollama:exaone3.5:7.8b';
+  return localStorage.getItem(STORAGE_KEYS.SELECTED_LLM_MODEL) || 'sglang:qwen3-next-80b-a3b-instruct-fp8';
 }
 
 function isReasoningSupportedModel(modelId) {
@@ -1353,6 +1353,7 @@ function formatSelectedModelLabel(modelId) {
   if (!value) return '미확인';
 
   const [, raw = value] = value.split(':', 2);
+  if (value === 'sglang:qwen3-next-80b-a3b-instruct-fp8') return 'SGLang · Qwen3 Next 80B Instruct';
   if (value === 'sglang:gpt-oss-20b') return 'SGLang · GPT-OSS 20B';
   if (value === 'ollama:exaone3.5:7.8b') return 'Ollama · exaone3.5:7.8b';
   if (value.startsWith('sglang:')) return `SGLang · ${raw}`;
@@ -1363,7 +1364,8 @@ function formatSelectedModelLabel(modelId) {
 }
 
 function getIndexMode() {
-  return document.querySelector('input[name="ocr-index"]:checked')?.value || 'v2_only';
+  const mode = document.querySelector('input[name="ocr-index"]:checked')?.value || 'v2_only';
+  return mode === 'default' ? 'v2_only' : mode;
 }
 
 function getTopK() {
@@ -1372,4 +1374,36 @@ function getTopK() {
 
 function getTemperature() {
   return Number((document.querySelector('.range-input[min="0"]')?.value || 3) / 10);
+}
+
+function isAutoParamsEnabled() {
+  return localStorage.getItem(STORAGE_KEYS.AUTO_RAG_PARAMS) !== 'off';
+}
+
+function isAdaptiveKEnabled() {
+  return localStorage.getItem(STORAGE_KEYS.ADAPTIVE_K) !== 'off';
+}
+
+function syncAutoParamControls() {
+  const enabled = isAutoParamsEnabled();
+  const toggle = document.getElementById('auto-param-toggle');
+  if (toggle) toggle.checked = enabled;
+  document.querySelectorAll('.manual-param-control, #manual-param-divider').forEach((element) => {
+    element.classList.toggle('hidden', enabled);
+  });
+}
+
+function syncAdaptiveKControls() {
+  const enabled = isAdaptiveKEnabled();
+  const toggle = document.getElementById('adaptive-k-toggle');
+  const wrap = document.getElementById('adaptive-k-wrap');
+  if (toggle) toggle.checked = enabled;
+  if (wrap) wrap.classList.toggle('disabled', !isAutoParamsEnabled());
+}
+
+function toggleAdaptiveKSettings(event) {
+  event.preventDefault();
+  const wrap = document.getElementById('adaptive-k-wrap');
+  if (!wrap) return;
+  wrap.classList.toggle('open');
 }

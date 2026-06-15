@@ -44,7 +44,20 @@ def test_model_info_and_label_for_known_and_custom_models() -> None:
     assert info["family"] == "GPT-5"
     assert info["size"] == "mini"
     assert "Cloud · OpenAI · GPT-5 mini" in factory.format_model_label("gpt-5-mini", "openai")
-    assert "Local · SGLang · GPT-OSS · 20B · 검증완료" == factory.format_model_label("gpt-oss-20b", "sglang")
+    assert "Local · SGLang · GPT-OSS · 20B · Fallback" == factory.format_model_label("gpt-oss-20b", "sglang")
+    assert "온톨로지 주력" in factory.format_model_label("qwen3-30b-a3b-instruct-2507-fp8", "sglang")
+    assert "답변 주력" in factory.format_model_label("qwen3-next-80b-a3b-instruct-fp8", "sglang")
+    assert "삭제 후보" in factory.format_model_label("gemma-4-26b-a4b-nvfp4", "vllm")
+    assert "이미지 후보" in factory.format_model_label("gemma-4-31b-it-nvfp4", "vllm")
+    ontology_info = factory.get_local_model_info("qwen3-30b-a3b-instruct-2507-fp8", "sglang")
+    answer_info = factory.get_local_model_info("qwen3-next-80b-a3b-instruct-fp8", "sglang")
+    assert ontology_info["status"] == "ontology_primary"
+    assert ontology_info["optional"] == "false"
+    assert answer_info["status"] == "answer_primary"
+    assert answer_info["optional"] == "false"
+    local_info = factory.get_local_model_info("gemma-4-26b-a4b-nvfp4", "vllm")
+    assert local_info["status"] == "delete_candidate"
+    assert local_info["delete_candidate"] == "true"
     assert custom["use_case"] == "사용자 정의"
 
 
@@ -58,11 +71,15 @@ def test_list_available_models_respects_env(monkeypatch) -> None:
     monkeypatch.setenv("ALLOW_OLLAMA", "true")
     monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
     monkeypatch.setattr(factory.config, "OFFLINE_MODE", False)
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
     monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
     monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", False)
     monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "VLLM_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "OLLAMA_MODEL", "gemma3:4b")
+    monkeypatch.setattr(factory.config, "OLLAMA_CANDIDATE_MODELS", ["gemma3:4b", "gemma3:1b"])
     monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint, api_key=None: [])
 
     grouped = factory.list_available_models()
@@ -77,17 +94,22 @@ def test_list_available_models_hides_cloud_in_offline_mode(monkeypatch) -> None:
     monkeypatch.setenv("ALLOW_OLLAMA", "false")
     monkeypatch.setenv("OPENAI_API_KEY", "test-api-key")
     monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
     monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
     monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", False)
     monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "VLLM_DEFAULT_MODEL", "gemma-4-31b-it-nvfp4")
+    monkeypatch.setattr(factory.config, "VLLM_CANDIDATE_MODELS", ["gemma-4-31b-it-nvfp4"])
+    monkeypatch.setattr(factory.config, "VLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "VLLM_DISABLED_MODELS", set())
     monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint, api_key=None: [])
 
     grouped = factory.list_available_models()
 
     assert grouped["sglang"] == ["gpt-oss-20b"]
-    assert "gemma-4-26b-a4b-nvfp4" in grouped["vllm"]
+    assert grouped["vllm"] == ["gemma-4-31b-it-nvfp4"]
     assert grouped["ollama"] == []
     assert grouped["openai"] == []
 
@@ -105,7 +127,10 @@ def test_list_runtime_available_models_only_exposes_live_local_endpoints(monkeyp
     monkeypatch.setattr(factory.config, "VLLM_DEFAULT_MODEL", "gemma-4-26b-a4b-nvfp4")
     monkeypatch.setattr(factory.config, "VLLM_CANDIDATE_MODELS", ["gemma-4-26b-a4b-nvfp4"])
     monkeypatch.setattr(factory.config, "VLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "VLLM_DISABLED_MODELS", set())
     monkeypatch.setattr(factory.config, "VLLM_STRICT_AVAILABLE_MODELS", False)
+    monkeypatch.setattr(factory.config, "OLLAMA_MODEL", "gemma3:4b")
+    monkeypatch.setattr(factory.config, "OLLAMA_CANDIDATE_MODELS", ["gemma3:4b", "gemma3:1b"])
 
     def fake_served(endpoint, api_key=None):
         if endpoint.endswith("30000/v1"):
@@ -167,6 +192,7 @@ def test_build_llm_routes_to_vllm(monkeypatch) -> None:
 
     monkeypatch.setattr(module, "OpenAICompatibleClient", FakeClient)
     monkeypatch.setattr(factory.config, "VLLM_API_KEY", "EMPTY")
+    monkeypatch.setattr(factory.config, "VLLM_DISABLED_MODELS", set())
     monkeypatch.setattr(factory.config, "vllm_base_url_for_model", lambda model: "http://127.0.0.1:30001/v1")
 
     llm = factory.build_llm("gemma-4-26b-a4b-nvfp4", provider="vllm")
@@ -185,8 +211,8 @@ def test_build_llm_rejects_openai_without_key(monkeypatch) -> None:
         factory.build_llm("gpt-5-mini", provider="openai")
 
 
-def test_list_available_models_discovers_local_sglang_models(monkeypatch, tmp_path) -> None:
-    staged = tmp_path / "gemma-4-26b-a4b-nvfp4"
+def test_list_available_models_does_not_discover_local_sglang_directories(monkeypatch, tmp_path) -> None:
+    staged = tmp_path / "qwen3-next-80b-a3b-instruct-fp8"
     staged.mkdir()
     (staged / "config.json").write_text("{}", encoding="utf-8")
     (staged / "tokenizer.json").write_text("{}", encoding="utf-8")
@@ -203,7 +229,7 @@ def test_list_available_models_discovers_local_sglang_models(monkeypatch, tmp_pa
 
     grouped = factory.list_available_models()
 
-    assert grouped["sglang"] == ["gpt-oss-20b", "gemma-4-26b-a4b-nvfp4"]
+    assert grouped["sglang"] == ["gpt-oss-20b"]
 
 
 def test_disabled_sglang_models_are_hidden_and_rejected(monkeypatch, tmp_path) -> None:
@@ -227,6 +253,23 @@ def test_disabled_sglang_models_are_hidden_and_rejected(monkeypatch, tmp_path) -
     assert grouped["sglang"] == ["gpt-oss-20b"]
     with pytest.raises(RuntimeError, match="비활성화"):
         factory.build_llm("gemma-4-26b-a4b-nvfp4", provider="sglang")
+
+
+def test_gpt_oss_120b_is_not_exposed_by_default_and_is_disabled(monkeypatch) -> None:
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "qwen3-next-80b-a3b-instruct-fp8")
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["qwen3-next-80b-a3b-instruct-fp8", "gpt-oss-120b"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", False)
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", {"gpt-oss-120b"})
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint, api_key=None: [])
+    monkeypatch.setenv("ALLOW_OLLAMA", "false")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+
+    grouped = factory.list_available_models()
+
+    assert grouped["sglang"] == ["qwen3-next-80b-a3b-instruct-fp8"]
+    with pytest.raises(RuntimeError, match="비활성화"):
+        factory.build_llm("gpt-oss-120b", provider="sglang")
 
 
 def test_strict_sglang_models_only_exposes_served_models(monkeypatch) -> None:
@@ -256,6 +299,7 @@ def test_served_model_is_exposed_even_when_not_configured(monkeypatch) -> None:
     monkeypatch.setattr(factory.config, "VLLM_MODEL_ENDPOINTS", {})
     monkeypatch.setattr(factory.config, "VLLM_BASE_URL", "http://127.0.0.1:30001/v1")
     monkeypatch.setattr(factory.config, "VLLM_STRICT_AVAILABLE_MODELS", False)
+    monkeypatch.setattr(factory.config, "VLLM_DISABLED_MODELS", set())
     monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
     monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
     monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
@@ -274,6 +318,63 @@ def test_served_model_is_exposed_even_when_not_configured(monkeypatch) -> None:
     grouped = factory.list_available_models()
 
     assert grouped["vllm"] == ["nemotron-3-nano-30b-a3b-nvfp4"]
+
+
+def test_disabled_vllm_models_are_hidden_and_rejected(monkeypatch) -> None:
+    monkeypatch.setattr(factory.config, "VLLM_DEFAULT_MODEL", "gemma-4-31b-it-nvfp4")
+    monkeypatch.setattr(factory.config, "VLLM_CANDIDATE_MODELS", ["gemma-4-31b-it-nvfp4", "gemma-4-26b-a4b-nvfp4"])
+    monkeypatch.setattr(factory.config, "VLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "VLLM_BASE_URL", "http://127.0.0.1:30001/v1")
+    monkeypatch.setattr(factory.config, "VLLM_STRICT_AVAILABLE_MODELS", False)
+    monkeypatch.setattr(factory.config, "VLLM_DISABLED_MODELS", {"gemma-4-26b-a4b-nvfp4"})
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
+    monkeypatch.setenv("ALLOW_OLLAMA", "false")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint, api_key=None: ["gemma-4-26b-a4b-nvfp4"] if endpoint.endswith("30001/v1") else [])
+
+    grouped = factory.list_available_models()
+
+    assert grouped["vllm"] == ["gemma-4-31b-it-nvfp4"]
+    with pytest.raises(RuntimeError, match="비활성화"):
+        factory.build_llm("gemma-4-26b-a4b-nvfp4", provider="vllm")
+
+
+def test_unknown_served_model_is_not_exposed(monkeypatch) -> None:
+    monkeypatch.setattr(factory.config, "VLLM_DEFAULT_MODEL", "gemma-4-31b-it-nvfp4")
+    monkeypatch.setattr(factory.config, "VLLM_CANDIDATE_MODELS", ["gemma-4-31b-it-nvfp4"])
+    monkeypatch.setattr(factory.config, "VLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "VLLM_BASE_URL", "http://127.0.0.1:30001/v1")
+    monkeypatch.setattr(factory.config, "VLLM_STRICT_AVAILABLE_MODELS", True)
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_DIR", Path("/missing"))
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["gpt-oss-20b"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
+    monkeypatch.setenv("ALLOW_OLLAMA", "false")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+
+    def fake_served(endpoint, api_key=None):
+        if endpoint.endswith("30001/v1"):
+            return ["unknown-local-model"]
+        return []
+
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", fake_served)
+
+    grouped = factory.list_available_models()
+
+    assert grouped["vllm"] == []
+
+
+def test_build_llm_rejects_unsupported_provider_models() -> None:
+    with pytest.raises(RuntimeError, match="SGLang provider"):
+        factory.build_llm("exaone-4.0-32b-awq", provider="sglang")
+
+    with pytest.raises(RuntimeError, match="vLLM provider"):
+        factory.build_llm("qwen3-next-80b-a3b-instruct-fp8", provider="vllm")
 
 
 def test_extract_final_content_strips_pad_tokens() -> None:

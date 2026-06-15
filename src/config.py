@@ -168,8 +168,29 @@ if EMBEDDING_DEVICE == "":
     EMBEDDING_DEVICE = None
 HF_MODEL_DOWNLOAD: bool = os.getenv("HF_MODEL_DOWNLOAD", "false").lower() == "true"
 RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+AUTO_RAG_PARAMS_MODE: str = os.getenv("AUTO_RAG_PARAMS_MODE", "apply").strip().lower()
+AUTO_RAG_ALLOW_MANUAL_OVERRIDE: bool = os.getenv("AUTO_RAG_ALLOW_MANUAL_OVERRIDE", "true").lower() == "true"
+AUTO_RAG_MAX_TEMPERATURE: float = float(os.getenv("AUTO_RAG_MAX_TEMPERATURE", "0.2"))
+AUTO_RAG_TOPK_STRATEGY: str = os.getenv("AUTO_RAG_TOPK_STRATEGY", "reranker_threshold").strip().lower()
+AUTO_RAG_PROFILE_POLICY_PATH: Path = Path(
+    os.getenv("AUTO_RAG_PROFILE_POLICY_PATH", str(ROOT_DIR / "config" / "auto_rag_profile_policy.json"))
+)
+AUTO_RAG_TEMPERATURE_POLICY_PATH: Path = Path(
+    os.getenv("AUTO_RAG_TEMPERATURE_POLICY_PATH", str(ROOT_DIR / "config" / "auto_rag_temperature_policy.json"))
+)
+AUTO_RAG_RERANK_SCORE_FLOOR_RAW: str = os.getenv("AUTO_RAG_RERANK_SCORE_FLOOR", "").strip()
+AUTO_RAG_RERANK_SCORE_FLOOR: float | None = (
+    float(AUTO_RAG_RERANK_SCORE_FLOOR_RAW)
+    if AUTO_RAG_RERANK_SCORE_FLOOR_RAW
+    else None
+)
+AUTO_RAG_RERANK_DROP_ABS: float = float(os.getenv("AUTO_RAG_RERANK_DROP_ABS", "0.15"))
+AUTO_RAG_RERANK_DROP_RATIO: float = float(os.getenv("AUTO_RAG_RERANK_DROP_RATIO", "0.30"))
+CLAUSE_DETAIL_POLICY_PATH: Path = Path(
+    os.getenv("CLAUSE_DETAIL_POLICY_PATH", str(ROOT_DIR / "config" / "clause_detail_lookup_policy.json"))
+)
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "gemma3:4b")
+OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "exaone3.5:7.8b")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))
 OLLAMA_NUM_PREDICT: int = int(os.getenv("OLLAMA_NUM_PREDICT", "4096"))
 RERANKER_ENABLED: bool = os.getenv("RERANKER_ENABLED", "true").lower() == "true"
@@ -182,21 +203,21 @@ ALLOW_OLLAMA: bool = os.getenv("ALLOW_OLLAMA", "true").lower() == "true"
 CLOUD_DEPLOY: bool = os.getenv("CLOUD_DEPLOY", "false").lower() == "true"
 SGLANG_BASE_URL: str = os.getenv("SGLANG_BASE_URL", "http://127.0.0.1:30000/v1")
 SGLANG_API_KEY: str = os.getenv("SGLANG_API_KEY", "EMPTY")
-SGLANG_DEFAULT_MODEL: str = os.getenv("SGLANG_DEFAULT_MODEL", "gpt-oss-20b")
+SGLANG_DEFAULT_MODEL: str = os.getenv("SGLANG_DEFAULT_MODEL", "qwen3-next-80b-a3b-instruct-fp8")
 SGLANG_REASONING_EFFORT: str = os.getenv("SGLANG_REASONING_EFFORT", "low")
 SGLANG_DEFAULT_CANDIDATES = (
-    "gpt-oss-20b,"
-    "gpt-oss-120b,"
-    "qwen3-30b-a3b-instruct-2507-fp8,"
     "qwen3-next-80b-a3b-instruct-fp8,"
-    "qwen3-next-80b-a3b-thinking-fp8"
+    "qwen3-30b-a3b-instruct-2507-fp8,"
+    "gpt-oss-20b"
 )
 SGLANG_CANDIDATE_MODELS: list[str] = _parse_csv_env("SGLANG_CANDIDATE_MODELS", SGLANG_DEFAULT_CANDIDATES)
-# `nvidia/Gemma-4-26B-A4B-NVFP4` is a vLLM-oriented NVFP4 checkpoint.
-# On the current native SGLang stack it serves but generates repeated <pad> tokens.
+# Disabled defaults are known non-operational or non-primary checkpoints for the current DGX app runtime.
 SGLANG_DISABLED_MODELS: set[str] = {
     model.strip()
-    for model in os.getenv("SGLANG_DISABLED_MODELS", "gemma-4-26b-a4b-nvfp4,nemotron-3-nano-30b-a3b-nvfp4").split(",")
+    for model in os.getenv(
+        "SGLANG_DISABLED_MODELS",
+        "gemma-4-26b-a4b-nvfp4,nemotron-3-nano-30b-a3b-nvfp4,gpt-oss-120b,qwen3-next-80b-a3b-thinking-fp8",
+    ).split(",")
     if model.strip()
 }
 SGLANG_MODEL_DIR: Path = Path(os.getenv("SGLANG_MODEL_DIR", "/srv/ai-ops/llm/models"))
@@ -232,9 +253,17 @@ def sglang_base_url_for_model(model: str) -> str:
 
 VLLM_BASE_URL: str = os.getenv("VLLM_BASE_URL", "http://127.0.0.1:30001/v1")
 VLLM_API_KEY: str = os.getenv("VLLM_API_KEY", "EMPTY")
-VLLM_DEFAULT_MODEL: str = os.getenv("VLLM_DEFAULT_MODEL", "gemma-4-26b-a4b-nvfp4")
-VLLM_DEFAULT_CANDIDATES = "gemma-4-26b-a4b-nvfp4,gemma-4-31b-it-nvfp4,nemotron-3-nano-30b-a3b-nvfp4,exaone-4.0-32b-awq"
+VLLM_DEFAULT_MODEL: str = os.getenv("VLLM_DEFAULT_MODEL", "gemma-4-31b-it-nvfp4")
+VLLM_DEFAULT_CANDIDATES = "gemma-4-31b-it-nvfp4"
 VLLM_CANDIDATE_MODELS: list[str] = _parse_csv_env("VLLM_CANDIDATE_MODELS", VLLM_DEFAULT_CANDIDATES)
+VLLM_DISABLED_MODELS: set[str] = {
+    model.strip()
+    for model in os.getenv(
+        "VLLM_DISABLED_MODELS",
+        "gemma-4-26b-a4b-nvfp4,nemotron-3-nano-30b-a3b-nvfp4,exaone-4.0-32b-awq",
+    ).split(",")
+    if model.strip()
+}
 VLLM_MODEL_ENDPOINTS: dict[str, str] = _parse_sglang_model_endpoints(os.getenv("VLLM_MODEL_ENDPOINTS", ""))
 VLLM_ENABLE_APP_SWITCH: bool = os.getenv("VLLM_ENABLE_APP_SWITCH", "true").lower() == "true"
 VLLM_SWITCH_SCRIPT: Path = Path(os.getenv("VLLM_SWITCH_SCRIPT", "/srv/ai-ops/bin/switch-vllm-model"))
@@ -249,14 +278,7 @@ def vllm_base_url_for_model(model: str) -> str:
 
 
 OLLAMA_DEFAULT_CANDIDATES = (
-    "exaone3.5:7.8b,"
-    "llama-3.3-70b-instruct-q4-k-m,"
-    "exaone3.5:7.8b-instruct,"
-    "timHan/llama3korean8B4QKM:latest,"
-    "qwen2.5:7b-instruct,"
-    "qwen2.5:14b-instruct,"
-    "gemma3:4b,"
-    "gemma3:1b"
+    "exaone3.5:7.8b"
 )
 OLLAMA_CANDIDATE_MODELS: list[str] = _parse_csv_env("OLLAMA_CANDIDATE_MODELS", OLLAMA_DEFAULT_CANDIDATES)
 DEFAULT_OPENAI_CANDIDATE_MODELS: list[str] = [

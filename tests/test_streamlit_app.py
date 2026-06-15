@@ -23,7 +23,7 @@ from src.ui.streamlit_app import (
 
 
 def test_search_modes_expose_one_chat_mode_and_claim_calculation() -> None:
-    assert SEARCH_MODES == ["일반 질의", "보험금 계산"]
+    assert SEARCH_MODES == ["일반 질의", "고급 검색", "보험금 계산"]
 
 
 def test_source_title_includes_pdf_filename_hierarchy_and_page() -> None:

@@ -30,26 +30,26 @@ LOCAL_LARGE_MODEL_INFO: dict[str, dict[str, str]] = {
     "gemma-4-26b-a4b-nvfp4": {
         "family": "Gemma 4",
         "size": "26B A4B NVFP4",
-        "status": "validated",
-        "use_case": "vLLM 로컬 답변",
+        "status": "delete_candidate",
+        "use_case": "Gemma 4 31B가 이미지 인식 후보를 대체하므로 기본 선택에서 제외",
     },
     "gemma-4-31b-it-nvfp4": {
         "family": "Gemma 4",
         "size": "31B IT NVFP4",
-        "status": "staged",
-        "use_case": "vLLM 고성능 로컬 답변",
+        "status": "vision_candidate",
+        "use_case": "이미지 인식 후보 기능 보존용 vLLM 모델",
     },
     "nemotron-3-nano-30b-a3b-nvfp4": {
         "family": "Nemotron 3 Nano",
         "size": "30B A3B NVFP4",
-        "status": "staged",
-        "use_case": "vLLM 신규 비교 모델",
+        "status": "delete_candidate",
+        "use_case": "답변 평가 output_health 결함으로 기본 선택에서 제외",
     },
     "exaone-4.0-32b-awq": {
         "family": "EXAONE 4.0",
         "size": "32B AWQ",
-        "status": "staged",
-        "use_case": "vLLM 한국어 비교 모델",
+        "status": "delete_candidate",
+        "use_case": "답변 평가 통과율 열세로 기본 선택에서 제외",
     },
 }
 
@@ -57,14 +57,14 @@ SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
     "gpt-oss-20b": {
         "family": "GPT-OSS",
         "size": "20B",
-        "status": "validated",
-        "use_case": "기본 로컬 답변",
+        "status": "fallback",
+        "use_case": "저부하 fallback 답변 모델",
     },
     "gpt-oss-120b": {
         "family": "GPT-OSS",
         "size": "120B MXFP4",
-        "status": "staged",
-        "use_case": "SGLang 대형 비교 모델",
+        "status": "disabled",
+        "use_case": "DGX 메모리 부족으로 기동 불가",
     },
     "gemma-4-26b-a4b-nvfp4": {
         "family": "Gemma 4",
@@ -75,22 +75,31 @@ SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
     "qwen3-30b-a3b-instruct-2507-fp8": {
         "family": "Qwen3 Instruct",
         "size": "30B A3B FP8",
-        "status": "staged",
-        "use_case": "SGLang 신규 비교 모델",
+        "status": "ontology_primary",
+        "use_case": "온톨로지 후보 enrichment 주력 batch 모델",
     },
     "qwen3-next-80b-a3b-instruct-fp8": {
         "family": "Qwen3 Next Instruct",
         "size": "80B A3B FP8",
-        "status": "staged",
-        "use_case": "SGLang 장문/고성능 비교 모델",
+        "status": "answer_primary",
+        "use_case": "일반 질의 답변 주력 모델",
     },
     "qwen3-next-80b-a3b-thinking-fp8": {
         "family": "Qwen3 Next Thinking",
         "size": "80B A3B FP8",
-        "status": "staged",
-        "use_case": "SGLang 추론형 비교 모델",
+        "status": "disabled",
+        "use_case": "일반 질의 평가에서 instruct 대비 통과율/형식 안정성 열세",
+    },
+    "nemotron-3-nano-30b-a3b-nvfp4": {
+        "family": "Nemotron 3 Nano",
+        "size": "30B A3B NVFP4",
+        "status": "disabled",
+        "use_case": "SGLang 비활성: vLLM 비교 후보",
     },
 }
+
+SGLANG_SUPPORTED_MODEL_IDS: frozenset[str] = frozenset(SGLANG_MODEL_INFO)
+VLLM_SUPPORTED_MODEL_IDS: frozenset[str] = frozenset(LOCAL_LARGE_MODEL_INFO)
 
 
 def _ordered_unique(items: list[str]) -> list[str]:
@@ -99,19 +108,22 @@ def _ordered_unique(items: list[str]) -> list[str]:
     return list(OrderedDict((item, None) for item in items if item).keys())
 
 
-def _discover_local_sglang_models() -> list[str]:
-    """Discover locally staged SGLang model directories."""
+def _filter_supported_model_ids(models: list[str], supported: frozenset[str]) -> list[str]:
+    """Keep only provider-supported model IDs, preserving caller order."""
 
-    model_dir = config.SGLANG_MODEL_DIR
-    if not model_dir.exists():
-        return []
-    discovered: list[str] = []
-    for child in sorted(model_dir.iterdir()):
-        if not child.is_dir():
-            continue
-        if (child / "config.json").exists() and (child / "tokenizer.json").exists():
-            discovered.append(child.name)
-    return discovered
+    return _ordered_unique([normalize_model_id(model) for model in models if normalize_model_id(model) in supported])
+
+
+def is_sglang_model_supported(model: str) -> bool:
+    """Return whether the app knows how to launch and call this SGLang model."""
+
+    return normalize_model_id(model) in SGLANG_SUPPORTED_MODEL_IDS
+
+
+def is_vllm_model_supported(model: str) -> bool:
+    """Return whether the app knows how to launch and call this vLLM model."""
+
+    return normalize_model_id(model) in VLLM_SUPPORTED_MODEL_IDS
 
 
 def is_sglang_model_disabled(model: str) -> bool:
@@ -120,15 +132,21 @@ def is_sglang_model_disabled(model: str) -> bool:
     return normalize_model_id(model) in config.SGLANG_DISABLED_MODELS
 
 
+def is_vllm_model_disabled(model: str) -> bool:
+    """Return whether a staged model is blocked for the current vLLM runtime."""
+
+    return normalize_model_id(model) in config.VLLM_DISABLED_MODELS
+
+
 def _configured_sglang_models() -> list[str]:
-    """Return all configured or locally staged SGLang model names."""
+    """Return configured SGLang model names that are supported by app code."""
 
     candidates = _ordered_unique(
         [config.SGLANG_DEFAULT_MODEL]
         + list(config.SGLANG_CANDIDATE_MODELS)
         + list(config.SGLANG_MODEL_ENDPOINTS.keys())
-        + _discover_local_sglang_models()
     )
+    candidates = _filter_supported_model_ids(candidates, SGLANG_SUPPORTED_MODEL_IDS)
     return [model for model in candidates if not is_sglang_model_disabled(model)]
 
 
@@ -165,15 +183,17 @@ def _served_models_by_endpoint(endpoints: list[str], api_key: str | None = None)
 
 
 def list_sglang_large_models() -> list[str]:
-    """Return configured large SGLang models, including staged local assets."""
+    """Return configured large SGLang models that are supported by app code."""
 
     return _configured_sglang_models()
 
 
 def list_vllm_large_models() -> list[str]:
-    """Return configured large vLLM models."""
+    """Return configured large vLLM models that are supported by app code."""
 
-    return _ordered_unique([config.VLLM_DEFAULT_MODEL] + list(config.VLLM_CANDIDATE_MODELS) + list(config.VLLM_MODEL_ENDPOINTS.keys()))
+    candidates = _ordered_unique([config.VLLM_DEFAULT_MODEL] + list(config.VLLM_CANDIDATE_MODELS) + list(config.VLLM_MODEL_ENDPOINTS.keys()))
+    candidates = _filter_supported_model_ids(candidates, VLLM_SUPPORTED_MODEL_IDS)
+    return [model for model in candidates if not is_vllm_model_disabled(model)]
 
 
 def _available_vllm_models() -> list[str]:
@@ -182,7 +202,11 @@ def _available_vllm_models() -> list[str]:
     candidates = list_vllm_large_models()
     endpoints = [config.VLLM_BASE_URL, *config.VLLM_MODEL_ENDPOINTS.values(), *[config.vllm_base_url_for_model(model) for model in candidates]]
     served_by_endpoint = _served_models_by_endpoint(endpoints, api_key=config.VLLM_API_KEY)
-    served_models = _ordered_unique([model for models in served_by_endpoint.values() for model in models])
+    served_models = [
+        model
+        for model in _filter_supported_model_ids([model for models in served_by_endpoint.values() for model in models], VLLM_SUPPORTED_MODEL_IDS)
+        if not is_vllm_model_disabled(model)
+    ]
     if not served_models and not config.VLLM_STRICT_AVAILABLE_MODELS:
         return candidates
 
@@ -202,7 +226,11 @@ def _runtime_available_vllm_models() -> list[str]:
     candidates = list_vllm_large_models()
     endpoints = [config.VLLM_BASE_URL, *config.VLLM_MODEL_ENDPOINTS.values(), *[config.vllm_base_url_for_model(model) for model in candidates]]
     served_by_endpoint = _served_models_by_endpoint(endpoints, api_key=config.VLLM_API_KEY)
-    served_models = _ordered_unique([model for models in served_by_endpoint.values() for model in models])
+    served_models = [
+        model
+        for model in _filter_supported_model_ids([model for models in served_by_endpoint.values() for model in models], VLLM_SUPPORTED_MODEL_IDS)
+        if not is_vllm_model_disabled(model)
+    ]
     if not served_models:
         return []
 
@@ -231,7 +259,7 @@ def _available_sglang_models() -> list[str]:
             model
             for models in served_by_endpoint.values()
             for model in models
-            if not is_sglang_model_disabled(model)
+            if is_sglang_model_supported(model) and not is_sglang_model_disabled(model)
         ]
     )
     if not served_models and not config.SGLANG_STRICT_AVAILABLE_MODELS:
@@ -258,7 +286,7 @@ def _runtime_available_sglang_models() -> list[str]:
             model
             for models in served_by_endpoint.values()
             for model in models
-            if not is_sglang_model_disabled(model)
+            if is_sglang_model_supported(model) and not is_sglang_model_disabled(model)
         ]
     )
     if not served_models:
@@ -348,6 +376,29 @@ def get_openai_model_info(model: str) -> dict:
     return {"model": normalized, "family": family, "size": size, "use_case": "사용자 정의"}
 
 
+def get_local_model_info(model: str, provider: str) -> dict[str, str]:
+    """Return provider-scoped local model metadata."""
+
+    normalized = normalize_model_id(model)
+    if provider == "sglang":
+        info = SGLANG_MODEL_INFO.get(normalized, {})
+    elif provider == "vllm":
+        info = LOCAL_LARGE_MODEL_INFO.get(normalized, SGLANG_MODEL_INFO.get(normalized, {}))
+    else:
+        info = {}
+    status = str(info.get("status") or "").strip()
+    return {
+        "model": normalized,
+        "provider": provider,
+        "family": str(info.get("family") or normalized),
+        "size": str(info.get("size") or ""),
+        "status": status,
+        "use_case": str(info.get("use_case") or ""),
+        "optional": "true" if status in {"optional", "fallback"} else "false",
+        "delete_candidate": "true" if status == "delete_candidate" else "false",
+    }
+
+
 def format_model_label(model: str, provider: str) -> str:
     """Return a display label for a provider/model pair."""
 
@@ -359,14 +410,34 @@ def format_model_label(model: str, provider: str) -> str:
     if provider == "sglang":
         info = SGLANG_MODEL_INFO.get(normalized)
         if info:
-            status_labels = {"validated": "검증완료", "staged": "검증대상", "disabled": "비활성"}
+            status_labels = {
+                "validated": "검증완료",
+                "answer_primary": "답변 주력",
+                "ontology_primary": "온톨로지 주력",
+                "fallback": "Fallback",
+                "vision_candidate": "이미지 후보",
+                "staged": "검증대상",
+                "disabled": "비활성",
+                "delete_candidate": "삭제 후보",
+                "optional": "Optional(삭제 가능)",
+            }
             status = status_labels.get(info["status"], "검증대상")
             return f"Local · SGLang · {info['family']} · {info['size']} · {status}"
         return f"Local · SGLang · {normalized}"
     if provider == "vllm":
         info = LOCAL_LARGE_MODEL_INFO.get(normalized, SGLANG_MODEL_INFO.get(normalized))
         if info:
-            status_labels = {"validated": "검증완료", "staged": "검증대상", "disabled": "비활성"}
+            status_labels = {
+                "validated": "검증완료",
+                "answer_primary": "답변 주력",
+                "ontology_primary": "온톨로지 주력",
+                "fallback": "Fallback",
+                "vision_candidate": "이미지 후보",
+                "staged": "검증대상",
+                "disabled": "비활성",
+                "delete_candidate": "삭제 후보",
+                "optional": "Optional(삭제 가능)",
+            }
             status = status_labels.get(info["status"], "검증대상")
             return f"Local · vLLM · {info['family']} · {info['size']} · {status}"
         return f"Local · vLLM · {normalized}"
@@ -417,6 +488,8 @@ def build_llm(model: str, provider: str | None = None) -> LLMClient:
 
     selected_provider, selected_model = split_model_selection(model, provider)
     if selected_provider == "sglang":
+        if not is_sglang_model_supported(selected_model):
+            raise RuntimeError(f"{selected_model} 모델은 현재 SGLang provider에서 지원되지 않습니다.")
         if is_sglang_model_disabled(selected_model):
             raise RuntimeError(
                 f"{selected_model} 모델은 현재 SGLang 런타임에서 비활성화되어 있습니다. "
@@ -426,6 +499,10 @@ def build_llm(model: str, provider: str | None = None) -> LLMClient:
 
         return OpenAICompatibleClient(selected_model)
     if selected_provider == "vllm":
+        if not is_vllm_model_supported(selected_model):
+            raise RuntimeError(f"{selected_model} 모델은 현재 vLLM provider에서 지원되지 않습니다.")
+        if is_vllm_model_disabled(selected_model):
+            raise RuntimeError(f"{selected_model} 모델은 현재 vLLM 런타임에서 비활성화되어 있습니다. 모델 평가 보고서를 확인해 주세요.")
         from src.llm.openai_compatible_client import OpenAICompatibleClient
 
         return OpenAICompatibleClient(

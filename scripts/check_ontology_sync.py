@@ -9,6 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.ontology.registry import OntologyRegistry
+from src.ontology.candidate_quality import find_manifest_candidate_alias_issues
 
 
 def check_registry(registry: OntologyRegistry) -> list[str]:
@@ -31,6 +32,10 @@ def check_registry(registry: OntologyRegistry) -> list[str]:
             errors.append(f"{concept.concept_id}: candidate aliases exist without planner mapping")
         if concept.node_type and not concept.canonical_name:
             errors.append(f"{concept.concept_id}: graph seed node requires canonical_name")
+
+    for issue in find_manifest_candidate_alias_issues(registry.concepts):
+        if issue.severity == "error":
+            errors.append(issue.message)
 
     diagnostics = registry.diagnostics()
     if diagnostics["concept_count"] == 0:

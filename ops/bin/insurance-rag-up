@@ -24,11 +24,11 @@ Usage:
   insurance-rag-up [options]
 
 Starts the production FastAPI + SPA app for DGX local use.
-Default target: SGLang gpt-oss-20b + http://127.0.0.1:18080
+Default target: SGLang qwen3-next-80b-a3b-instruct-fp8 + http://127.0.0.1:18080
 
 Options:
   --provider <sglang|vllm|ollama>  LLM provider. Default: sglang
-  --model <model-id>               Model id. Default: gpt-oss-20b
+  --model <model-id>               Model id. Default: qwen3-next-80b-a3b-instruct-fp8
   --port <port>                    FastAPI app port. Default: 18080
   --host <host>                    FastAPI bind host. Default: 127.0.0.1
   --replace                        Stop existing app session/listener first.
@@ -118,10 +118,10 @@ esac
 if [[ "$MODEL_SET" == "0" ]]; then
   case "$PROVIDER" in
     sglang)
-      MODEL="${INSURANCE_RAG_MODEL:-gpt-oss-20b}"
+      MODEL="${INSURANCE_RAG_MODEL:-qwen3-next-80b-a3b-instruct-fp8}"
       ;;
     vllm)
-      MODEL="${INSURANCE_RAG_MODEL:-gemma-4-26b-a4b-nvfp4}"
+      MODEL="${INSURANCE_RAG_MODEL:-gemma-4-31b-it-nvfp4}"
       ;;
     ollama)
       MODEL="${INSURANCE_RAG_MODEL:-exaone3.5:7.8b}"

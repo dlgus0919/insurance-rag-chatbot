@@ -136,7 +136,7 @@ review_pending_candidates() {
   while IFS= read -r candidate_id; do
     [[ -n "$candidate_id" ]] || continue
     local detail
-    detail="$(run_cli --show "$candidate_id")"
+    detail="$(run_cli --show "$candidate_id" --wrap-width 72)"
     local decision
     if [[ "$DRY_RUN" == "1" ]]; then
       printf '[DRY-RUN] would review candidate: %s\n%s\n' "$candidate_id" "$detail"
@@ -146,8 +146,8 @@ review_pending_candidates() {
       --radiolist \
       --title="온톨로지 후보 검토" \
       --text="$detail" \
-      --width=820 \
-      --height=520 \
+      --width=760 \
+      --height=560 \
       --column="선택" \
       --column="decision" \
       --column="처리" \

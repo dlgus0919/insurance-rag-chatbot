@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from src.graph.normalizer import normalize_name
 from src.ontology.candidate_display import build_display_metadata, unique_strings
 from src.ontology.candidate_reviewer import build_codex_dev_review, has_target_overlap
+from src.ontology.hold_feedback import held_alias_blocklist, held_review_hints
 from src.ontology.policy import CandidateExtractionPolicy, OntologyReviewPolicy, load_candidate_extraction_policy, load_review_policy
 from src.ontology.registry import BASE_ONTOLOGY_MANIFEST
 from src.ontology.review_store import OntologyCandidate, utc_now_iso
@@ -152,12 +153,16 @@ def extract_reinforcement_candidates(
     candidate_type: str | None = None,
     extraction_policy: CandidateExtractionPolicy | None = None,
     review_policy: OntologyReviewPolicy | None = None,
+    previous_review_candidates: list[OntologyCandidate] | None = None,
 ) -> CandidateExtractionResult:
     policy = extraction_policy or load_candidate_extraction_policy()
     dev_review_policy = review_policy or load_review_policy()
     reinforcement_type = candidate_type or policy.default_reinforcement_type
     run_id = extraction_run_id or f"ontology-candidate-extract-{utc_now_iso()}"
     existing_terms = _normalized_existing_terms(concepts)
+    prior_candidates = previous_review_candidates or []
+    blocked_aliases_by_concept = held_alias_blocklist(prior_candidates)
+    hold_hints_by_concept = held_review_hints(prior_candidates)
     grouped_terms: dict[str, list[str]] = {}
     grouped_evidence: dict[str, list[dict[str, Any]]] = {}
     warnings: list[str] = []
@@ -196,6 +201,7 @@ def extract_reinforcement_candidates(
             term
             for term in unique_strings(raw_terms, limit=8)
             if has_target_overlap(term, list(concept.all_terms))
+            and normalize_name(term) not in blocked_aliases_by_concept.get(concept_id, set())
         ]
         evidence = _dedupe_evidence(grouped_evidence.get(concept_id, []), limit=3)
         if not terms or not evidence:
@@ -227,6 +233,9 @@ def extract_reinforcement_candidates(
                 "policy_version": policy.version,
             },
         }
+        prior_hold_feedback = hold_hints_by_concept.get(concept.concept_id, [])
+        if prior_hold_feedback:
+            properties["extraction"]["prior_hold_feedback"] = prior_hold_feedback[:5]
         candidates.append(
             OntologyCandidate(
                 candidate_id=_candidate_id(concept.concept_id, terms),

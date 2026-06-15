@@ -8,6 +8,7 @@ from src.ontology.candidate_extractor import (
     load_manifest_concepts,
     load_processed_chunks,
 )
+from src.ontology.review_store import OntologyCandidate
 
 
 def write_manifest(path: Path) -> None:
@@ -64,3 +65,70 @@ def test_extract_reinforcement_candidates_from_processed_chunks(tmp_path: Path) 
     assert candidate.properties["extraction"]["policy_version"] == "2026-06-10"
     assert candidate.risk_flags == ["dev_auto_approval"]
     assert any("교통 사고" in item or "교통상해" in item for item in candidate.candidate_aliases)
+
+
+def test_extract_reinforcement_candidates_uses_prior_hold_hints(tmp_path: Path) -> None:
+    manifest = tmp_path / "concepts.json"
+    chunks = tmp_path / "chunks.jsonl"
+    write_manifest(manifest)
+    write_chunks(chunks)
+
+    previous = [
+        OntologyCandidate(
+            candidate_id="old-cand",
+            concept_id="cond.traffic_injury",
+            canonical_name="교통사고 상해",
+            candidate_aliases=["교통상해"],
+            status="held",
+            properties={
+                "review_feedback": {
+                    "hold_reason_codes": ["evidence_mismatch"],
+                    "reason_labels": ["원문 근거 연결 부적절"],
+                    "note": "근거가 다른 문맥입니다.",
+                }
+            },
+        )
+    ]
+
+    result = extract_reinforcement_candidates(
+        concepts=load_manifest_concepts(manifest),
+        chunks=load_processed_chunks([chunks]),
+        candidate_limit=5,
+        previous_review_candidates=previous,
+    )
+
+    feedback = result.candidates[0].properties["extraction"]["prior_hold_feedback"]
+    assert feedback[0]["candidate_id"] == "old-cand"
+    assert feedback[0]["hold_reason_codes"] == ["evidence_mismatch"]
+
+
+def test_extract_reinforcement_candidates_blocks_aliases_from_alias_hold_feedback(tmp_path: Path) -> None:
+    manifest = tmp_path / "concepts.json"
+    chunks = tmp_path / "chunks.jsonl"
+    write_manifest(manifest)
+    write_chunks(chunks)
+
+    previous = [
+        OntologyCandidate(
+            candidate_id="old-cand",
+            concept_id="cond.traffic_injury",
+            canonical_name="교통사고 상해",
+            candidate_aliases=["교통상해", "교통 사고"],
+            status="held",
+            properties={
+                "review_feedback": {
+                    "hold_reason_codes": ["alias_mismatch"],
+                    "reason_labels": ["승인 대상 표현 부적절"],
+                }
+            },
+        )
+    ]
+
+    result = extract_reinforcement_candidates(
+        concepts=load_manifest_concepts(manifest),
+        chunks=load_processed_chunks([chunks]),
+        candidate_limit=5,
+        previous_review_candidates=previous,
+    )
+
+    assert result.candidates == []

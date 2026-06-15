@@ -11,6 +11,10 @@ test('formats local provider model labels consistently', () => {
     formatSelectedModelLabel('ollama:llama-3.3-70b-instruct-q4-k-m'),
     'Ollama · llama-3.3-70b-instruct-q4-k-m',
   );
+  assert.equal(
+    formatSelectedModelLabel('sglang:qwen3-next-80b-a3b-instruct-fp8'),
+    'SGLang · Qwen3 Next 80B Instruct',
+  );
   assert.equal(formatSelectedModelLabel('sglang:gpt-oss-20b'), 'SGLang · GPT-OSS 20B');
 });
 

@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "description": "Clause/table detail lookup processing policy. This file stores row parsing and matching criteria only, not product-specific answer values.",
+  "number_pattern": "\\d+\\s*[~∼-]\\s*\\d+\\s*(?:만원|원|%|회|년|세)|\\d+(?:,\\d{3})*(?:\\.\\d+)?\\s*(?:%|만원|원|회|년|세)",
+  "article_pattern": "제\\s*\\d+\\s*조|[<＜]\\s*표\\s*\\d+\\s*[>＞]|표\\s*\\d+",
+  "row_boundary_pattern": "(?=(?:[-•]\\s*)?(?:3대\\s*비급여|3대비급여|비급여|급여|상해|질병)\\s*[\\(（])|(?=(?:[-•]\\s*)?(?:입원|통원|외래|처방조제)\\s*(?:치료|의료비|비|1회))",
+  "row_split_after_pattern": "((?:%|만원|원|큰 금액|공제|보상|제출해야 합니다|확인원))\\s+",
+  "prefix_pattern": "(?:3대\\s*비급여|3대비급여|비급여|급여|상해|질병)\\s*[\\(（]",
+  "context_reset_terms": ["입원", "통원", "외래", "처방조제"],
+  "facet_groups": [
+    ["3대비급여", "비급여", "급여"],
+    ["상해", "질병"],
+    ["입원", "통원", "외래", "처방조제"],
+    ["1회", "자기부담금", "자기부담", "공제금액", "공제", "보상비율", "보상", "지급한도", "필요서류", "청구서류", "진단확정"]
+  ],
+  "required_facet_groups": [
+    ["입원", "통원", "외래", "처방조제"],
+    ["1회"]
+  ],
+  "category_context_terms": {
+    "diagnosis": ["진단확정", "정의 및 진단확정", "병력", "신경학적 검진", "CT", "MRI", "의사"],
+    "documents": ["보험금의 청구", "청구서", "사고증명서", "진단서", "신분증", "구비서류", "제출서류"],
+    "deductible": ["자기부담금", "자기부담", "공제금액", "공제", "보장대상의료비", "보험금 등의 지급한도", "지급한도", "대물", "대인"]
+  },
+  "coverage_conflicts": [
+    {
+      "when_question_has_any": ["3대비급여"],
+      "reject_row_has": ["급여"],
+      "unless_row_has_any": ["3대비급여"]
+    },
+    {
+      "when_question_has_any": ["비급여", "3대비급여"],
+      "reject_row_has": ["급여"],
+      "unless_row_has_any": ["비급여"]
+    },
+    {
+      "when_question_has_any": ["급여"],
+      "unless_question_has_any": ["비급여", "3대비급여"],
+      "reject_row_has": ["비급여"]
+    }
+  ],
+  "scoring": {
+    "facet": 3,
+    "category_keyword": 2,
+    "number": 3,
+    "article": 1,
+    "source_label": 4,
+    "min_score": 5
+  }
+}

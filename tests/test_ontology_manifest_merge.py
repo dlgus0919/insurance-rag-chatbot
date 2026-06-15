@@ -110,3 +110,98 @@ def test_merge_approved_candidates_rejects_alias_conflict(tmp_path: Path) -> Non
             base_manifest_path=base_path,
             output_path=tmp_path / "concepts.active.json",
         )
+
+
+def test_merge_allows_existing_base_alias_conflict_as_warning(tmp_path: Path) -> None:
+    base_path = tmp_path / "concepts.json"
+    active_path = tmp_path / "concepts.active.json"
+    payload = {
+        "schema_version": "1.0",
+        "version": "base-test",
+        "concepts": [
+            {
+                "concept_id": "cond.one",
+                "canonical_name": "첫 조건",
+                "aliases": ["공통 별칭"],
+            },
+            {
+                "concept_id": "cond.two",
+                "canonical_name": "둘째 조건",
+                "aliases": ["공통 별칭"],
+            },
+        ],
+    }
+    base_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    candidate = OntologyCandidate(
+        candidate_id="reinforce",
+        concept_id="cond.one",
+        canonical_name="첫 조건",
+        candidate_aliases=["새 표현"],
+        properties={"candidate_type": "alias_or_expansion", "target_concept_id": "cond.one"},
+        status=APPROVED,
+    )
+
+    result = merge_approved_candidates([candidate], base_manifest_path=base_path, output_path=active_path)
+
+    assert result.merged_candidate_count == 1
+    assert result.warnings == ["base manifest existing alias conflict: 공통 별칭 maps to both cond.one and cond.two"]
+
+
+def test_merge_rejects_duplicate_candidate_alias_across_concepts(tmp_path: Path) -> None:
+    base_path = tmp_path / "concepts.json"
+    active_path = tmp_path / "concepts.active.json"
+    payload = {
+        "schema_version": "1.0",
+        "version": "base-test",
+        "concepts": [
+            {
+                "concept_id": "cov.one",
+                "canonical_name": "첫 보장",
+                "planner": {"coverage_topics": ["첫 보장"]},
+            },
+            {
+                "concept_id": "cov.two",
+                "canonical_name": "둘째 보장",
+                "planner": {"coverage_topics": ["둘째 보장"]},
+            },
+        ],
+    }
+    base_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    candidates = [
+        OntologyCandidate(
+            candidate_id="cand-one",
+            concept_id="cov.one",
+            canonical_name="첫 보장",
+            candidate_aliases=["비급여 주사제"],
+            properties={"candidate_type": "alias_or_expansion", "target_concept_id": "cov.one"},
+            status=APPROVED,
+        ),
+        OntologyCandidate(
+            candidate_id="cand-two",
+            concept_id="cov.two",
+            canonical_name="둘째 보장",
+            candidate_aliases=["비급여 주사제"],
+            properties={"candidate_type": "alias_or_expansion", "target_concept_id": "cov.two"},
+            status=APPROVED,
+        ),
+    ]
+
+    with pytest.raises(ValueError, match="candidate_alias quality conflict"):
+        merge_approved_candidates(candidates, base_manifest_path=base_path, output_path=active_path)
+
+
+def test_merge_rejects_sentence_fragment_candidate_alias(tmp_path: Path) -> None:
+    base_path = tmp_path / "concepts.json"
+    active_path = tmp_path / "concepts.active.json"
+    write_base_manifest(base_path)
+    candidate = OntologyCandidate(
+        candidate_id="fragment",
+        concept_id="cond.base",
+        canonical_name="기존 조건",
+        candidate_aliases=["질병의 치료 목적에 해당되어"],
+        properties={"candidate_type": "alias_or_expansion", "target_concept_id": "cond.base"},
+        status=APPROVED,
+    )
+
+    with pytest.raises(ValueError, match="sentence-like evidence text"):
+        merge_approved_candidates([candidate], base_manifest_path=base_path, output_path=active_path)

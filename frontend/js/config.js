@@ -52,6 +52,8 @@ export const STORAGE_KEYS = {
   SELECTED_LLM_MODEL: 'selected_llm_model',
   SELECTED_LLM_MODEL_SOURCE: 'selected_llm_model_source',
   QWEN_REASONING_MODE: 'qwen_reasoning_mode',
+  AUTO_RAG_PARAMS: 'auto_rag_params',
+  ADAPTIVE_K: 'adaptive_k',
   SESSIONS: 'chat_sessions',
   THEME: 'app_theme',
   PREFERENCES: 'app_preferences',

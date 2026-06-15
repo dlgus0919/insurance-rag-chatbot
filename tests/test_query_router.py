@@ -12,8 +12,10 @@ def test_quick_code_question_reuses_quickcode_strategy() -> None:
     route = resolve_query_route("식도조루술 수가 코드와 점수를 알려줘")
 
     assert route.route == "quickcode"
+    assert route.route_reason == "procedure_code_intent"
     assert route.filters["include_summary"] is True
     assert route.filters["include_coverage"] is False
+    assert route.filters["_auto_routed"] is True
 
 
 def test_quick_code_with_coverage_reuses_combined_quickcode_strategy() -> None:
@@ -35,7 +37,9 @@ def test_coverage_question_reuses_formal_strategy_without_forcing_product_scope(
 
     assert route.route == "formal"
     assert route.formal_mode == "coverage_judgment"
+    assert route.route_reason == "structured_coverage_cue"
     assert route.filters["search_type"] == "보상가능 여부 판정"
+    assert route.filters["_auto_routed"] is True
     assert "product_category" not in route.filters
     assert route.coverage_topics == ["질병급여"]
 
@@ -45,6 +49,7 @@ def test_clause_question_reuses_formal_clause_strategy() -> None:
 
     assert route.route == "formal"
     assert route.formal_mode == "clause_lookup"
+    assert route.route_reason == "clause_lookup_intent"
     assert route.article_number == "12"
     assert route.include_appendix is True
     assert route.filters["search_type"] == "약관 조문 검색"

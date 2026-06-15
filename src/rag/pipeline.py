@@ -5,7 +5,8 @@ from __future__ import annotations
 import json
 import time
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -13,12 +14,14 @@ from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.ontology.registry import get_default_ontology_registry
 from src.parser.chunker import Chunk
+from src.rag.auto_params import AutoRagParams, apply_adaptive_k_to_hits
+from src.rag.clause_detail_rows import ClauseDetailRowRecord, ClauseDetailRowStore
 from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context, detect_retrieval_conflicts
 from src.rag.search_intent import SearchIntentPlan, classify_search_intent, extract_code_terms
 from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
-from src.retrieval.reranker import build_reranker
+from src.retrieval.reranker import RerankResult, build_reranker
 try:
     from src.graph.retriever import GraphRetriever
     from src.graph.context import build_graph_context
@@ -94,10 +97,53 @@ _CLAUSE_DETAIL_QUERY_CUES = (
     "자기부담금",
     "자기부담",
 )
-_CLAUSE_DETAIL_CONTEXT_TERMS = {
+_FALLBACK_CLAUSE_DETAIL_CONTEXT_TERMS = {
     "diagnosis": ("진단확정", "정의 및 진단확정", "병력", "신경학적 검진", "CT", "MRI", "의사"),
     "documents": ("보험금의 청구", "청구서", "사고증명서", "진단서", "신분증", "구비서류", "제출서류"),
-    "deductible": ("자기부담금", "자기부담", "보험금 등의 지급한도", "지급한도", "대물", "대인"),
+    "deductible": (
+        "자기부담금",
+        "자기부담",
+        "공제금액",
+        "공제",
+        "보장대상의료비",
+        "보험금 등의 지급한도",
+        "지급한도",
+        "대물",
+        "대인",
+    ),
+}
+_CLAUSE_DETAIL_NUMBER_PATTERN = re.compile(
+    r"\d+\s*[~∼-]\s*\d+\s*(?:만원|원|%|회|년|세)|"
+    r"\d+(?:,\d{3})*(?:\.\d+)?\s*(?:%|만원|원|회|년|세)"
+)
+_CLAUSE_DETAIL_ARTICLE_PATTERN = re.compile(r"제\s*\d+\s*조|[<＜]\s*표\s*\d+\s*[>＞]|표\s*\d+")
+_CLAUSE_DETAIL_ROW_BOUNDARY_PATTERN = re.compile(
+    r"(?=(?:[-•]\s*)?(?:3대\s*비급여|3대비급여|비급여|급여|상해|질병)\s*[\(（])|"
+    r"(?=(?:[-•]\s*)?(?:입원|통원|외래|처방조제)\s*(?:치료|의료비|비|1회))"
+)
+_CLAUSE_DETAIL_ROW_SPLIT_AFTER_PATTERN = re.compile(
+    r"((?:%|만원|원|큰 금액|공제|보상|제출해야 합니다|확인원))\s+"
+)
+_CLAUSE_DETAIL_PREFIX_PATTERN = re.compile(r"(?:3대\s*비급여|3대비급여|비급여|급여|상해|질병)\s*[\(（]")
+_CLAUSE_DETAIL_CONTEXT_RESET_TERMS = ("입원", "통원", "외래", "처방조제")
+_CLAUSE_DETAIL_FACET_GROUPS = (
+    ("3대비급여", "비급여", "급여"),
+    ("상해", "질병"),
+    ("입원", "통원", "외래", "처방조제"),
+    ("1회", "자기부담금", "자기부담", "공제금액", "공제", "보상비율", "보상", "지급한도", "필요서류", "청구서류", "진단확정"),
+)
+_CLAUSE_DETAIL_REQUIRED_FACET_GROUPS = (
+    ("입원", "통원", "외래", "처방조제"),
+    ("1회",),
+)
+_CLAUSE_DETAIL_FALLBACK_SCORING = {
+    "facet": 3,
+    "category_keyword": 2,
+    "number": 3,
+    "article": 1,
+    "source_label": 4,
+    "table_row": 5,
+    "min_score": 5,
 }
 _HIRA_CHUNKS_PATH = Path("data/processed/chunks.jsonl")
 _HIRA_TERM_ALIASES: dict[str, tuple[str, ...]] = {
@@ -107,6 +153,79 @@ _HIRA_TERM_ALIASES: dict[str, tuple[str, ...]] = {
 _HIRA_LOOKUP_TRIGGERS = ("수가", "수가코드", "심평원", "점수", "코드")
 _HIRA_TERM_PATTERN = re.compile(r"[가-힣A-Za-z0-9·∙/()_-]{1,24}(?:이식수술|이식술|수술|절제술|폐쇄술|치료|검사)")
 _HIRA_CHUNK_CACHE: list[dict] | None = None
+
+
+@lru_cache(maxsize=4)
+def _load_clause_detail_policy(path_value: str) -> dict[str, Any]:
+    """Load clause detail row matching policy from JSON."""
+
+    if not path_value:
+        return {}
+    policy_path = Path(path_value)
+    if not policy_path.exists():
+        return {}
+    try:
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _clause_detail_policy() -> dict[str, Any]:
+    return _load_clause_detail_policy(str(config.CLAUSE_DETAIL_POLICY_PATH))
+
+
+def _clause_detail_pattern(name: str, fallback: re.Pattern[str]) -> re.Pattern[str]:
+    raw = _clause_detail_policy().get(name)
+    if not isinstance(raw, str) or not raw:
+        return fallback
+    try:
+        return re.compile(raw)
+    except re.error:
+        return fallback
+
+
+def _clause_detail_policy_groups(name: str, fallback: tuple[tuple[str, ...], ...]) -> tuple[tuple[str, ...], ...]:
+    raw = _clause_detail_policy().get(name)
+    if not isinstance(raw, list):
+        return fallback
+    groups: list[tuple[str, ...]] = []
+    for group in raw:
+        if not isinstance(group, list):
+            continue
+        terms = tuple(str(term).strip() for term in group if str(term).strip())
+        if terms:
+            groups.append(terms)
+    return tuple(groups) or fallback
+
+
+def _clause_detail_policy_terms(name: str, fallback: tuple[str, ...]) -> tuple[str, ...]:
+    raw = _clause_detail_policy().get(name)
+    if not isinstance(raw, list):
+        return fallback
+    terms = tuple(str(term).strip() for term in raw if str(term).strip())
+    return terms or fallback
+
+
+def _clause_detail_context_terms(category: str) -> tuple[str, ...]:
+    raw = _clause_detail_policy().get("category_context_terms")
+    if isinstance(raw, dict):
+        terms = raw.get(category)
+        if isinstance(terms, list):
+            normalized = tuple(str(term).strip() for term in terms if str(term).strip())
+            if normalized:
+                return normalized
+    return _FALLBACK_CLAUSE_DETAIL_CONTEXT_TERMS.get(category, ())
+
+
+def _clause_detail_score_weight(name: str) -> int:
+    raw = _clause_detail_policy().get("scoring")
+    if isinstance(raw, dict):
+        try:
+            return int(raw.get(name, _CLAUSE_DETAIL_FALLBACK_SCORING[name]))
+        except (KeyError, TypeError, ValueError):
+            return int(_CLAUSE_DETAIL_FALLBACK_SCORING.get(name, 0))
+    return int(_CLAUSE_DETAIL_FALLBACK_SCORING.get(name, 0))
 
 
 def _load_hira_chunks() -> list[dict]:
@@ -222,6 +341,7 @@ class StageHit:
     page_start: int | None
     page_end: int | None
     text_preview: str
+    rank: int | None = None
 
 
 @dataclass
@@ -235,6 +355,8 @@ class DebugInfo:
     search_intent: SearchIntentPlan | None = None
     retrieval_execution: "RetrievalExecutionInfo | None" = None
     graph_result: Any = None
+    reranker_scores: list[StageHit] = field(default_factory=list)
+    auto_cutoff: Any = None
 
 
 @dataclass
@@ -279,6 +401,27 @@ class RagAnswer:
     debug: DebugInfo | None = None
 
 
+@dataclass(frozen=True)
+class ClauseDetailEvidenceRow:
+    """질문과 매칭된 조항·표 세부 근거 후보."""
+
+    score: int
+    text: str
+    numbers: list[str]
+    doc_short: str
+    page_start: int | None
+    page_end: int | None
+    chunk_id: str
+    section: str
+    article: str = ""
+    table_label: str = ""
+    parent_heading: str = ""
+    row_label: str = ""
+    value_text: str = ""
+    source_kind: str = "text"
+    source_metadata: dict[str, Any] = field(default_factory=dict)
+
+
 def _hit_to_chunk(hit: Hit) -> Chunk:
     metadata = dict(hit.metadata)
     metadata.setdefault("char_count", len(hit.document))
@@ -298,6 +441,23 @@ def _hits_to_stage(hits: list[Hit]) -> list[StageHit]:
             text_preview=hit.document[:100],
         )
         for hit in hits
+    ]
+
+
+def _rerank_results_to_stage(results: list[RerankResult]) -> list[StageHit]:
+    """Reranker 점수 목록을 관리자 진단용 StageHit 목록으로 변환한다."""
+
+    return [
+        StageHit(
+            chunk_id=result.hit.id,
+            doc_short=result.hit.metadata.get("doc_short", ""),
+            score=round(float(result.score), 4),
+            page_start=result.hit.metadata.get("page_start"),
+            page_end=result.hit.metadata.get("page_end"),
+            text_preview=result.hit.document[:100],
+            rank=result.rank,
+        )
+        for result in results
     ]
 
 
@@ -581,6 +741,677 @@ def _split_evidence_lines(text: str) -> list[str]:
     return lines
 
 
+def _split_clause_detail_after_pattern(line: str, pattern: re.Pattern[str]) -> list[str]:
+    parts = pattern.split(line)
+    if len(parts) <= 1:
+        return [line]
+    if pattern.groups <= 0:
+        return [part.strip(" \t-•*") for part in parts if part.strip(" \t-•*")]
+
+    candidates: list[str] = []
+    buffer = ""
+    for index, part in enumerate(parts):
+        if not part:
+            continue
+        buffer += part
+        if index % 2 == 1:
+            candidate = buffer.strip(" \t-•*")
+            if candidate:
+                candidates.append(candidate)
+            buffer = ""
+    tail = buffer.strip(" \t-•*")
+    if tail:
+        candidates.append(tail)
+    return candidates or [line]
+
+
+def _extract_clause_detail_numbers(text: str) -> list[str]:
+    """근거 문장에 실제로 존재하는 수치 표현만 순서대로 반환한다."""
+
+    numbers: list[str] = []
+    number_pattern = _clause_detail_pattern("number_pattern", _CLAUSE_DETAIL_NUMBER_PATTERN)
+    for match in number_pattern.finditer(text or ""):
+        value = re.sub(r"\s+", "", match.group(0))
+        if value not in numbers:
+            numbers.append(value)
+    return numbers
+
+
+def _clause_detail_question_facets(question: str) -> list[str]:
+    """조항 세부 질문에서 row 매칭에 쓸 일반 facet을 추출한다."""
+
+    compact = _compact_text(question)
+    facet_groups = _clause_detail_policy_groups("facet_groups", _CLAUSE_DETAIL_FACET_GROUPS)
+    facets: list[str] = []
+    for group in facet_groups:
+        for term in group:
+            if term in compact and term not in facets:
+                facets.append(term)
+    article_pattern = _clause_detail_pattern("article_pattern", _CLAUSE_DETAIL_ARTICLE_PATTERN)
+    for match in article_pattern.findall(question):
+        normalized = _compact_text(match)
+        if normalized and normalized not in facets:
+            facets.append(normalized)
+    return facets
+
+
+def _clause_detail_required_facet_groups(question_facets: list[str]) -> list[tuple[str, ...]]:
+    groups: list[tuple[str, ...]] = []
+    for group in _clause_detail_policy_groups("required_facet_groups", _CLAUSE_DETAIL_REQUIRED_FACET_GROUPS):
+        if any(facet in question_facets for facet in group):
+            groups.append(group)
+    return groups
+
+
+def _clause_detail_contains_facet(compact_row: str, facet: str) -> bool:
+    if facet == "급여":
+        return "급여" in compact_row and "비급여" not in compact_row
+    if facet == "비급여":
+        return "비급여" in compact_row
+    if facet == "3대비급여":
+        return "3대비급여" in compact_row or "비급여(3대)" in compact_row
+    return facet in compact_row
+
+
+def _clause_detail_row_matches_required_groups(
+    compact_row: str,
+    question_facets: list[str],
+    groups: list[tuple[str, ...]],
+) -> bool:
+    for group in groups:
+        required = [facet for facet in group if facet in question_facets]
+        if required and not any(_clause_detail_contains_facet(compact_row, facet) for facet in required):
+            return False
+    return True
+
+
+def _clause_detail_has_coverage_conflict(compact_row: str, question_facets: list[str]) -> bool:
+    conflict_rules = _clause_detail_policy().get("coverage_conflicts")
+    if isinstance(conflict_rules, list):
+        for rule in conflict_rules:
+            if not isinstance(rule, dict):
+                continue
+            question_any = tuple(str(term) for term in rule.get("when_question_has_any", []) if str(term))
+            if question_any and not any(term in question_facets for term in question_any):
+                continue
+            question_unless = tuple(str(term) for term in rule.get("unless_question_has_any", []) if str(term))
+            if question_unless and any(term in question_facets for term in question_unless):
+                continue
+            reject_terms = tuple(str(term) for term in rule.get("reject_row_has", []) if str(term))
+            if not reject_terms or not any(_clause_detail_contains_facet(compact_row, term) for term in reject_terms):
+                continue
+            row_unless = tuple(str(term) for term in rule.get("unless_row_has_any", []) if str(term))
+            if row_unless and any(_clause_detail_contains_facet(compact_row, term) for term in row_unless):
+                continue
+            return True
+        return False
+    wants_three_nonpay = "3대비급여" in question_facets
+    wants_nonpay = wants_three_nonpay or "비급여" in question_facets
+    wants_pay = "급여" in question_facets and not wants_nonpay
+    row_has_three_nonpay = _clause_detail_contains_facet(compact_row, "3대비급여")
+    row_has_nonpay = _clause_detail_contains_facet(compact_row, "비급여")
+    row_has_pay = _clause_detail_contains_facet(compact_row, "급여")
+    if wants_three_nonpay and row_has_pay and not row_has_three_nonpay:
+        return True
+    if wants_nonpay and row_has_pay and not row_has_nonpay:
+        return True
+    if wants_pay and row_has_nonpay:
+        return True
+    return False
+
+
+def _split_clause_detail_row_candidates(text: str) -> list[str]:
+    """OCR/table-like paragraph를 조항·표 row 후보 단위로 나눈다."""
+
+    normalized = re.sub(r"[ \t]+", " ", text or "")
+    row_boundary_pattern = _clause_detail_pattern("row_boundary_pattern", _CLAUSE_DETAIL_ROW_BOUNDARY_PATTERN)
+    row_split_after_pattern = _clause_detail_pattern("row_split_after_pattern", _CLAUSE_DETAIL_ROW_SPLIT_AFTER_PATTERN)
+    prefix_pattern = _clause_detail_pattern("prefix_pattern", _CLAUSE_DETAIL_PREFIX_PATTERN)
+    reset_terms = _clause_detail_policy_terms("context_reset_terms", _CLAUSE_DETAIL_CONTEXT_RESET_TERMS)
+    normalized = row_boundary_pattern.sub("\n", normalized)
+    candidates: list[str] = []
+    context_prefix = ""
+    for line in _split_evidence_lines(normalized):
+        if len(line) > 340:
+            parts = _split_clause_detail_after_pattern(line, row_split_after_pattern)
+        else:
+            parts = [line]
+        for part in parts:
+            if not part:
+                continue
+            compact_part = _compact_text(part)
+            is_row_prefix = (
+                len(part) <= 80
+                and not _extract_clause_detail_numbers(part)
+                and bool(prefix_pattern.search(part))
+            )
+            candidate = f"{context_prefix} {part}".strip() if context_prefix and not is_row_prefix else part
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+            if is_row_prefix:
+                context_prefix = part
+            elif _extract_clause_detail_numbers(part) or any(term in compact_part for term in reset_terms):
+                context_prefix = ""
+    return candidates
+
+
+def _score_clause_detail_row(
+    row_text: str,
+    *,
+    question_facets: list[str],
+    category_keywords: tuple[str, ...],
+) -> int:
+    compact_row = _compact_text(row_text)
+    score = 0
+    for facet in question_facets:
+        if facet and _clause_detail_contains_facet(compact_row, facet):
+            score += _clause_detail_score_weight("facet")
+    for keyword in category_keywords:
+        compact_keyword = _compact_text(keyword)
+        if compact_keyword and compact_keyword in compact_row:
+            score += _clause_detail_score_weight("category_keyword")
+    if _extract_clause_detail_numbers(row_text):
+        score += _clause_detail_score_weight("number")
+    article_pattern = _clause_detail_pattern("article_pattern", _CLAUSE_DETAIL_ARTICLE_PATTERN)
+    if article_pattern.search(row_text):
+        score += _clause_detail_score_weight("article")
+    return score
+
+
+def _extract_clause_detail_source_label(text: str) -> str:
+    labels: list[str] = []
+    article_pattern = _clause_detail_pattern("article_pattern", _CLAUSE_DETAIL_ARTICLE_PATTERN)
+    for match in article_pattern.findall(text or ""):
+        label = re.sub(r"\s+", "", match)
+        table_match = re.search(r"표(\d+)", label)
+        if table_match:
+            label = f"<표{table_match.group(1)}>"
+        if label and label not in labels:
+            labels.append(label)
+        if len(labels) >= 2:
+            break
+    return " ".join(labels)
+
+
+def _load_clause_detail_table_json(chunk: Chunk) -> dict[str, Any] | None:
+    raw_table = chunk.metadata.get("table_json")
+    if raw_table in (None, "", "{}"):
+        return None
+    if isinstance(raw_table, dict):
+        table_json = raw_table
+    else:
+        try:
+            table_json = json.loads(str(raw_table))
+        except (TypeError, json.JSONDecodeError):
+            return None
+    if not isinstance(table_json, dict):
+        return None
+    headers = table_json.get("headers")
+    rows = table_json.get("rows")
+    if not isinstance(headers, list) or not isinstance(rows, list) or not rows:
+        return None
+    return table_json
+
+
+def _normalize_clause_detail_cell(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _clause_detail_row_items(row: Any, headers: list[Any]) -> list[tuple[str, str]]:
+    normalized_headers = [_normalize_clause_detail_cell(header) for header in headers]
+    if isinstance(row, dict):
+        items: list[tuple[str, str]] = []
+        for header in normalized_headers:
+            if not header:
+                continue
+            value = _normalize_clause_detail_cell(row.get(header, ""))
+            if value:
+                items.append((header, value))
+        for key, raw_value in row.items():
+            header = _normalize_clause_detail_cell(key)
+            value = _normalize_clause_detail_cell(raw_value)
+            if header and value and (header, value) not in items:
+                items.append((header, value))
+        return items
+    if isinstance(row, list):
+        items = []
+        for index, raw_value in enumerate(row):
+            value = _normalize_clause_detail_cell(raw_value)
+            if not value:
+                continue
+            header = normalized_headers[index] if index < len(normalized_headers) else f"col_{index + 1}"
+            items.append((header, value))
+        return items
+    return []
+
+
+def _clause_detail_row_label(items: list[tuple[str, str]]) -> str:
+    label_header_terms = ("구분", "항목", "분류", "보장", "담보", "종목", "치료", "서류")
+    for header, value in items:
+        if any(term in header for term in label_header_terms):
+            return value[:120]
+    for _header, value in items:
+        if not _extract_clause_detail_numbers(value):
+            return value[:120]
+    return items[0][1][:120] if items else ""
+
+
+def _clause_detail_source_parts(source_label: str) -> tuple[str, str]:
+    article_labels: list[str] = []
+    table_labels: list[str] = []
+    for label in source_label.split():
+        if label.startswith("제") and label not in article_labels:
+            article_labels.append(label)
+        if "표" in label and label not in table_labels:
+            table_labels.append(label)
+    return " ".join(article_labels), " ".join(table_labels)
+
+
+def _extract_clause_detail_table_rows(
+    question: str,
+    chunks: list[Chunk],
+    categories: list[str],
+    *,
+    limit: int = 5,
+) -> list[ClauseDetailEvidenceRow]:
+    """OCR table_json에서 조항 세부 근거 row를 source-grounded evidence로 변환한다."""
+
+    question_facets = _clause_detail_question_facets(question)
+    required_facet_groups = _clause_detail_required_facet_groups(question_facets)
+    category_keywords = tuple(
+        dict.fromkeys(
+            keyword
+            for category in categories
+            for keyword in _clause_detail_context_terms(category)
+        )
+    )
+    rows: list[ClauseDetailEvidenceRow] = []
+    seen: set[tuple[str, str, str]] = set()
+    for chunk in chunks:
+        table_json = _load_clause_detail_table_json(chunk)
+        if table_json is None:
+            continue
+        headers = table_json.get("headers") or []
+        table_rows = table_json.get("rows") or []
+        doc_short = str(chunk.metadata.get("doc_short") or "문서")
+        page_start = chunk.metadata.get("page_start")
+        page_end = chunk.metadata.get("page_end", page_start)
+        metadata_section = str(
+            chunk.metadata.get("section")
+            or chunk.metadata.get("chapter")
+            or chunk.metadata.get("part")
+            or ""
+        )
+        parent_heading = metadata_section
+        source_label = _extract_clause_detail_source_label(f"{metadata_section} {chunk.text}")
+        article, table_label = _clause_detail_source_parts(source_label)
+        if source_label and source_label not in metadata_section:
+            section = f"{source_label}, {metadata_section}" if metadata_section else source_label
+        else:
+            section = metadata_section
+        for row_index, raw_row in enumerate(table_rows):
+            items = _clause_detail_row_items(raw_row, headers)
+            if not items:
+                continue
+            row_label = _clause_detail_row_label(items)
+            value_text = " | ".join(f"{header}: {value}" for header, value in items)
+            match_text = " ".join(part for part in (source_label, parent_heading, row_label, value_text) if part)
+            compact_row = _compact_text(match_text)
+            numbers = _extract_clause_detail_numbers(value_text)
+            if "deductible" in categories and not numbers:
+                continue
+            if not _clause_detail_row_matches_required_groups(
+                compact_row,
+                question_facets,
+                required_facet_groups,
+            ):
+                continue
+            if _clause_detail_has_coverage_conflict(compact_row, question_facets):
+                continue
+            score = _score_clause_detail_row(
+                match_text,
+                question_facets=question_facets,
+                category_keywords=category_keywords,
+            )
+            score += _clause_detail_score_weight("table_row")
+            if source_label:
+                score += _clause_detail_score_weight("source_label")
+            if score < _clause_detail_score_weight("min_score"):
+                continue
+            if question_facets and not any(
+                _clause_detail_contains_facet(compact_row, facet) for facet in question_facets
+            ):
+                continue
+            key = (doc_short, str(page_start), _compact_text(value_text)[:220])
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(
+                ClauseDetailEvidenceRow(
+                    score=score,
+                    text=value_text[:420] + ("..." if len(value_text) > 420 else ""),
+                    numbers=numbers,
+                    doc_short=doc_short,
+                    page_start=page_start,
+                    page_end=page_end,
+                    chunk_id=chunk.id,
+                    section=section,
+                    article=article,
+                    table_label=table_label,
+                    parent_heading=parent_heading,
+                    row_label=row_label,
+                    value_text=value_text,
+                    source_kind="table_json",
+                    source_metadata={
+                        "source": "table_json",
+                        "headers": [_normalize_clause_detail_cell(header) for header in headers],
+                        "row_index": row_index,
+                        "table_confidence": table_json.get("avg_confidence"),
+                        "source_file": chunk.metadata.get("source_file"),
+                    },
+                )
+            )
+    rows.sort(key=lambda row: (-row.score, row.doc_short, row.page_start or 0, row.chunk_id))
+    return rows[:limit]
+
+
+def _extract_clause_detail_text_rows(
+    question: str,
+    chunks: list[Chunk],
+    categories: list[str],
+    *,
+    limit: int = 5,
+) -> list[ClauseDetailEvidenceRow]:
+    """table_json이 없거나 부족한 경우 쓰는 text 기반 fallback row 추출."""
+
+    question_facets = _clause_detail_question_facets(question)
+    required_facet_groups = _clause_detail_required_facet_groups(question_facets)
+    category_keywords = tuple(
+        dict.fromkeys(
+            keyword
+            for category in categories
+            for keyword in _clause_detail_context_terms(category)
+        )
+    )
+    rows: list[ClauseDetailEvidenceRow] = []
+    seen: set[tuple[str, str, str]] = set()
+    for chunk in chunks:
+        doc_short = str(chunk.metadata.get("doc_short") or "문서")
+        page_start = chunk.metadata.get("page_start")
+        page_end = chunk.metadata.get("page_end", page_start)
+        metadata_section = str(
+            chunk.metadata.get("section")
+            or chunk.metadata.get("chapter")
+            or chunk.metadata.get("part")
+            or ""
+        )
+        source_label = _extract_clause_detail_source_label(chunk.text)
+        article, table_label = _clause_detail_source_parts(source_label)
+        if source_label and source_label not in metadata_section:
+            section = f"{source_label}, {metadata_section}" if metadata_section else source_label
+        else:
+            section = metadata_section
+        for row_text in _split_clause_detail_row_candidates(chunk.text):
+            compact_row = _compact_text(row_text)
+            numbers = _extract_clause_detail_numbers(row_text)
+            if "deductible" in categories and not numbers:
+                continue
+            if not _clause_detail_row_matches_required_groups(
+                compact_row,
+                question_facets,
+                required_facet_groups,
+            ):
+                continue
+            if _clause_detail_has_coverage_conflict(compact_row, question_facets):
+                continue
+            score = _score_clause_detail_row(
+                row_text,
+                question_facets=question_facets,
+                category_keywords=category_keywords,
+            )
+            if source_label:
+                score += _clause_detail_score_weight("source_label")
+            if score < _clause_detail_score_weight("min_score"):
+                continue
+            if question_facets and not any(
+                _clause_detail_contains_facet(compact_row, facet) for facet in question_facets
+            ):
+                continue
+            key = (doc_short, str(page_start), _compact_text(row_text)[:220])
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(
+                ClauseDetailEvidenceRow(
+                    score=score,
+                    text=row_text[:360] + ("..." if len(row_text) > 360 else ""),
+                    numbers=numbers,
+                    doc_short=doc_short,
+                    page_start=page_start,
+                    page_end=page_end,
+                    chunk_id=chunk.id,
+                    section=section,
+                    article=article,
+                    table_label=table_label,
+                    parent_heading=metadata_section,
+                    row_label=row_text[:120],
+                    value_text=row_text,
+                    source_kind="text",
+                    source_metadata={
+                        "source": "chunk_text",
+                        "source_file": chunk.metadata.get("source_file"),
+                    },
+                )
+            )
+    rows.sort(key=lambda row: (-row.score, row.doc_short, row.page_start or 0, row.chunk_id))
+    return rows[:limit]
+
+
+def _extract_clause_detail_manifest_rows(
+    question: str,
+    records: list[ClauseDetailRowRecord] | tuple[ClauseDetailRowRecord, ...],
+    categories: list[str],
+    *,
+    doc_filter: list[str] | None = None,
+    limit: int = 5,
+) -> list[ClauseDetailEvidenceRow]:
+    """Persisted clause_detail_rows manifest에서 질문과 맞는 source row를 찾는다."""
+
+    if not records:
+        return []
+    allowed_docs = set(doc_filter or [])
+    question_facets = _clause_detail_question_facets(question)
+    required_facet_groups = _clause_detail_required_facet_groups(question_facets)
+    category_keywords = tuple(
+        dict.fromkeys(
+            keyword
+            for category in categories
+            for keyword in _clause_detail_context_terms(category)
+        )
+    )
+    rows: list[ClauseDetailEvidenceRow] = []
+    seen: set[tuple[str, str, str]] = set()
+    for record in records:
+        if allowed_docs and record.doc_short not in allowed_docs:
+            continue
+        match_text = record.search_text
+        compact_row = _compact_text(match_text)
+        numbers = list(record.numbers)
+        if "deductible" in categories and not numbers:
+            continue
+        if not _clause_detail_row_matches_required_groups(
+            compact_row,
+            question_facets,
+            required_facet_groups,
+        ):
+            continue
+        if _clause_detail_has_coverage_conflict(compact_row, question_facets):
+            continue
+        score = _score_clause_detail_row(
+            match_text,
+            question_facets=question_facets,
+            category_keywords=category_keywords,
+        )
+        score += _clause_detail_score_weight("table_row")
+        if record.article or record.table_label:
+            score += _clause_detail_score_weight("source_label")
+        if score < _clause_detail_score_weight("min_score"):
+            continue
+        if question_facets and not any(
+            _clause_detail_contains_facet(compact_row, facet) for facet in question_facets
+        ):
+            continue
+        key = (record.doc_short, str(record.page), _compact_text(record.value_text)[:220])
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            ClauseDetailEvidenceRow(
+                score=score,
+                text=record.value_text[:420] + ("..." if len(record.value_text) > 420 else ""),
+                numbers=numbers,
+                doc_short=record.doc_short,
+                page_start=record.page,
+                page_end=record.page,
+                chunk_id=record.chunk_id,
+                section=", ".join(part for part in (record.article, record.table_label, record.parent_heading) if part),
+                article=record.article,
+                table_label=record.table_label,
+                parent_heading=record.parent_heading,
+                row_label=record.row_label,
+                value_text=record.value_text,
+                source_kind="clause_detail_rows",
+                source_metadata={
+                    **record.source_metadata,
+                    "source": "clause_detail_rows",
+                    "row_id": record.row_id,
+                },
+            )
+        )
+    rows.sort(key=lambda row: (-row.score, row.doc_short, row.page_start or 0, row.chunk_id))
+    return rows[:limit]
+
+
+def _extract_clause_detail_evidence_rows(
+    question: str,
+    chunks: list[Chunk],
+    categories: list[str],
+    *,
+    manifest_rows: list[ClauseDetailEvidenceRow] | None = None,
+    limit: int = 5,
+) -> list[ClauseDetailEvidenceRow]:
+    """검색된 chunk에서 질문 facet과 숫자를 함께 가진 source-grounded row를 찾는다."""
+
+    if manifest_rows and len(manifest_rows) >= limit:
+        return manifest_rows[:limit]
+    table_rows = _extract_clause_detail_table_rows(question, chunks, categories, limit=limit)
+    combined = list(manifest_rows or [])
+    seen = {
+        (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
+        for row in combined
+    }
+    for row in table_rows:
+        key = (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
+        if key in seen:
+            continue
+        combined.append(row)
+        seen.add(key)
+        if len(combined) >= limit:
+            break
+    if len(combined) >= limit:
+        combined.sort(
+            key=lambda row: (
+                0 if row.source_kind in {"clause_detail_rows", "table_json"} else 1,
+                -row.score,
+                row.doc_short,
+                row.page_start or 0,
+                row.chunk_id,
+            )
+        )
+        return combined[:limit]
+
+    text_rows = _extract_clause_detail_text_rows(question, chunks, categories, limit=limit)
+    for row in text_rows:
+        key = (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
+        if key in seen:
+            continue
+        combined.append(row)
+        seen.add(key)
+        if len(combined) >= limit:
+            break
+    combined.sort(
+        key=lambda row: (
+            0 if row.source_kind in {"clause_detail_rows", "table_json"} else 1,
+            -row.score,
+            row.doc_short,
+            row.page_start or 0,
+            row.chunk_id,
+        )
+    )
+    return combined[:limit]
+
+
+def _format_clause_detail_source(row: ClauseDetailEvidenceRow) -> str:
+    page = "p.?"
+    if row.page_start is not None and row.page_end is not None and row.page_end != row.page_start:
+        page = f"p.{row.page_start}-{row.page_end}"
+    elif row.page_start is not None:
+        page = f"p.{row.page_start}"
+    section = f", {row.section}" if row.section else ""
+    row_ref = ""
+    if row.source_kind == "table_json":
+        row_index = row.source_metadata.get("row_index")
+        row_ref = f", source=table_json row={row_index}" if row_index is not None else ", source=table_json"
+    elif row.source_kind == "clause_detail_rows":
+        row_id = row.source_metadata.get("row_id")
+        row_ref = f", source=clause_detail_rows row_id={row_id}" if row_id else ", source=clause_detail_rows"
+    elif row.source_kind:
+        row_ref = f", source={row.source_kind}"
+    return f"{row.doc_short}{section}, {page}, chunk={row.chunk_id}{row_ref}"
+
+
+def _build_clause_detail_evidence_answer(
+    question: str,
+    rows: list[ClauseDetailEvidenceRow],
+    categories: list[str],
+) -> str | None:
+    if not rows:
+        return None
+
+    category_labels = {
+        "diagnosis": "진단확정 기준",
+        "documents": "청구 필요 서류",
+        "deductible": "자기부담금/공제 기준",
+    }
+    label = " / ".join(category_labels.get(category, "조항 세부 기준") for category in categories)
+    displayed_rows = rows[:3]
+    all_numbers: list[str] = []
+    for row in displayed_rows:
+        for number in row.numbers:
+            if number not in all_numbers:
+                all_numbers.append(number)
+
+    lines = [
+        "제공된 문서 근거에서 확인되는 범위로 답변드립니다.",
+        "",
+        f"{label}: 아래 원문 근거 행을 우선 확인했습니다.",
+    ]
+    for index, row in enumerate(displayed_rows, start=1):
+        lines.append(f"- 근거 {index}: {row.text}")
+        if row.numbers:
+            lines.append(f"  - 확인된 수치: {', '.join(row.numbers)}")
+        lines.append(f"  - 출처: {_format_clause_detail_source(row)}")
+    if all_numbers:
+        lines.extend(["", f"확인된 수치 요약: {', '.join(all_numbers)}"])
+    lines.extend(
+        [
+            "",
+            "위 내용은 선택된 원문 근거 기준의 구조화 요약입니다. 실제 지급 여부는 가입 담보와 사고/진단 사실 관계를 함께 확인해야 합니다.",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _extract_clause_evidence_lines(text: str, keywords: tuple[str, ...], limit: int = 6) -> list[str]:
     compact_keywords = tuple(_compact_text(keyword) for keyword in keywords if keyword)
     selected: list[str] = []
@@ -600,12 +1431,26 @@ def _extract_clause_evidence_lines(text: str, keywords: tuple[str, ...], limit: 
     return selected
 
 
-def _deterministic_clause_detail_answer(question: str, chunks: list[Chunk]) -> str | None:
+def _deterministic_clause_detail_answer(
+    question: str,
+    chunks: list[Chunk],
+    manifest_rows: list[ClauseDetailEvidenceRow] | None = None,
+) -> str | None:
     """조항 세부 근거가 검색된 경우 LLM의 '컨텍스트 없음' 오판을 방지한다."""
 
     categories = _clause_detail_categories(question)
     if not categories:
         return None
+
+    source_rows = _extract_clause_detail_evidence_rows(
+        question,
+        chunks,
+        categories,
+        manifest_rows=manifest_rows,
+    )
+    source_grounded_answer = _build_clause_detail_evidence_answer(question, source_rows, categories)
+    if source_grounded_answer:
+        return source_grounded_answer
 
     category_labels = {
         "diagnosis": "진단확정 기준",
@@ -615,7 +1460,7 @@ def _deterministic_clause_detail_answer(question: str, chunks: list[Chunk]) -> s
     evidence_lines: list[str] = []
     seen_evidence_line_keys: set[str] = set()
     for category in categories:
-        keywords = _CLAUSE_DETAIL_CONTEXT_TERMS.get(category, ())
+        keywords = _clause_detail_context_terms(category)
         category_hits: list[tuple[int, Chunk, list[str]]] = []
         for chunk in chunks:
             lines = _extract_clause_evidence_lines(chunk.text, keywords)
@@ -649,7 +1494,12 @@ def _deterministic_clause_detail_answer(question: str, chunks: list[Chunk]) -> s
     )
 
 
-def _deterministic_guard_answer(question: str, chunks: list[Chunk], graph_context: str | None = None) -> str | None:
+def _deterministic_guard_answer(
+    question: str,
+    chunks: list[Chunk],
+    graph_context: str | None = None,
+    clause_detail_rows: list[ClauseDetailEvidenceRow] | None = None,
+) -> str | None:
     if "QZ999" in question.upper():
         return (
             "요청하신 QZ999 코드에 대한 로봇수술 관련 근거는 현재 문서에서 확인되지 않습니다. "
@@ -657,7 +1507,11 @@ def _deterministic_guard_answer(question: str, chunks: list[Chunk], graph_contex
             "[출처: 구조화 안전 검증]"
         )
 
-    clause_detail_answer = _deterministic_clause_detail_answer(question, chunks)
+    clause_detail_answer = _deterministic_clause_detail_answer(
+        question,
+        chunks,
+        manifest_rows=clause_detail_rows,
+    )
     if clause_detail_answer:
         return clause_detail_answer
 
@@ -754,7 +1608,7 @@ def _expand_clause_detail_query(question: str, retrieval_query: str) -> str:
 
     terms: list[str] = []
     for category in _clause_detail_categories(question):
-        terms.extend(_CLAUSE_DETAIL_CONTEXT_TERMS.get(category, ()))
+        terms.extend(_clause_detail_context_terms(category))
     if not terms:
         return retrieval_query
     suffix = " ".join(term for term in dict.fromkeys(terms) if term not in retrieval_query)
@@ -919,7 +1773,7 @@ def _score_clause_detail_hit(hit: Hit, question: str) -> int:
         if term in compact_doc:
             score += 3
     for category in _clause_detail_categories(question):
-        for term in _CLAUSE_DETAIL_CONTEXT_TERMS.get(category, ()):
+        for term in _clause_detail_context_terms(category):
             if re.sub(r"\s+", "", term) in compact_doc:
                 score += 2
     if "특별약관" in compact_doc or "담보" in compact_doc:
@@ -943,6 +1797,7 @@ class RagPipeline:
         reranker=None,
         reranker_enabled: bool | None = None,
         table_store: TableStore | None = None,
+        clause_detail_row_store: ClauseDetailRowStore | None = None,
         pair_mapping_store=None,
         v1_chunk_lookup: dict[str, dict] | None = None,
     ):
@@ -960,6 +1815,7 @@ class RagPipeline:
             enabled = config.RERANKER_ENABLED if reranker_enabled is None else reranker_enabled
             self.reranker = build_reranker(enabled=enabled)
         self._table_store = table_store if table_store is not None else TableStore()
+        self._clause_detail_row_store = clause_detail_row_store
         self._pair_mapping_store = pair_mapping_store
         self._v1_chunk_lookup = v1_chunk_lookup or {}
         self.graph_enabled = config.GRAPH_ENABLED and _GRAPH_IMPORT_OK
@@ -972,6 +1828,20 @@ class RagPipeline:
         else:
             self.graph_retriever = None
 
+    def _clause_detail_manifest_rows(
+        self,
+        question: str,
+        categories: list[str],
+        doc_filter: list[str] | None,
+    ) -> list[ClauseDetailEvidenceRow]:
+        if self._clause_detail_row_store is None or not self._clause_detail_row_store.is_available():
+            return []
+        return _extract_clause_detail_manifest_rows(
+            question,
+            self._clause_detail_row_store.records(),
+            categories,
+            doc_filter=doc_filter,
+        )
 
     def _build_paired_ocr_context(self, chunks: list[Chunk], max_pairs: int = 3) -> str | None:
         """v2 canonical 청크에 대응하는 v1 원문을 보조 컨텍스트로 구성한다."""
@@ -1245,8 +2115,17 @@ class RagPipeline:
                 limit=max(rrf_top_k, final_top_k),
             )
 
+        reranker_results: list[RerankResult] = []
         if self.reranker is not None:
-            final_hits = self.reranker.rerank(question, fused_hits, top_k=final_top_k)
+            if hasattr(self.reranker, "rerank_with_scores"):
+                reranker_results = self.reranker.rerank_with_scores(question, fused_hits, top_k=final_top_k)
+                final_hits = [result.hit for result in reranker_results]
+            else:
+                final_hits = self.reranker.rerank(question, fused_hits, top_k=final_top_k)
+                reranker_results = [
+                    RerankResult(hit=hit, score=float(hit.score), rank=index + 1)
+                    for index, hit in enumerate(final_hits)
+                ]
         else:
             final_hits = fused_hits[:final_top_k]
 
@@ -1264,6 +2143,7 @@ class RagPipeline:
                 final_hits=_hits_to_stage(final_hits),
                 search_intent=search_intent,
                 retrieval_execution=execution_info,
+                reranker_scores=_rerank_results_to_stage(reranker_results),
             )
             if return_debug
             else None
@@ -1277,6 +2157,7 @@ class RagPipeline:
         top_k: int | None = None,
         doc_filter: list[str] | None = None,
         return_debug: bool = False,
+        auto_params: AutoRagParams | None = None,
     ) -> RagAnswer:
         """질문에 대해 답변과 사용한 청크를 반환한다."""
 
@@ -1345,13 +2226,39 @@ class RagPipeline:
             return_debug=return_debug,
             graph_hits=graph_hits,
         )
+        if auto_params is not None:
+            preserve_ids = {hit.id for hit in graph_hits}
+            fused_hits, cutoff = apply_adaptive_k_to_hits(
+                fused_hits,
+                list(getattr(debug, "reranker_scores", []) or []),
+                auto_params,
+                score_floor=config.AUTO_RAG_RERANK_SCORE_FLOOR,
+                drop_abs=config.AUTO_RAG_RERANK_DROP_ABS,
+                drop_ratio=config.AUTO_RAG_RERANK_DROP_RATIO,
+                preserve_chunk_ids=preserve_ids,
+                preserve_doc_shorts=set(doc_filter or []),
+            )
+            if debug is not None:
+                selected_ids = {hit.id for hit in fused_hits}
+                debug.final_hits = [hit for hit in debug.final_hits if hit.chunk_id in selected_ids]
+                debug.auto_cutoff = cutoff
         if debug is not None and graph_result is not None:
             debug.graph_result = graph_result
 
         chunks = [_hit_to_chunk(hit) for hit in fused_hits]
+        clause_detail_rows = self._clause_detail_manifest_rows(
+            question,
+            _clause_detail_categories(question),
+            doc_filter,
+        )
 
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
-        deterministic_answer = _deterministic_guard_answer(question, chunks, graph_context=graph_context)
+        deterministic_answer = _deterministic_guard_answer(
+            question,
+            chunks,
+            graph_context=graph_context,
+            clause_detail_rows=clause_detail_rows,
+        )
         if deterministic_answer:
             answer_text = append_retrieved_source_citations(deterministic_answer, chunks)
             answer_text = append_evidence_validation_warning(answer_text, question, chunks)

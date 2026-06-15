@@ -45,6 +45,100 @@ def test_format_candidate_for_practitioner_uses_display_metadata() -> None:
     text = format_candidate_for_practitioner(candidate)
 
     assert "후보 개념: 교통사고 상해" in text
+    assert "승인 대상 표현(후보 alias)" in text
     assert "교통 관련 상해 표현" in text
     assert "교통상해" in text
     assert "[약관 / 12쪽]" in text
+
+
+def test_format_candidate_for_practitioner_includes_guide_quality_warning_and_wraps() -> None:
+    candidate = OntologyCandidate(
+        candidate_id="cand-a",
+        concept_id="cov.a",
+        canonical_name="A 개념",
+        candidate_aliases=["즉 비급여 도수치료"],
+        source_evidence=[{"doc_short": "약관", "excerpt": "즉 비급여 도수치료"}],
+    )
+    other = OntologyCandidate(
+        candidate_id="cand-b",
+        concept_id="cov.b",
+        canonical_name="B 개념",
+        candidate_aliases=["즉 비급여 도수치료"],
+    )
+
+    text = format_candidate_for_practitioner(candidate, all_candidates=[candidate, other], wrap_width=46)
+
+    assert "승인 대상 표현(후보 alias)" in text
+    assert "실무자 판단 기준" in text
+    assert "품질 경고" in text
+    assert "보류 사유 분류 기준" in text
+    assert "문장 조각" in text
+    assert "여러 후보 concept" in text
+    assert "보류한 뒤 target concept" in text
+    assert max(len(line) for line in text.splitlines()) <= 46
+
+
+def test_format_candidate_hides_reference_similar_expressions_when_same_as_aliases() -> None:
+    candidate = OntologyCandidate(
+        candidate_id="cand",
+        concept_id="cov.rider",
+        canonical_name="특약",
+        candidate_aliases=["특약 등", "운전자한정특약"],
+        properties={
+            "display": {
+                "similar_expressions": ["운전자한정특약", "특약 등"],
+                "example_questions": [],
+            }
+        },
+    )
+
+    text = format_candidate_for_practitioner(candidate)
+
+    assert "승인 대상 표현(후보 alias)" in text
+    assert "참고 유사 표현" not in text
+
+
+def test_format_candidate_shows_reference_similar_expressions_when_different_from_aliases() -> None:
+    candidate = OntologyCandidate(
+        candidate_id="cand",
+        concept_id="cov.rider",
+        canonical_name="특약",
+        candidate_aliases=["특약 등"],
+        properties={
+            "display": {
+                "similar_expressions": ["운전자한정특약"],
+                "example_questions": [],
+            }
+        },
+    )
+
+    text = format_candidate_for_practitioner(candidate)
+
+    assert "참고 유사 표현(자동 표시용)" in text
+    assert "운전자한정특약" in text
+
+
+def test_format_candidate_shows_prior_hold_feedback() -> None:
+    candidate = OntologyCandidate(
+        candidate_id="cand",
+        concept_id="cov.rider",
+        canonical_name="특약",
+        candidate_aliases=["특약 등"],
+        properties={
+            "extraction": {
+                "prior_hold_feedback": [
+                    {
+                        "candidate_id": "old-cand",
+                        "hold_reason_labels": ["원문 근거 연결 부적절"],
+                        "note": "근거가 자동차보험 문맥입니다.",
+                    }
+                ]
+            }
+        },
+    )
+
+    text = format_candidate_for_practitioner(candidate)
+
+    assert "이전 보류 피드백" in text
+    assert "old-cand" in text
+    assert "근거가 자동차보험 문맥입니다" in text

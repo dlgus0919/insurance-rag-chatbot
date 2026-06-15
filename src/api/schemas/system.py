@@ -13,6 +13,9 @@ class ModelInfo(BaseModel):
     provider: str
     id: str
     label: str
+    status: str | None = None
+    use_case: str | None = None
+    optional: bool = False
 
 
 class ModelListResponse(BaseModel):

@@ -56,7 +56,7 @@ class ClaimCalculationRequest(BaseModel):
     model: str | None = None
     provider: Literal["openai", "local", "vllm", "sglang"] | None = None
     top_k: int = Field(default=6, ge=1, le=20)
-    index_mode: Literal["default", "v2_only", "v1_v2_combined"] = "default"
+    index_mode: Literal["default", "v2_only", "v1_v2_combined"] = "v2_only"
 
 
 class ClaimCalculationResponse(BaseModel):

@@ -48,15 +48,34 @@
 
   <main class="chat-main">
     <div class="settings-bar">
-      <div class="s-group">
+      <label class="auto-param-toggle" id="auto-param-toggle-wrap" title="질의 유형에 따라 Top-K와 온도를 자동으로 조절합니다.">
+        <input type="checkbox" id="auto-param-toggle" checked>
+        <span class="auto-param-toggle-text">검색/답변 자동 설정</span>
+      </label>
+      <div class="adaptive-k-wrap" id="adaptive-k-wrap">
+        <button class="settings-cog-btn" type="button" data-action="toggle-adaptive-k-settings" aria-label="검색 자동 설정 세부 옵션" title="검색 자동 설정 세부 옵션">
+          <svg width="15" height="15" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 15.5A3.5 3.5 0 1 0 12 8a3.5 3.5 0 0 0 0 7.5Z" stroke="currentColor" stroke-width="1.7"/>
+            <path d="M19.4 15a1.8 1.8 0 0 0 .36 1.98l.05.05a2 2 0 0 1-2.83 2.83l-.05-.05A1.8 1.8 0 0 0 15 19.45a1.8 1.8 0 0 0-1.09 1.65V21a2 2 0 0 1-4 0v-.08A1.8 1.8 0 0 0 8.85 19.3a1.8 1.8 0 0 0-1.98.36l-.05.05a2 2 0 1 1-2.83-2.83l.05-.05A1.8 1.8 0 0 0 4.4 15a1.8 1.8 0 0 0-1.65-1.09H2.7a2 2 0 0 1 0-4h.08A1.8 1.8 0 0 0 4.4 8.85a1.8 1.8 0 0 0-.36-1.98L4 6.82A2 2 0 1 1 6.82 4l.05.05a1.8 1.8 0 0 0 1.98.36A1.8 1.8 0 0 0 9.94 2.8V2.7a2 2 0 0 1 4 0v.08a1.8 1.8 0 0 0 1.09 1.65 1.8 1.8 0 0 0 1.98-.36l.05-.05a2 2 0 1 1 2.83 2.83l-.05.05a1.8 1.8 0 0 0-.36 1.98 1.8 1.8 0 0 0 1.65 1.09h.08a2 2 0 0 1 0 4h-.08A1.8 1.8 0 0 0 19.4 15Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+        <div class="adaptive-k-menu" id="adaptive-k-menu">
+          <label class="adaptive-k-toggle" id="adaptive-k-toggle-wrap" title="Reranker 점수 급락 지점을 기준으로 최종 검색 청크 수를 줄입니다.">
+            <input type="checkbox" id="adaptive-k-toggle" checked>
+            <span>Semi-adaptive K</span>
+          </label>
+        </div>
+      </div>
+      <div class="s-divider" id="manual-param-divider"></div>
+      <div class="s-group manual-param-control">
         <span class="s-label">Top-K</span>
         <div class="range-wrap">
           <input type="range" class="range-input" min="1" max="20" value="10" data-range-format="integer">
           <span class="range-val">10</span>
         </div>
       </div>
-      <div class="s-divider"></div>
-      <div class="s-group">
+      <div class="s-divider manual-param-control"></div>
+      <div class="s-group manual-param-control">
         <span class="s-label">온도</span>
         <div class="range-wrap">
           <input type="range" class="range-input" min="0" max="10" value="2" data-range-format="decimal">
@@ -98,10 +117,6 @@
 
     <div class="ocr-index-bar">
       <span class="mode-label">OCR 인덱스</span>
-      <label class="radio-pill">
-        <input type="radio" name="ocr-index" value="default">
-        <span>기본 운영 인덱스</span>
-      </label>
       <label class="radio-pill">
         <input type="radio" name="ocr-index" value="v2_only" checked>
         <span>보정본 OCR만</span>

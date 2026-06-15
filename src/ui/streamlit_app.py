@@ -64,7 +64,7 @@ from src.utils.logger import (
 )
 
 _DOC_SHORT_TO_FILENAME: dict[str, str] = {source.doc_short: source.path.name for source in config.PDF_SOURCES}
-SEARCH_MODES = ["일반 질의", "보험금 계산"]
+SEARCH_MODES = ["일반 질의", "고급 검색", "보험금 계산"]
 INSURANCE_SUB_MODES = {
     "보상가능 여부 판정": "coverage_judgment",
     "약관 조문 검색": "clause_lookup",
@@ -1627,6 +1627,53 @@ def main() -> None:
 
     if search_mode == "보험금 계산":
         render_claim_calculation_panel(model, get_pipeline_or_show_error, session_id)
+        return
+
+    if search_mode == "고급 검색":
+        quick_tab, formal_tab = st.tabs(["퀵 코드 검색", "약관 정형 검색"])
+        with quick_tab:
+            with st.form("quick_code_form", clear_on_submit=False):
+                procedure_name = st.text_input("시술/수술명", placeholder="예: 식도조루술")
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    opt_summary = st.checkbox("분류·점수·산정지침 요약", value=True)
+                with col_b:
+                    opt_coverage = st.checkbox("실손 약관 기준 보상가능 여부", value=False)
+                submitted = st.form_submit_button("코드 검색", type="primary", use_container_width=True)
+
+            if submitted:
+                if not procedure_name.strip():
+                    st.warning("시술/수술명을 입력해주세요.")
+                    return
+                active_pipeline = get_pipeline_or_show_error()
+                if active_pipeline is None:
+                    return
+                _handle_quick_code(
+                    procedure_name.strip(),
+                    opt_summary,
+                    opt_coverage,
+                    active_pipeline,
+                    model,
+                    temperature,
+                    session_id,
+                    None,
+                )
+                return
+
+        with formal_tab:
+            form, submitted = render_insurance_form_panel()
+            if submitted:
+                if form is None or not form.primary:
+                    st.warning("검색어를 입력해주세요.")
+                    return
+                if form.mode == "coverage_judgment" and not form.coverage_topics:
+                    st.warning("보장종목을 1개 이상 선택해주세요.")
+                    return
+                active_pipeline = get_pipeline_or_show_error()
+                if active_pipeline is None:
+                    return
+                _handle_insurance_form(form, active_pipeline, model, session_id, None)
+                return
         return
 
     question = st.chat_input("질문을 입력하세요")
