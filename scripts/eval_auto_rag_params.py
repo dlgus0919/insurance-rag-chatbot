@@ -219,6 +219,7 @@ def _resolve_run_params(case: dict[str, Any], run: EvalRun, args) -> tuple[int, 
         config_mode="apply",
         max_temperature=args.max_auto_temperature,
         top_k_strategy=run.top_k_strategy,
+        profile_policy_path=args.profile_policy,
         temperature_policy_path=args.temperature_policy,
     )
     temperature = float(run.temperature) if run.temperature is not None else decision.effective_temperature
@@ -445,6 +446,7 @@ def parse_args(argv: list[str] | None = None):
     parser.add_argument("--baseline-top-k", type=int, default=10)
     parser.add_argument("--baseline-temperature", type=float, default=0.2)
     parser.add_argument("--max-auto-temperature", type=float, default=config.AUTO_RAG_MAX_TEMPERATURE)
+    parser.add_argument("--profile-policy", type=Path, default=config.AUTO_RAG_PROFILE_POLICY_PATH)
     parser.add_argument("--temperature-policy", type=Path, default=config.AUTO_RAG_TEMPERATURE_POLICY_PATH)
     parser.add_argument(
         "--index-mode",

@@ -29,7 +29,7 @@ from src.api.rag_service import (
 )
 from src.api.schemas.chat import ChatRequest
 from src.auth.users import User
-from src.rag.auto_params import AutoRagParams, resolve_auto_rag_params
+from src.rag.auto_params import TOPK_STRATEGY_RULE, AutoRagParams, resolve_auto_rag_params
 from src.rag.pipeline import DebugInfo
 from src.rag.query_router import resolve_query_route
 
@@ -97,7 +97,12 @@ async def chat_stream(
                 config_mode=config.AUTO_RAG_PARAMS_MODE,
                 allow_manual_override=config.AUTO_RAG_ALLOW_MANUAL_OVERRIDE,
                 max_temperature=config.AUTO_RAG_MAX_TEMPERATURE,
-                top_k_strategy=config.AUTO_RAG_TOPK_STRATEGY,
+                top_k_strategy=(
+                    TOPK_STRATEGY_RULE
+                    if chat_request.adaptive_k is False
+                    else config.AUTO_RAG_TOPK_STRATEGY
+                ),
+                profile_policy_path=config.AUTO_RAG_PROFILE_POLICY_PATH,
                 temperature_policy_path=config.AUTO_RAG_TEMPERATURE_POLICY_PATH,
             )
             effective_top_k = auto_decision.effective_top_k
@@ -206,6 +211,7 @@ async def chat_stream(
                     "requested_top_k": chat_request.top_k,
                     "requested_temperature": chat_request.temperature,
                     "auto_params": auto_decision.to_payload(),
+                    "adaptive_k": chat_request.adaptive_k,
                     "reasoning_mode": chat_request.reasoning_mode,
                     "reasoning_supported": bool(getattr(pipeline.llm, "last_reasoning_supported", False)),
                     "reasoning_filtered": bool(getattr(pipeline.llm, "last_reasoning_filtered", False)),

@@ -119,6 +119,45 @@ def test_auto_params_loads_temperature_policy_file(tmp_path) -> None:
     assert decision.effective_temperature == 0.15
 
 
+def test_auto_params_loads_profile_policy_file(tmp_path) -> None:
+    policy_path = tmp_path / "profiles.json"
+    policy_path.write_text(
+        """
+        {
+          "defaults": {"top_k": 7, "min_top_k": 5, "max_top_k": 9, "temperature": 0.12},
+          "profiles": {
+            "coverage_judgment": {
+              "top_k": 11,
+              "min_top_k": 9,
+              "max_top_k": 13,
+              "temperature": 0.05
+            }
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    decision = resolve_auto_rag_params(
+        question="도수치료 보상돼?",
+        mode="general",
+        filters={},
+        requested_top_k=5,
+        requested_temperature=0.7,
+        auto_params=True,
+        config_mode="apply",
+        profile_policy_path=policy_path,
+        max_temperature=0.2,
+        top_k_strategy=TOPK_STRATEGY_RERANKER_THRESHOLD,
+    )
+
+    assert decision.effective_top_k == 11
+    assert decision.retrieval_top_k == 13
+    assert decision.min_top_k == 9
+    assert decision.max_top_k == 13
+    assert decision.effective_temperature == 0.05
+
+
 def test_select_adaptive_k_uses_first_large_reranker_score_drop() -> None:
     decision = select_adaptive_k(
         [0.95, 0.91, 0.88, 0.48, 0.46],

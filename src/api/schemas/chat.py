@@ -19,6 +19,7 @@ class ChatRequest(BaseModel):
     top_k: int = Field(default=10, ge=1, le=20)
     temperature: float = Field(default=0.2, ge=0.0, le=2.0)
     auto_params: bool | None = None
+    adaptive_k: bool | None = None
     filters: dict = Field(default_factory=dict)
     memo: str | None = None
     index_mode: IndexMode = "v2_only"

@@ -23,7 +23,7 @@ TOPK_STRATEGY_RULE = "rule"
 TOPK_STRATEGY_RERANKER_THRESHOLD = "reranker_threshold"
 SUPPORTED_TOPK_STRATEGIES = {TOPK_STRATEGY_RULE, TOPK_STRATEGY_RERANKER_THRESHOLD}
 
-_TOP_K_BY_INTENT = {
+_FALLBACK_TOP_K_BY_INTENT = {
     "exact_code_lookup": 6,
     "exact_code_compound_lookup": 8,
     "procedure_code_lookup": 6,
@@ -35,7 +35,7 @@ _TOP_K_BY_INTENT = {
     "general_explanation": 8,
 }
 
-_TEMPERATURE_BY_INTENT = {
+_FALLBACK_TEMPERATURE_BY_INTENT = {
     "exact_code_lookup": 0.0,
     "exact_code_compound_lookup": 0.0,
     "procedure_code_lookup": 0.0,
@@ -47,7 +47,7 @@ _TEMPERATURE_BY_INTENT = {
     "general_explanation": 0.2,
 }
 
-_TOP_K_LIMITS_BY_INTENT = {
+_FALLBACK_TOP_K_LIMITS_BY_INTENT = {
     "exact_code_lookup": (4, 8),
     "exact_code_compound_lookup": (6, 10),
     "procedure_code_lookup": (4, 8),
@@ -163,6 +163,7 @@ def resolve_auto_rag_params(
     allow_manual_override: bool = True,
     max_temperature: float = DEFAULT_MAX_TEMPERATURE,
     top_k_strategy: str = TOPK_STRATEGY_RULE,
+    profile_policy_path: Path | str | None = None,
     temperature_policy_path: Path | str | None = None,
 ) -> AutoRagParams:
     """Resolve effective RAG parameters for a chat request.
@@ -180,12 +181,20 @@ def resolve_auto_rag_params(
     doc_filter = _extract_doc_filter(filters)
     search_intent = classify_search_intent(question, doc_filter=doc_filter)
     profile = search_intent.intent
-    suggested_top_k = _clamp_int(_TOP_K_BY_INTENT.get(profile, 8), MIN_TOP_K, MAX_TOP_K)
-    min_top_k, max_top_k = _profile_top_k_limits(profile)
+    profile_policy = load_profile_policy(profile_policy_path)
+    profile_rule = _profile_rule(profile, profile_policy)
+    profile_defaults = profile_policy.get("defaults") if isinstance(profile_policy.get("defaults"), dict) else {}
+    suggested_top_k = _profile_int(
+        profile_rule,
+        "top_k",
+        _profile_int(profile_defaults, "top_k", _FALLBACK_TOP_K_BY_INTENT.get(profile, 8)),
+    )
+    suggested_top_k = _clamp_int(suggested_top_k, MIN_TOP_K, MAX_TOP_K)
+    min_top_k, max_top_k = _profile_top_k_limits(profile, profile_policy)
     normalized_top_k_strategy = normalize_top_k_strategy(top_k_strategy)
     temperature_policy = load_temperature_policy(temperature_policy_path)
     suggested_temperature = min(
-        _clamp_float(_temperature_for_profile(profile, temperature_policy), 0.0, 2.0),
+        _clamp_float(_temperature_for_profile(profile, temperature_policy, profile_policy), 0.0, 2.0),
         safe_max_temperature,
     )
     route_is_general = mode == "general"
@@ -322,6 +331,19 @@ def normalize_top_k_strategy(strategy: str | None) -> str:
 
 
 def load_temperature_policy(path: Path | str | None) -> dict[str, Any]:
+    if not path:
+        return {}
+    policy_path = Path(path)
+    if not policy_path.exists():
+        return {}
+    try:
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def load_profile_policy(path: Path | str | None) -> dict[str, Any]:
     if not path:
         return {}
     policy_path = Path(path)
@@ -511,17 +533,57 @@ def _extract_doc_filter(filters: dict | None) -> list[str] | None:
     return list(dict.fromkeys(values)) or None
 
 
-def _temperature_for_profile(profile: str, policy: dict[str, Any]) -> float:
+def _profile_rule(profile: str, policy: dict[str, Any]) -> dict[str, Any]:
     profiles = policy.get("profiles") if isinstance(policy, dict) else None
+    rule = profiles.get(profile) if isinstance(profiles, dict) else None
+    return rule if isinstance(rule, dict) else {}
+
+
+def _profile_int(rule: dict[str, Any], key: str, fallback: int) -> int:
+    value = rule.get(key) if isinstance(rule, dict) else None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _profile_float(rule: dict[str, Any], key: str, fallback: float) -> float:
+    value = rule.get(key) if isinstance(rule, dict) else None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _temperature_for_profile(
+    profile: str,
+    temperature_policy: dict[str, Any],
+    profile_policy: dict[str, Any],
+) -> float:
+    profiles = temperature_policy.get("profiles") if isinstance(temperature_policy, dict) else None
     if isinstance(profiles, dict) and profile in profiles:
         return float(profiles[profile])
-    if isinstance(policy, dict) and "default" in policy:
-        return float(policy["default"])
-    return _TEMPERATURE_BY_INTENT.get(profile, 0.1)
+    if isinstance(temperature_policy, dict) and "default" in temperature_policy:
+        return float(temperature_policy["default"])
+    rule = _profile_rule(profile, profile_policy)
+    defaults = profile_policy.get("defaults") if isinstance(profile_policy, dict) else None
+    fallback = _FALLBACK_TEMPERATURE_BY_INTENT.get(profile, 0.1)
+    if isinstance(defaults, dict):
+        fallback = _profile_float(defaults, "temperature", fallback)
+    return _profile_float(rule, "temperature", fallback)
 
 
-def _profile_top_k_limits(profile: str) -> tuple[int, int]:
-    return _TOP_K_LIMITS_BY_INTENT.get(profile, (MIN_TOP_K, MAX_TOP_K))
+def _profile_top_k_limits(profile: str, policy: dict[str, Any] | None = None) -> tuple[int, int]:
+    fallback_min, fallback_max = _FALLBACK_TOP_K_LIMITS_BY_INTENT.get(profile, (MIN_TOP_K, MAX_TOP_K))
+    if not isinstance(policy, dict):
+        return fallback_min, fallback_max
+    defaults = policy.get("defaults") if isinstance(policy.get("defaults"), dict) else {}
+    rule = _profile_rule(profile, policy)
+    min_top_k = _profile_int(rule, "min_top_k", _profile_int(defaults, "min_top_k", fallback_min))
+    max_top_k = _profile_int(rule, "max_top_k", _profile_int(defaults, "max_top_k", fallback_max))
+    min_top_k = _clamp_int(min_top_k, MIN_TOP_K, MAX_TOP_K)
+    max_top_k = _clamp_int(max_top_k, min_top_k, MAX_TOP_K)
+    return min_top_k, max_top_k
 
 
 def _clamp_int(value: int | float, minimum: int, maximum: int) -> int:

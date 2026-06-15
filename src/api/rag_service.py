@@ -13,6 +13,7 @@ from src.graph.context import build_graph_context
 from src.llm.factory import build_llm
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.rag.auto_params import AutoRagParams, apply_adaptive_k_to_hits
+from src.rag.clause_detail_rows import ClauseDetailRowStore, resolve_clause_detail_rows_path
 from src.rag.evidence import append_evidence_validation_warning
 from src.rag.pipeline import RagPipeline, _deterministic_guard_answer, _hit_to_chunk
 from src.rag.quick_code import build_quick_code_prompt, retrieve_quick_code_chunks
@@ -113,6 +114,7 @@ def get_rag_pipeline(
         top_k_final=top_k,
         rrf_k=config.RRF_K,
         reranker=reranker,
+        clause_detail_row_store=ClauseDetailRowStore(resolve_clause_detail_rows_path(index_mode)),
     )
 
 

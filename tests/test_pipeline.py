@@ -154,6 +154,51 @@ def test_clause_detail_deductible_answer_uses_source_rows() -> None:
     assert "chunk=test" in answer
 
 
+def test_clause_detail_rows_prefer_table_json_source_rows() -> None:
+    chunk = make_chunk(
+        doc_short="약관",
+        page_start=31,
+        text="제3조(보장종목별 보상내용) <표1> 보장대상의료비 표",
+        table_json=json.dumps(
+            {
+                "headers": ["보장종목", "보상기준", "자기부담금"],
+                "rows": [
+                    {
+                        "보장종목": "급여(상해·질병) 입원치료",
+                        "보상기준": "보장대상의료비의 80%",
+                        "자기부담금": "보장대상의료비의 20%",
+                    },
+                    {
+                        "보장종목": "급여(상해·질병) 통원치료",
+                        "보상기준": "통원 1회당 보상",
+                        "자기부담금": "1~2만원과 보장대상의료비의 20% 중 큰 금액",
+                    },
+                ],
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    rows = _extract_clause_detail_evidence_rows(
+        "급여(상해·질병) 입원치료의 자기부담금 비율은?",
+        [chunk],
+        ["deductible"],
+    )
+    answer = _deterministic_guard_answer("급여(상해·질병) 입원치료의 자기부담금 비율은?", [chunk])
+
+    assert rows
+    assert rows[0].source_kind == "table_json"
+    assert rows[0].doc_short == "약관"
+    assert rows[0].article == "제3조"
+    assert rows[0].table_label == "<표1>"
+    assert rows[0].row_label == "급여(상해·질병) 입원치료"
+    assert rows[0].numbers == ["80%", "20%"]
+    assert rows[0].source_metadata["row_index"] == 0
+    assert answer is not None
+    assert "보장종목: 급여(상해·질병) 입원치료" in answer
+    assert "source=table_json row=0" in answer
+
+
 def test_clause_detail_rows_require_source_numbers() -> None:
     chunk = make_chunk(
         doc_short="약관",

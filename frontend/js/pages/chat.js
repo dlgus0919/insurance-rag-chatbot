@@ -172,6 +172,8 @@ function setupChatDelegatedHandlers() {
 
     if (action === 'toggle-export') {
       toggleExport(event);
+    } else if (action === 'toggle-adaptive-k-settings') {
+      toggleAdaptiveKSettings(event);
     } else if (action === 'send-claim') {
       await sendClaim();
     } else if (action === 'add-claim-line') {
@@ -212,16 +214,33 @@ function setupSettingsHandlers() {
         autoParamToggle.checked ? 'on' : 'off'
       );
       syncAutoParamControls();
+      syncAdaptiveKControls();
     });
   }
   syncAutoParamControls();
+
+  const adaptiveKToggle = document.getElementById('adaptive-k-toggle');
+  if (adaptiveKToggle && !adaptiveKToggle.dataset.adaptiveKBound) {
+    adaptiveKToggle.dataset.adaptiveKBound = 'true';
+    adaptiveKToggle.checked = isAdaptiveKEnabled();
+    adaptiveKToggle.addEventListener('change', () => {
+      localStorage.setItem(
+        STORAGE_KEYS.ADAPTIVE_K,
+        adaptiveKToggle.checked ? 'on' : 'off'
+      );
+      syncAdaptiveKControls();
+    });
+  }
+  syncAdaptiveKControls();
 
   const page = document.getElementById('page-chat');
   if (page && !page.dataset.exportCloseBound) {
     page.dataset.exportCloseBound = 'true';
     page.addEventListener('click', (event) => {
       if (event.target.closest('.export-wrap')) return;
+      if (event.target.closest('.adaptive-k-wrap')) return;
       document.getElementById('exp-menu')?.classList.remove('open');
+      document.getElementById('adaptive-k-wrap')?.classList.remove('open');
     });
   }
 
@@ -710,6 +729,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
       top_k: getTopK(),
       temperature: getTemperature(),
       auto_params: isAutoParamsEnabled(),
+      adaptive_k: isAdaptiveKEnabled(),
       filters,
       index_mode: getIndexMode(),
     };
@@ -1360,6 +1380,10 @@ function isAutoParamsEnabled() {
   return localStorage.getItem(STORAGE_KEYS.AUTO_RAG_PARAMS) !== 'off';
 }
 
+function isAdaptiveKEnabled() {
+  return localStorage.getItem(STORAGE_KEYS.ADAPTIVE_K) !== 'off';
+}
+
 function syncAutoParamControls() {
   const enabled = isAutoParamsEnabled();
   const toggle = document.getElementById('auto-param-toggle');
@@ -1367,4 +1391,19 @@ function syncAutoParamControls() {
   document.querySelectorAll('.manual-param-control, #manual-param-divider').forEach((element) => {
     element.classList.toggle('hidden', enabled);
   });
+}
+
+function syncAdaptiveKControls() {
+  const enabled = isAdaptiveKEnabled();
+  const toggle = document.getElementById('adaptive-k-toggle');
+  const wrap = document.getElementById('adaptive-k-wrap');
+  if (toggle) toggle.checked = enabled;
+  if (wrap) wrap.classList.toggle('disabled', !isAutoParamsEnabled());
+}
+
+function toggleAdaptiveKSettings(event) {
+  event.preventDefault();
+  const wrap = document.getElementById('adaptive-k-wrap');
+  if (!wrap) return;
+  wrap.classList.toggle('open');
 }

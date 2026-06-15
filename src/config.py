@@ -171,7 +171,10 @@ RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
 AUTO_RAG_PARAMS_MODE: str = os.getenv("AUTO_RAG_PARAMS_MODE", "apply").strip().lower()
 AUTO_RAG_ALLOW_MANUAL_OVERRIDE: bool = os.getenv("AUTO_RAG_ALLOW_MANUAL_OVERRIDE", "true").lower() == "true"
 AUTO_RAG_MAX_TEMPERATURE: float = float(os.getenv("AUTO_RAG_MAX_TEMPERATURE", "0.2"))
-AUTO_RAG_TOPK_STRATEGY: str = os.getenv("AUTO_RAG_TOPK_STRATEGY", "rule").strip().lower()
+AUTO_RAG_TOPK_STRATEGY: str = os.getenv("AUTO_RAG_TOPK_STRATEGY", "reranker_threshold").strip().lower()
+AUTO_RAG_PROFILE_POLICY_PATH: Path = Path(
+    os.getenv("AUTO_RAG_PROFILE_POLICY_PATH", str(ROOT_DIR / "config" / "auto_rag_profile_policy.json"))
+)
 AUTO_RAG_TEMPERATURE_POLICY_PATH: Path = Path(
     os.getenv("AUTO_RAG_TEMPERATURE_POLICY_PATH", str(ROOT_DIR / "config" / "auto_rag_temperature_policy.json"))
 )
@@ -183,6 +186,9 @@ AUTO_RAG_RERANK_SCORE_FLOOR: float | None = (
 )
 AUTO_RAG_RERANK_DROP_ABS: float = float(os.getenv("AUTO_RAG_RERANK_DROP_ABS", "0.15"))
 AUTO_RAG_RERANK_DROP_RATIO: float = float(os.getenv("AUTO_RAG_RERANK_DROP_RATIO", "0.30"))
+CLAUSE_DETAIL_POLICY_PATH: Path = Path(
+    os.getenv("CLAUSE_DETAIL_POLICY_PATH", str(ROOT_DIR / "config" / "clause_detail_lookup_policy.json"))
+)
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "exaone3.5:7.8b")
 OLLAMA_NUM_CTX: int = int(os.getenv("OLLAMA_NUM_CTX", "16384"))

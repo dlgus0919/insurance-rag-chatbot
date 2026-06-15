@@ -274,9 +274,10 @@ async def test_chat_stream_applies_auto_params_and_records_requested_values(db_s
     audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
     audit_entry = audit_result.scalar_one()
 
-    assert captured["top_k"] == 10
+    assert captured["top_k"] == 12
     assert captured["index_mode"] == "v2_only"
     assert audit_entry.detail["top_k"] == 10
+    assert audit_entry.detail["retrieval_top_k"] == 12
     assert audit_entry.detail["temperature"] == 0.0
     assert audit_entry.detail["requested_top_k"] == 20
     assert audit_entry.detail["requested_temperature"] == 1.3
@@ -284,7 +285,50 @@ async def test_chat_stream_applies_auto_params_and_records_requested_values(db_s
     assert audit_entry.detail["effective_index_mode"] == "v2_only"
     assert audit_entry.detail["auto_params"]["effective"] is True
     assert audit_entry.detail["auto_params"]["profile"] == "coverage_judgment"
+    assert audit_entry.detail["auto_params"]["top_k_strategy"] == "reranker_threshold"
     assert audit_entry.detail["rag_diagnostics"]["auto_params"]["effective_top_k"] == 10
+
+
+@pytest.mark.anyio
+async def test_chat_stream_can_disable_adaptive_k_separately(db_session, monkeypatch) -> None:
+    captured = {}
+
+    def fake_pipeline(model, top_k, index_mode="v2_only"):
+        captured["model"] = model
+        captured["top_k"] = top_k
+        captured["index_mode"] = index_mode
+        return FakePipeline()
+
+    monkeypatch.setattr(chat.config, "AUTO_RAG_PARAMS_MODE", "apply")
+    monkeypatch.setattr(chat.config, "AUTO_RAG_TOPK_STRATEGY", "reranker_threshold")
+    monkeypatch.setattr(chat, "get_rag_pipeline", fake_pipeline)
+    created = await sessions.create_session(SessionCreateRequest(title="adaptive off"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="도수치료 보상돼?",
+            session_id=created.id,
+            model="gemma3:4b",
+            top_k=20,
+            temperature=1.3,
+            auto_params=True,
+            adaptive_k=False,
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    async for _chunk in response.body_iterator:
+        pass
+
+    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
+    audit_entry = audit_result.scalar_one()
+
+    assert captured["top_k"] == 10
+    assert audit_entry.detail["top_k"] == 10
+    assert audit_entry.detail["retrieval_top_k"] == 10
+    assert audit_entry.detail["adaptive_k"] is False
+    assert audit_entry.detail["auto_params"]["top_k_strategy"] == "rule"
 
 
 @pytest.mark.anyio
