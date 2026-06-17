@@ -278,6 +278,28 @@ def vllm_base_url_for_model(model: str) -> str:
     return VLLM_MODEL_ENDPOINTS.get(model, VLLM_BASE_URL).rstrip("/")
 
 
+TRTLLM_BASE_URL: str = os.getenv("TRTLLM_BASE_URL", "http://127.0.0.1:8355/v1")
+TRTLLM_API_KEY: str = os.getenv("TRTLLM_API_KEY", "EMPTY")
+TRTLLM_DEFAULT_MODEL: str = os.getenv("TRTLLM_DEFAULT_MODEL", "openai/gpt-oss-120b")
+TRTLLM_MAX_TOKENS: int = int(os.getenv("TRTLLM_MAX_TOKENS", "4096"))
+TRTLLM_DEFAULT_CANDIDATES = "openai/gpt-oss-120b"
+TRTLLM_CANDIDATE_MODELS: list[str] = _parse_csv_env("TRTLLM_CANDIDATE_MODELS", TRTLLM_DEFAULT_CANDIDATES)
+TRTLLM_DISABLED_MODELS: set[str] = {
+    model.strip()
+    for model in os.getenv("TRTLLM_DISABLED_MODELS", "").split(",")
+    if model.strip()
+}
+TRTLLM_MODEL_ENDPOINTS: dict[str, str] = _parse_sglang_model_endpoints(os.getenv("TRTLLM_MODEL_ENDPOINTS", ""))
+# TensorRT-LLM 120B must only appear when the endpoint is already alive.
+TRTLLM_STRICT_AVAILABLE_MODELS: bool = os.getenv("TRTLLM_STRICT_AVAILABLE_MODELS", "true").lower() == "true"
+
+
+def trtllm_base_url_for_model(model: str) -> str:
+    """Return the OpenAI-compatible endpoint for a TensorRT-LLM served model."""
+
+    return TRTLLM_MODEL_ENDPOINTS.get(model, TRTLLM_BASE_URL).rstrip("/")
+
+
 OLLAMA_DEFAULT_CANDIDATES = (
     "exaone3.5:7.8b"
 )

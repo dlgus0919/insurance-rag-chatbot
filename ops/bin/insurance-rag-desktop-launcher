@@ -21,7 +21,13 @@ else
 fi
 SGLANG_BASE_URL="${SGLANG_BASE_URL:-http://127.0.0.1:30000/v1}"
 VLLM_BASE_URL="${VLLM_BASE_URL:-http://127.0.0.1:30001/v1}"
+TRTLLM_BASE_URL="${TRTLLM_BASE_URL:-http://127.0.0.1:8355/v1}"
 OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
+# Keep this tag unchanged until it passes a real DGX TensorRT-LLM smoke run.
+TRTLLM_IMAGE="${TRTLLM_IMAGE:-nvcr.io/nvidia/tensorrt-llm/release:spark-single-gpu-dev}"
+TRTLLM_REQUIRE_LOCAL_IMAGE="${TRTLLM_REQUIRE_LOCAL_IMAGE:-true}"
+TRTLLM_GPT_OSS_MODEL="${TRTLLM_GPT_OSS_MODEL:-openai/gpt-oss-120b}"
+TRTLLM_GPT_OSS_MODEL_DIR="${TRTLLM_GPT_OSS_MODEL_DIR:-$AI_OPS_ROOT/llm/models/gpt-oss-120b}"
 LLAMA_GGUF_OLLAMA_MODEL="${LLAMA_GGUF_OLLAMA_MODEL:-llama-3.3-70b-instruct-q4-k-m}"
 LLAMA_GGUF_MODEL_DIR="${LLAMA_GGUF_MODEL_DIR:-$AI_OPS_ROOT/llm/models/$LLAMA_GGUF_OLLAMA_MODEL}"
 LLAMA_GGUF_FILE="${LLAMA_GGUF_FILE:-$LLAMA_GGUF_MODEL_DIR/Llama-3.3-70B-Instruct-Q4_K_M.gguf}"
@@ -115,6 +121,21 @@ model_download_complete() {
   fi
 }
 
+trtllm_model_files_ready() {
+  local path="$1"
+  [[ -d "$path" ]] || return 1
+  [[ -f "$path/config.json" ]] || return 1
+  if [[ ! -f "$path/tokenizer.json" && ! -f "$path/tokenizer.model" ]]; then
+    return 1
+  fi
+  if ! find "$path" -maxdepth 1 \( -name 'model.safetensors' -o -name 'model-*.safetensors' -o -name '*.safetensors.index.json' \) -print -quit | grep -q .; then
+    return 1
+  fi
+  if find "$path" -path '*/.cache/huggingface/download/*' -name '*.incomplete' -print -quit | grep -q .; then
+    return 1
+  fi
+}
+
 sglang_model_ready() {
   local model="$1"
   model_download_complete "$model" || return 1
@@ -134,6 +155,16 @@ vllm_model_ready() {
   [[ -x "$PROJECT_DIR/.venv-vllm/bin/python" ]]
 }
 
+trtllm_model_ready() {
+  local model="$1"
+  [[ "$model" == "$TRTLLM_GPT_OSS_MODEL" || "$model" == "gpt-oss-120b" || "$model" == "/models/gpt-oss-120b" ]] || return 1
+  trtllm_model_files_ready "$TRTLLM_GPT_OSS_MODEL_DIR" || return 1
+  command -v docker >/dev/null 2>&1 || return 1
+  if [[ "$TRTLLM_REQUIRE_LOCAL_IMAGE" == "true" ]]; then
+    docker image inspect "$TRTLLM_IMAGE" >/dev/null 2>&1 || return 1
+  fi
+}
+
 ollama_gguf_model_ready() {
   local model="$1"
   [[ "$model" == "$LLAMA_GGUF_OLLAMA_MODEL" ]] || return 1
@@ -149,13 +180,16 @@ print_status() {
   local sglang_model
   local vllm_model
   local ollama_model
+  local trtllm_model
   sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
   vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
+  trtllm_model="$(detect_openai_compatible_model "$TRTLLM_BASE_URL" "${TRTLLM_API_KEY:-EMPTY}")"
   ollama_model="$(detect_ollama_model)"
 
   printf 'app=%s\n' "$app"
   printf 'sglang=%s\n' "${sglang_model:-}"
   printf 'vllm=%s\n' "${vllm_model:-}"
+  printf 'trtllm=%s\n' "${trtllm_model:-}"
   printf 'ollama=%s\n' "${ollama_model:-}"
 }
 
@@ -163,8 +197,10 @@ print_choices() {
   local sglang_model
   local vllm_model
   local ollama_model
+  local trtllm_model
   sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
   vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
+  trtllm_model="$(detect_openai_compatible_model "$TRTLLM_BASE_URL" "${TRTLLM_API_KEY:-EMPTY}")"
   ollama_model="$(detect_ollama_model)"
 
   if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
@@ -175,13 +211,14 @@ print_choices() {
     printf 'current|sglang|%s\n' "$sglang_model"
   elif [[ -n "$vllm_model" ]]; then
     printf 'current|vllm|%s\n' "$vllm_model"
+  elif [[ -n "$trtllm_model" ]]; then
+    printf 'current|trtllm|%s\n' "$trtllm_model"
   elif [[ -n "$ollama_model" ]]; then
     printf 'current|ollama|%s\n' "$ollama_model"
   fi
 
   for model in \
     gpt-oss-20b \
-    gpt-oss-120b \
     qwen3-30b-a3b-instruct-2507-fp8 \
     qwen3-next-80b-a3b-instruct-fp8 \
     qwen3-next-80b-a3b-thinking-fp8; do
@@ -189,6 +226,10 @@ print_choices() {
       printf 'start|sglang|%s\n' "$model"
     fi
   done
+
+  if trtllm_model_ready "$TRTLLM_GPT_OSS_MODEL"; then
+    printf 'start|trtllm|%s\n' "$TRTLLM_GPT_OSS_MODEL"
+  fi
 
   for model in \
     gemma-4-26b-a4b-nvfp4 \
@@ -294,8 +335,9 @@ choose_action() {
   local app_running="$1"
   local sglang_model="$2"
   local vllm_model="$3"
-  local ollama_model="$4"
-  local ontology_pending_count="${5:-0}"
+  local trtllm_model="$4"
+  local ollama_model="$5"
+  local ontology_pending_count="${6:-0}"
   local rows=()
 
   if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
@@ -306,6 +348,8 @@ choose_action() {
     rows+=("TRUE" "current|sglang|$sglang_model" "현재 실행 중인 SGLang 유지" "$sglang_model")
   elif [[ -n "$vllm_model" ]]; then
     rows+=("TRUE" "current|vllm|$vllm_model" "현재 실행 중인 vLLM 유지" "$vllm_model")
+  elif [[ -n "$trtllm_model" ]]; then
+    rows+=("TRUE" "current|trtllm|$trtllm_model" "현재 실행 중인 TensorRT-LLM 유지" "$trtllm_model")
   elif [[ -n "$ollama_model" ]]; then
     rows+=("TRUE" "current|ollama|$ollama_model" "현재 실행 중인 Ollama 유지" "$ollama_model")
   fi
@@ -318,9 +362,6 @@ choose_action() {
   if sglang_model_ready "gpt-oss-20b"; then
     rows+=("$default_pick" "start|sglang|gpt-oss-20b" "SGLang 서버 시작/전환" "gpt-oss-20b")
   fi
-  if sglang_model_ready "gpt-oss-120b"; then
-    rows+=("FALSE" "start|sglang|gpt-oss-120b" "SGLang 서버 시작/전환" "gpt-oss-120b")
-  fi
 
   if sglang_model_ready "qwen3-30b-a3b-instruct-2507-fp8"; then
     rows+=("FALSE" "start|sglang|qwen3-30b-a3b-instruct-2507-fp8" "SGLang 서버 시작/전환" "qwen3-30b-a3b-instruct-2507-fp8")
@@ -330,6 +371,9 @@ choose_action() {
   fi
   if sglang_model_ready "qwen3-next-80b-a3b-thinking-fp8"; then
     rows+=("FALSE" "start|sglang|qwen3-next-80b-a3b-thinking-fp8" "SGLang 서버 시작/전환" "qwen3-next-80b-a3b-thinking-fp8")
+  fi
+  if trtllm_model_ready "$TRTLLM_GPT_OSS_MODEL"; then
+    rows+=("FALSE" "start|trtllm|$TRTLLM_GPT_OSS_MODEL" "TensorRT-LLM 서버 시작/전환" "$TRTLLM_GPT_OSS_MODEL")
   fi
   if vllm_model_ready "gemma-4-26b-a4b-nvfp4"; then
     rows+=("FALSE" "start|vllm|gemma-4-26b-a4b-nvfp4" "vLLM 서버 시작/전환" "gemma-4-26b-a4b-nvfp4")
@@ -352,7 +396,7 @@ choose_action() {
   fi
 
   local current_text
-  current_text="앱: $app_running\nSGLang: ${sglang_model:-실행 안 됨}\nvLLM: ${vllm_model:-실행 안 됨}\nOllama: ${ollama_model:-실행 안 됨}"
+  current_text="앱: $app_running\nSGLang: ${sglang_model:-실행 안 됨}\nvLLM: ${vllm_model:-실행 안 됨}\nTensorRT-LLM: ${trtllm_model:-실행 안 됨}\nOllama: ${ollama_model:-실행 안 됨}"
 
   zenity --list \
     --radiolist \
@@ -410,13 +454,15 @@ main() {
   detect_app_health && app_running="running"
   local sglang_model
   local vllm_model
+  local trtllm_model
   local ollama_model
   sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
   vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
+  trtllm_model="$(detect_openai_compatible_model "$TRTLLM_BASE_URL" "${TRTLLM_API_KEY:-EMPTY}")"
   ollama_model="$(detect_ollama_model)"
 
   local choice
-  choice="$(choose_action "$app_running" "$sglang_model" "$vllm_model" "$ollama_model" "$pending_ontology_count")" || exit 0
+  choice="$(choose_action "$app_running" "$sglang_model" "$vllm_model" "$trtllm_model" "$ollama_model" "$pending_ontology_count")" || exit 0
   [[ -n "$choice" ]] || exit 0
 
   IFS='|' read -r mode provider model <<<"$choice"

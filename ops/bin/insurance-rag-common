@@ -133,6 +133,20 @@ setup_fastapi_env() {
   export VLLM_ENABLE_APP_SWITCH="${VLLM_ENABLE_APP_SWITCH:-true}"
   export VLLM_SWITCH_SCRIPT="${VLLM_SWITCH_SCRIPT:-$AI_OPS_ROOT/bin/switch-vllm-model}"
 
+  export TRTLLM_BASE_URL="${TRTLLM_BASE_URL:-http://127.0.0.1:8355/v1}"
+  export TRTLLM_API_KEY="${TRTLLM_API_KEY:-EMPTY}"
+  export TRTLLM_SWITCH_SCRIPT="${TRTLLM_SWITCH_SCRIPT:-$AI_OPS_ROOT/bin/switch-trtllm-model}"
+  export TRTLLM_SWITCH_TIMEOUT="${TRTLLM_SWITCH_TIMEOUT:-2400}"
+  if [[ "$DEFAULT_PROVIDER" == "trtllm" ]]; then
+    local selected_trtllm_model="${INSURANCE_RAG_MODEL:-${TRTLLM_DEFAULT_MODEL:-openai/gpt-oss-120b}}"
+    export TRTLLM_DEFAULT_MODEL="$selected_trtllm_model"
+    export TRTLLM_CANDIDATE_MODELS="$selected_trtllm_model"
+  else
+    export TRTLLM_DEFAULT_MODEL="${TRTLLM_DEFAULT_MODEL:-openai/gpt-oss-120b}"
+    export TRTLLM_CANDIDATE_MODELS="${TRTLLM_CANDIDATE_MODELS:-openai/gpt-oss-120b}"
+  fi
+  export TRTLLM_STRICT_AVAILABLE_MODELS="${TRTLLM_STRICT_AVAILABLE_MODELS:-true}"
+
   export ALLOW_OLLAMA="${ALLOW_OLLAMA:-true}"
   export OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
   export OLLAMA_NUM_PREDICT="${OLLAMA_NUM_PREDICT:-4096}"
