@@ -18,7 +18,6 @@ from src.claim_calculation.models import (
 )
 from src.claim_calculation.standard_matcher import match_standard_code
 from src.claim_calculation.basis_selector import select_basis_documents
-from src.claim_calculation.code_sandbox import execute_calculation
 from src.claim_calculation.planner import LLMPlanner, FakePlanner
 
 logger = logging.getLogger(__name__)
@@ -345,10 +344,14 @@ def _calculate_line_items(
         line_reasons: list[str] = []
 
         if _is_upper_room_difference(item):
-            capped_daily_amount = min(unit_amount, Decimal("100000"))
-            payable = capped_daily_amount * quantity * Decimal("0.5")
+            from src.claim_calculation.deductible_rules import lookup_special_rule
+            special_rule = lookup_special_rule("upper_room_difference")
+            if special_rule.daily_limit is None or special_rule.payout_ratio is None:
+                raise ValueError("upper_room_difference special rule requires daily_limit and payout_ratio")
+            capped_daily_amount = min(unit_amount, special_rule.daily_limit)
+            payable = capped_daily_amount * quantity * special_rule.payout_ratio
             deductible = amount - payable
-            rule = "상급병실료 차액 특례: 1일 평균 10만원 한도 내 비급여 병실료의 50% 보상"
+            rule = special_rule.description
         elif _is_ambiguous_match(match):
             deductible = Decimal("0")
             payable = Decimal("0")
@@ -502,12 +505,16 @@ def _calculate_line_items(
                 line_review = True
 
             if _is_health_insurance_unapplied(context):
+                from src.claim_calculation.deductible_rules import lookup_special_rule
+                special_rule = lookup_special_rule("health_insurance_unapplied")
+                if special_rule.payout_ratio is None:
+                    raise ValueError("health_insurance_unapplied special rule requires payout_ratio")
                 base_after_deductible = max(Decimal("0"), amount - deductible)
-                payable = base_after_deductible * Decimal("0.4")
+                payable = base_after_deductible * special_rule.payout_ratio
                 deductible = amount - payable
-                rule = f"{rule}; 건강보험/의료급여 미적용 특례: 공제 후 금액의 40% 보상"
+                rule = f"{rule}; {special_rule.description}"
                 line_review = True
-                line_reasons.append("건강보험 또는 의료급여를 적용받지 못한 건은 약관상 40% 특례 계산 대상이므로 적용 사유 확인이 필요합니다.")
+                line_reasons.append(f"{special_rule.description} 적용 사유 확인이 필요합니다.")
 
         has_human_task = _is_human_task_line(line_reasons)
         calculation_status = _line_calculation_status(
@@ -757,7 +764,6 @@ def run_claim_calculation(
     )
     deterministic_line_results: list[dict[str, str | bool | list[str]]] = []
     deterministic_review_reasons: list[str] = []
-    enforce_baseline = _should_trust_deterministic_baseline(standard_matches, disambiguation_required)
     has_exclusion = any(
         _is_exclusion_match(match) and (idx >= len(items) or not _has_split_amounts(items[idx]))
         for idx, match in enumerate(standard_matches)
@@ -768,16 +774,13 @@ def run_claim_calculation(
         and (_is_exclusion_match(match) or _is_nonpay_scope_restriction(match))
         for idx, match in enumerate(standard_matches)
     )
-    use_deterministic_calculation = use_fake_planner or has_exclusion or has_split_scope_restriction
-
-    if use_deterministic_calculation:
+    if use_fake_planner or has_exclusion or has_split_scope_restriction:
         payable_val = baseline_payable_val
         deductible_val = baseline_deductible_val
         deterministic_line_results = baseline_line_results
         deterministic_review_reasons = baseline_review_reasons
-        sandbox_code = "# deterministic line-item calculation"
+        sandbox_code = _build_deterministic_formula_code(total_claimed, deductible_val, payable_val)
         if has_exclusion:
-            sandbox_code = "# deterministic exclusion guard: standard-code opinion is excluded"
             plan = CalculationPlan(
                 decision="not_covered",
                 formula_intent=sandbox_code,
@@ -791,66 +794,37 @@ def run_claim_calculation(
             decision="needs_more_info",
             uncertainties=db_review_reasons
         )
+        payable_val = Decimal("0")
+        deductible_val = Decimal("0")
+        sandbox_code = ""
     else:
         planner = FakePlanner() if use_fake_planner else LLMPlanner(model_id=model_id, provider=provider)
         plan: CalculationPlan = planner.plan(items, context, retrieved_evidences)
+        payable_val = baseline_payable_val
+        deductible_val = baseline_deductible_val
+        deterministic_line_results = baseline_line_results
+        deterministic_review_reasons.extend(baseline_review_reasons)
+        sandbox_code = _build_deterministic_formula_code(total_claimed, deductible_val, payable_val)
+        if plan.formula_intent:
+            deterministic_review_reasons.append(
+                "LLM 산식은 최종 계산 권한이 아니므로 실행하지 않고 approved rule layer의 결정론 계산값을 적용했습니다."
+            )
+        if plan.decision == "not_covered":
+            deterministic_review_reasons.append(
+                "LLM 단독 면책 판단은 최종 권한이 아니므로 검토 필요 상태로 전환하고 approved rule layer 계산값을 유지했습니다."
+            )
+            plan = CalculationPlan(
+                decision="needs_more_info",
+                basis_summary=plan.basis_summary,
+                variables=plan.variables,
+                calculation_steps=plan.calculation_steps,
+                formula_intent=plan.formula_intent,
+                uncertainties=plan.uncertainties,
+            )
 
-    # 5. 계산 실행 (Python AST Sandbox)
+    # 5. LLM formula_intent는 실행하지 않는다. 최종값은 approved rule layer 결과만 사용한다.
     sandbox_error_occurred = False
     sandbox_error_msg = ""
-    if not use_deterministic_calculation and plan.decision == "calculable" and plan.formula_intent:
-        sandbox_code = plan.formula_intent
-        try:
-            exec_res = execute_calculation(sandbox_code)
-            sandbox_code = exec_res.get("code", sandbox_code)
-            local_vars = exec_res.get("variables", {})
-
-            # 유연한 변수명 매칭 추출
-            raw_payable = local_vars.get("payable_amount") or local_vars.get("payable") or Decimal("0")
-            raw_deductible = local_vars.get("deductible") or local_vars.get("deductible_amount") or Decimal("0")
-
-            payable_val = Decimal(str(raw_payable))
-            deductible_val = Decimal(str(raw_deductible))
-            if enforce_baseline and (payable_val != baseline_payable_val or deductible_val != baseline_deductible_val):
-                payable_val = baseline_payable_val
-                deductible_val = baseline_deductible_val
-                deterministic_line_results = baseline_line_results
-                deterministic_review_reasons.extend(baseline_review_reasons)
-                deterministic_review_reasons.append(
-                    "LLM 산식 결과가 표준모델/세대별 결정론 계산 기준과 달라 결정론 계산값을 최종 지급예상액에 적용했습니다."
-                )
-        except Exception as e:
-            sandbox_error_occurred = True
-            sandbox_error_msg = f"AST 샌드박스 연산 실행 에러: {str(e)}"
-            logger.error(sandbox_error_msg)
-            if enforce_baseline:
-                payable_val = baseline_payable_val
-                deductible_val = baseline_deductible_val
-                deterministic_line_results = baseline_line_results
-                deterministic_review_reasons.extend(baseline_review_reasons)
-                deterministic_review_reasons.append(
-                    "LLM 산식 실행에 실패하여 표준모델/세대별 결정론 계산값을 최종 지급예상액에 적용했습니다."
-                )
-            else:
-                payable_val = Decimal("0")
-                deductible_val = Decimal("0")
-    elif not use_deterministic_calculation:
-        # 계산 불가 또는 보상 제외
-        if enforce_baseline:
-            payable_val = baseline_payable_val
-            deductible_val = baseline_deductible_val
-            deterministic_line_results = baseline_line_results
-            deterministic_review_reasons.extend(baseline_review_reasons)
-            deterministic_review_reasons.append(
-                "LLM이 계산 가능 산식을 반환하지 않아 표준모델/세대별 결정론 계산값을 최종 지급예상액에 적용했습니다."
-            )
-            sandbox_code = _build_deterministic_formula_code(total_claimed, deductible_val, payable_val)
-        else:
-            sandbox_code = ""
-            payable_val = Decimal("0")
-            deductible_val = Decimal("0")
-        sandbox_error_occurred = False
-        sandbox_error_msg = ""
 
     # 6. 최종 지급예상액 검증 및 검토 플래그 결정
     review_required = False

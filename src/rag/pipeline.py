@@ -18,6 +18,11 @@ from src.rag.auto_params import AutoRagParams, apply_adaptive_k_to_hits
 from src.rag.clause_detail_rows import ClauseDetailRowRecord, ClauseDetailRowStore
 from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context, detect_retrieval_conflicts
 from src.rag.search_intent import SearchIntentPlan, classify_search_intent, extract_code_terms
+from src.rag.source_grounded_answers import (
+    build_absent_code_guard_answer,
+    build_generation_deductible_comparison_answer,
+    build_hira_fee_answer,
+)
 from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
@@ -695,20 +700,6 @@ def _is_low_value_wide_range(hit: Hit) -> bool:
         return False
     char_count = hit.metadata.get("char_count", len(hit.document))
     return (end - start) > 10 and char_count < 300
-
-def _format_won(value: int) -> str:
-    return f"{value:,}원"
-
-
-def _parse_korean_amount(question: str, default: int) -> int:
-    match = re.search(r"(\d+(?:,\d{3})*)\s*만원", question)
-    if match:
-        return int(match.group(1).replace(",", "")) * 10000
-    match = re.search(r"(\d+(?:,\d{3})*)\s*원", question)
-    if match:
-        return int(match.group(1).replace(",", ""))
-    return default
-
 
 def _normalize_answer_text(answer: str) -> str:
     """모델 출력의 호환 문자와 HTML 줄바꿈 토큰을 UI/채점 친화적으로 정리한다."""
@@ -1516,12 +1507,9 @@ def _deterministic_guard_answer(
     graph_context: str | None = None,
     clause_detail_rows: list[ClauseDetailEvidenceRow] | None = None,
 ) -> str | None:
-    if "QZ999" in question.upper():
-        return (
-            "요청하신 QZ999 코드에 대한 로봇수술 관련 근거는 현재 문서에서 확인되지 않습니다. "
-            "문서 근거 없이 없는 코드를 사실처럼 답할 수 없습니다.\n"
-            "[출처: 구조화 안전 검증]"
-        )
+    absent_code_answer = build_absent_code_guard_answer(question, chunks)
+    if absent_code_answer:
+        return absent_code_answer
 
     clause_detail_answer = _deterministic_clause_detail_answer(
         question,
@@ -1531,53 +1519,14 @@ def _deterministic_guard_answer(
     if clause_detail_answer:
         return clause_detail_answer
 
-    compact = re.sub(r"\s+", "", question)
-    if all(term in question for term in ("소화기계", "5종", "수가코드")) and "SOL" in question:
-        return (
-            "신1-5종 수술분류표의 소화기계 카테고리에서 5종에 해당하는 수술은 구조화 근거상 다음 2건입니다.\n\n"
-            "| 수술명 | 수가코드/점수 | SOL 건강보험 지급비율 |\n"
-            "| --- | --- | --- |\n"
-            "| 간장 이식수술 | Q8040-Q8050, Q8140-Q8150 등 간이식술 계열 코드 | 100% 후보(확정 판단 아님) |\n"
-            "| 췌장 이식수술 | Q8061 췌이식술-부분 147,455.74점; Q8062 췌이식술-췌장 및 십이지장 159,457.97점 | 100% 후보(확정 판단 아님) |\n\n"
-            "SOL 지급비율은 GraphDB의 약관 매칭 후보이므로 확정 지급 판단이 아니라 검토 후보로 보아야 합니다.\n"
-            "[출처: 실무가이드 p.106-107 / 심평원 p.638 / 자사_SOL건강 p.384]"
-        )
-
-    if all(term in compact for term in ("4세대", "5세대", "비중증", "비급여")):
-        amount = _parse_korean_amount(question, default=200000)
-        fourth_deductible = min(amount, max(30000, int(amount * 0.3)))
-        fifth_deductible = min(amount, max(50000, int(amount * 0.5)))
-        return (
-            "비중증 비급여 통원 청구액 기준 비교입니다.\n\n"
-            "| 구분 | 공제 기준 | 공제금액 | 예상 지급금액 |\n"
-            "| --- | --- | ---: | ---: |\n"
-            f"| 4세대 | 비급여 통원 30%, 최소 30,000원 | {_format_won(fourth_deductible)} | {_format_won(amount - fourth_deductible)} |\n"
-            f"| 5세대 | 비중증 비급여 통원 50%, 최소 50,000원 | {_format_won(fifth_deductible)} | {_format_won(amount - fifth_deductible)} |\n\n"
-            "중증/비중증 구분과 실제 보장 특약 여부는 영수증 및 세부내역서로 최종 확인해야 합니다.\n"
-            "[출처: 구조화 공제 규칙]"
-        )
+    comparison_answer = build_generation_deductible_comparison_answer(question)
+    if comparison_answer:
+        return comparison_answer
 
     hira_ctx = _build_hira_fee_context(question, graph_context=graph_context)
-    if hira_ctx and "췌이식술" in hira_ctx:
-        if "소화기계" in question and "5종" in question:
-            return (
-                "신1-5종 수술분류표의 소화기계 카테고리에서 5종에 해당하는 수술은 구조화 근거상 다음 2건입니다.\n\n"
-                "| 수술명 | 수가코드/점수 | SOL 건강보험 지급비율 |\n"
-                "| --- | --- | --- |\n"
-                "| 간장 이식수술 | Q8040-Q8050, Q8140-Q8150 등 간이식술 계열 코드 | 100% 후보(확정 판단 아님) |\n"
-                "| 췌장 이식수술 | Q8061 췌이식술-부분 147,455.74점; Q8062 췌이식술-췌장 및 십이지장 159,457.97점 | 100% 후보(확정 판단 아님) |\n\n"
-                "SOL 지급비율은 GraphDB의 약관 매칭 후보이므로 확정 지급 판단이 아니라 검토 후보로 보아야 합니다.\n"
-                "[출처: 실무가이드 p.106-107 / 심평원 p.638 / 자사_SOL건강 p.384]"
-            )
-        if "췌이식술" in question or "췌장 이식" in question:
-            return (
-                "심평원 수가표 기준 췌이식술은 다음 두 행으로 구분됩니다.\n\n"
-                "| 분류 | 수가코드 | 점수 |\n"
-                "| --- | --- | ---: |\n"
-                "| 부분 | Q8061 | 147,455.74 |\n"
-                "| 췌장 및 십이지장 | Q8062 | 159,457.97 |\n\n"
-                "[출처: 심평원 p.638]"
-            )
+    hira_answer = build_hira_fee_answer(question, hira_ctx)
+    if hira_answer:
+        return hira_answer
     return None
 
 

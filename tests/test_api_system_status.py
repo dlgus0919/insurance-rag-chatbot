@@ -19,8 +19,6 @@ async def test_system_status_uses_current_index_paths(tmp_path, monkeypatch) -> 
         default_index / "chroma",
         v2_index / "chroma",
         combined_index / "chroma",
-        default_index / "graph",
-        default_index / "relational",
     ]:
         directory.mkdir(parents=True, exist_ok=True)
 
@@ -28,11 +26,12 @@ async def test_system_status_uses_current_index_paths(tmp_path, monkeypatch) -> 
     users_path = tmp_path / "users.json"
     for path in [
         chunks_path,
-        default_index / "bm25.pkl",
+        v2_index / "bm25.pkl",
         default_index / "graph" / "insurance_graph.sqlite",
         default_index / "relational" / "standard_codes.sqlite",
         users_path,
     ]:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("ok")
 
     monkeypatch.setattr(system.config, "ROOT_DIR", tmp_path)
@@ -49,7 +48,7 @@ async def test_system_status_uses_current_index_paths(tmp_path, monkeypatch) -> 
     assert response.paths["chunks"] is True
     assert response.paths["bm25"] is True
     assert response.paths["chroma"] is True
-    assert response.paths["bm25_v2_only"] is False
+    assert response.paths["bm25_v2_only"] is True
     assert response.paths["chroma_v2_only"] is True
     assert response.paths["bm25_v1_v2_combined"] is False
     assert response.paths["chroma_v1_v2_combined"] is True

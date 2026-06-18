@@ -137,14 +137,11 @@ setup_fastapi_env() {
   export TRTLLM_API_KEY="${TRTLLM_API_KEY:-EMPTY}"
   export TRTLLM_SWITCH_SCRIPT="${TRTLLM_SWITCH_SCRIPT:-$AI_OPS_ROOT/bin/switch-trtllm-model}"
   export TRTLLM_SWITCH_TIMEOUT="${TRTLLM_SWITCH_TIMEOUT:-2400}"
-  if [[ "$DEFAULT_PROVIDER" == "trtllm" ]]; then
-    local selected_trtllm_model="${INSURANCE_RAG_MODEL:-${TRTLLM_DEFAULT_MODEL:-openai/gpt-oss-120b}}"
-    export TRTLLM_DEFAULT_MODEL="$selected_trtllm_model"
-    export TRTLLM_CANDIDATE_MODELS="$selected_trtllm_model"
-  else
-    export TRTLLM_DEFAULT_MODEL="${TRTLLM_DEFAULT_MODEL:-openai/gpt-oss-120b}"
-    export TRTLLM_CANDIDATE_MODELS="${TRTLLM_CANDIDATE_MODELS:-openai/gpt-oss-120b}"
-  fi
+  # GPT-OSS 120B is retained only as historical diagnostics. It is not a selectable
+  # DGX Spark runtime model for this project.
+  export TRTLLM_DEFAULT_MODEL="${TRTLLM_DEFAULT_MODEL:-openai/gpt-oss-120b}"
+  export TRTLLM_CANDIDATE_MODELS="${TRTLLM_CANDIDATE_MODELS:-}"
+  export TRTLLM_DISABLED_MODELS="${TRTLLM_DISABLED_MODELS:-openai/gpt-oss-120b,gpt-oss-120b,/models/gpt-oss-120b}"
   export TRTLLM_STRICT_AVAILABLE_MODELS="${TRTLLM_STRICT_AVAILABLE_MODELS:-true}"
 
   export ALLOW_OLLAMA="${ALLOW_OLLAMA:-true}"

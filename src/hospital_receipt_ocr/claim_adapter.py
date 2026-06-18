@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 from .models import DetailRow
 
@@ -40,3 +41,36 @@ def detail_rows_to_claim_items(detail_rows: list[DetailRow]) -> list[dict[str, s
             }
         )
     return items
+
+
+def _has_source_bbox(row: dict[str, Any]) -> bool:
+    source = row.get("source") or {}
+    bbox = source.get("bbox")
+    return bool(source.get("document_id")) and source.get("page") is not None and isinstance(bbox, list) and len(bbox) == 4
+
+
+def build_claim_item_drafts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Copy only verified OCR source rows into claim input drafts."""
+
+    drafts: list[dict[str, Any]] = []
+    for row in rows:
+        if (row.get("validation") or {}).get("status") != "verified":
+            continue
+        if not _has_source_bbox(row):
+            continue
+        amount = row.get("total_amount")
+        if not isinstance(amount, int) or amount < 0:
+            continue
+        row_id = row.get("row_id")
+        if not row_id:
+            continue
+        drafts.append(
+            {
+                "source_row_id": row_id,
+                "item_name": row.get("item_name", ""),
+                "claimed_amount": amount,
+                "quantity": 1,
+                "status": "draft_verified",
+            }
+        )
+    return drafts

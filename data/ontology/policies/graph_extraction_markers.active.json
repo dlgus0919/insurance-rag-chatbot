@@ -1,0 +1,179 @@
+{
+  "version": 1,
+  "purpose": "Graph extraction marker policy for candidate BenefitLimit and DeductibleRule nodes. These markers are used only to connect source clauses to review candidates; they are not calculation rules or final claim decisions.",
+  "benefit_limits": {
+    "3대비급여 연간 한도": {
+      "keywords": ["3대비급여", "도수치료", "체외충격파", "증식치료", "50회", "350만원", "연간"],
+      "limit_scope": "annual",
+      "limit_amount": "3500000",
+      "limit_count": "50",
+      "limit_period": "1년",
+      "applies_to_topic": "3대비급여",
+      "unit_text": "연간 350만원/50회 등 문서 기준 확인",
+      "marker_only": true,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002310", "source_page": 8, "note": "3대비급여 통산 한도 요약"},
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002431", "source_page": 71, "note": "3대비급여 보상내용"}
+      ]
+    },
+    "도수치료 횟수 한도": {
+      "keywords": ["도수치료", "50회", "10회"],
+      "limit_scope": "count",
+      "limit_count": "50",
+      "limit_period": "1년",
+      "applies_to_topic": "도수치료",
+      "unit_text": "문서상 회차 조건 확인",
+      "marker_only": true,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002310", "source_page": 8, "note": "도수치료 회차 한도 요약"},
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002431", "source_page": 71, "note": "도수치료 회차 조건"}
+      ]
+    },
+    "MRI/MRA 한도": {
+      "keywords": ["MRI", "MRA", "자기공명영상", "한도"],
+      "limit_scope": "topic",
+      "applies_to_topic": "MRI/MRA",
+      "unit_text": "자기공명영상진단 한도",
+      "marker_only": true,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002310", "source_page": 8, "note": "MRI/MRA 한도 요약"},
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002431", "source_page": 71, "note": "자기공명영상진단 보장항목"}
+      ]
+    },
+    "상급병실료 차액 한도": {
+      "keywords": ["상급병실", "병실료 차액", "10만원", "50%"],
+      "limit_scope": "daily",
+      "limit_amount": "100000",
+      "applies_to_topic": "상급병실료 차액",
+      "unit_text": "1일 평균 10만원 한도 내 비급여 병실료의 50%",
+      "marker_only": true,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002436", "source_page": 71, "note": "상급병실료 차액 특례"}
+      ]
+    },
+    "통원 1회 한도": {
+      "keywords": ["통원", "1회", "한도"],
+      "limit_scope": "per_visit",
+      "applies_to_visit": "통원",
+      "unit_text": "통원 1회 한도",
+      "marker_only": true,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002310", "source_page": 8, "note": "통원 1회 한도 요약"},
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002348", "source_page": 38, "note": "통원 1회 한도"}
+      ]
+    }
+  },
+  "deductible_rules": {
+    "4세대 실손 공제": {
+      "keywords": ["4세대", "공제", "자기부담", "본인 부담"],
+      "deductible_type": "generation",
+      "generation_scope": "4th",
+      "basis_text": "4세대 실손 공제 규칙",
+      "marker_only": true,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002309", "source_page": 8, "note": "4세대 공제 요약"}
+      ]
+    },
+    "5세대 실손 공제": {
+      "keywords": ["5세대", "공제", "자기부담", "본인 부담"],
+      "deductible_type": "generation",
+      "generation_scope": "5th",
+      "basis_text": "5세대 실손 공제 규칙",
+      "marker_only": true,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "표준약관", "source_chunk_id": "표준약관_ch_005558", "source_page": 372, "note": "5세대 공제 요약"}
+      ]
+    },
+    "3대비급여 공제": {
+      "keywords": ["3대비급여", "도수치료", "주사료", "MRI", "MRA", "공제"],
+      "deductible_type": "topic",
+      "basis_text": "3대비급여 공제 규칙",
+      "marker_only": true,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002432", "source_page": 71, "note": "3대비급여 공제 기준"}
+      ]
+    },
+    "통원 공제": {
+      "keywords": ["통원", "공제", "자기부담"],
+      "deductible_type": "visit",
+      "visit_scope": "outpatient",
+      "basis_text": "통원 공제 규칙",
+      "marker_only": true,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002331", "source_page": 31, "note": "급여 통원 공제 기준"},
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002432", "source_page": 71, "note": "비급여 통원 공제 기준"}
+      ]
+    },
+    "입원 공제": {
+      "keywords": ["입원", "공제", "자기부담"],
+      "deductible_type": "visit",
+      "visit_scope": "hospitalization",
+      "basis_text": "입원 공제 규칙",
+      "marker_only": true,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002330", "source_page": 31, "note": "급여 입원 공제 기준"},
+        {"source_doc": "약관", "source_chunk_id": "약관_ch_002436", "source_page": 71, "note": "비급여 입원 공제 기준"}
+      ]
+    }
+  },
+  "sol_appendix_grade_ratio_map": {
+    "1": {
+      "payment_ratio": "10%",
+      "payment_ratio_numeric": 0.1,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "자사_SOL건강", "source_chunk_id": "자사_SOL건강_ch_011755", "source_page": 384, "note": "별표7 1종 지급비율 정책 행"}
+      ]
+    },
+    "2": {
+      "payment_ratio": "30%",
+      "payment_ratio_numeric": 0.3,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "자사_SOL건강", "source_chunk_id": "자사_SOL건강_ch_011755", "source_page": 384, "note": "별표7 2종 지급비율 정책 행"}
+      ]
+    },
+    "3": {
+      "payment_ratio": "50%",
+      "payment_ratio_numeric": 0.5,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "자사_SOL건강", "source_chunk_id": "자사_SOL건강_ch_011755", "source_page": 384, "note": "별표7 3종 지급비율 정책 행"}
+      ]
+    },
+    "4": {
+      "payment_ratio": "100%",
+      "payment_ratio_numeric": 1.0,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "자사_SOL건강", "source_chunk_id": "자사_SOL건강_ch_011755", "source_page": 384, "note": "별표7 4종 지급비율 정책 행"}
+      ]
+    },
+    "5": {
+      "payment_ratio": "100%",
+      "payment_ratio_numeric": 1.0,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "자사_SOL건강", "source_chunk_id": "자사_SOL건강_ch_011755", "source_page": 384, "note": "별표7 5종 지급비율 정책 행"}
+      ]
+    },
+    "N": {
+      "payment_ratio": "0%",
+      "payment_ratio_numeric": 0.0,
+      "approval_status": "active",
+      "source_refs": [
+        {"source_doc": "자사_SOL건강", "source_chunk_id": "자사_SOL건강_ch_011755", "source_page": 384, "note": "별표7 미분류 지급비율 정책 행"}
+      ]
+    }
+  }
+}

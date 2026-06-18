@@ -76,6 +76,33 @@ async def test_models_include_local_optional_metadata(monkeypatch) -> None:
 
 
 @pytest.mark.anyio
+async def test_models_excludes_unsupported_trtllm_from_local_choices(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.api.routes.system.list_available_models",
+        lambda: {"sglang": [], "vllm": [], "trtllm": ["openai/gpt-oss-120b"], "ollama": [], "openai": []},
+    )
+
+    models = await system.models()
+
+    assert models.providers["local"] == []
+
+
+@pytest.mark.anyio
+async def test_models_can_include_unsupported_trtllm_diagnostics(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.api.routes.system.list_available_models",
+        lambda: {"sglang": [], "vllm": [], "trtllm": [], "ollama": [], "openai": []},
+    )
+
+    models = await system.models(include_diagnostics=True)
+
+    diagnostics = models.providers["diagnostics"]
+    target = next(model for model in diagnostics if model.id == "trtllm:openai/gpt-oss-120b")
+    assert target.status == "unsupported_on_dgx_spark"
+    assert "DGX Spark" in (target.use_case or "")
+
+
+@pytest.mark.anyio
 async def test_models_default_prefers_answer_primary_sglang(monkeypatch) -> None:
     monkeypatch.setattr(system.config, "SGLANG_DEFAULT_MODEL", "qwen3-next-80b-a3b-instruct-fp8")
     monkeypatch.setattr(system.config, "VLLM_DEFAULT_MODEL", "gemma-4-31b-it-nvfp4")

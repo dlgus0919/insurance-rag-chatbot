@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Graph extraction marker policy",
+  "type": "object",
+  "required": ["version", "purpose", "benefit_limits", "deductible_rules"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "benefit_limits": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/marker"
+      }
+    },
+    "deductible_rules": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/marker"
+      }
+    },
+    "sol_appendix_grade_ratio_map": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/ratioMarker"
+      }
+    }
+  },
+  "$defs": {
+    "marker": {
+      "type": "object",
+      "required": ["keywords", "marker_only", "approval_status"],
+      "additionalProperties": true,
+      "properties": {
+        "keywords": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        "marker_only": {
+          "const": true
+        },
+        "approval_status": {
+          "const": "active"
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source_doc", "source_chunk_id"],
+            "additionalProperties": true,
+            "properties": {
+              "source_doc": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_chunk_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_page": {
+                "type": ["integer", "null"]
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "ratioMarker": {
+      "type": "object",
+      "required": ["payment_ratio", "payment_ratio_numeric", "approval_status", "source_refs"],
+      "additionalProperties": false,
+      "properties": {
+        "payment_ratio": {
+          "type": "string"
+        },
+        "payment_ratio_numeric": {
+          "type": "number"
+        },
+        "approval_status": {
+          "const": "active"
+        },
+        "source_refs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["source_doc", "source_chunk_id"],
+            "additionalProperties": true,
+            "properties": {
+              "source_doc": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_chunk_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source_page": {
+                "type": ["integer", "null"]
+              },
+              "note": {
+                "type": "string"
+              }
+            }
+          },
+          "minItems": 1
+        }
+      }
+    }
+  }
+}

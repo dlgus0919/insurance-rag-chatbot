@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 import pandas as pd
 
+from src import config
 from src.graph.schema import Node, Edge, Evidence, Alias, NodeType, EdgeType
 from src.graph.normalizer import normalize_name, normalize_code
 from src.ontology.registry import get_default_ontology_registry
@@ -171,76 +173,44 @@ EXCLUSION_REASONS = {
     },
 }
 
-BENEFIT_LIMITS = {
-    "3대비급여 연간 한도": {
-        "keywords": ["3대비급여", "도수치료", "체외충격파", "증식치료", "50회", "350만원", "연간"],
-        "limit_scope": "annual",
-        "limit_amount": "3500000",
-        "limit_count": "50",
-        "limit_period": "1년",
-        "applies_to_topic": "3대비급여",
-        "unit_text": "연간 350만원/50회 등 문서 기준 확인",
-    },
-    "도수치료 횟수 한도": {
-        "keywords": ["도수치료", "50회", "10회"],
-        "limit_scope": "count",
-        "limit_count": "50",
-        "limit_period": "1년",
-        "applies_to_topic": "도수치료",
-        "unit_text": "문서상 회차 조건 확인",
-    },
-    "MRI/MRA 한도": {
-        "keywords": ["MRI", "MRA", "자기공명영상", "한도"],
-        "limit_scope": "topic",
-        "applies_to_topic": "MRI/MRA",
-        "unit_text": "자기공명영상진단 한도",
-    },
-    "상급병실료 차액 한도": {
-        "keywords": ["상급병실", "병실료 차액", "10만원", "50%"],
-        "limit_scope": "daily",
-        "limit_amount": "100000",
-        "applies_to_topic": "상급병실료 차액",
-        "unit_text": "1일 평균 10만원 한도 내 비급여 병실료의 50%",
-    },
-    "통원 1회 한도": {
-        "keywords": ["통원", "1회", "한도"],
-        "limit_scope": "per_visit",
-        "applies_to_visit": "통원",
-        "unit_text": "통원 1회 한도",
-    },
-}
+GRAPH_EXTRACTION_MARKER_POLICY_PATH = (
+    config.ROOT_DIR / "data" / "ontology" / "policies" / "graph_extraction_markers.active.json"
+)
 
-DEDUCTIBLE_RULES = {
-    "4세대 실손 공제": {
-        "keywords": ["4세대", "공제", "자기부담", "본인 부담"],
-        "deductible_type": "generation",
-        "generation_scope": "4th",
-        "basis_text": "4세대 실손 공제 규칙",
-    },
-    "5세대 실손 공제": {
-        "keywords": ["5세대", "공제", "자기부담", "본인 부담"],
-        "deductible_type": "generation",
-        "generation_scope": "5th",
-        "basis_text": "5세대 실손 공제 규칙",
-    },
-    "3대비급여 공제": {
-        "keywords": ["3대비급여", "도수치료", "주사료", "MRI", "MRA", "공제"],
-        "deductible_type": "topic",
-        "basis_text": "3대비급여 공제 규칙",
-    },
-    "통원 공제": {
-        "keywords": ["통원", "공제", "자기부담"],
-        "deductible_type": "visit",
-        "visit_scope": "outpatient",
-        "basis_text": "통원 공제 규칙",
-    },
-    "입원 공제": {
-        "keywords": ["입원", "공제", "자기부담"],
-        "deductible_type": "visit",
-        "visit_scope": "hospitalization",
-        "basis_text": "입원 공제 규칙",
-    },
-}
+
+@lru_cache(maxsize=4)
+def _load_graph_marker_policy(path_value: str) -> dict[str, Any]:
+    policy_path = Path(path_value)
+    try:
+        payload = json.loads(policy_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_graph_marker_specs() -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    policy = _load_graph_marker_policy(str(GRAPH_EXTRACTION_MARKER_POLICY_PATH))
+    return _active_marker_section(policy, "benefit_limits"), _active_marker_section(policy, "deductible_rules")
+
+
+def _load_sol_appendix_grade_ratio_map() -> dict[str, dict[str, Any]]:
+    policy = _load_graph_marker_policy(str(GRAPH_EXTRACTION_MARKER_POLICY_PATH))
+    return _active_marker_section(policy, "sol_appendix_grade_ratio_map")
+
+
+def _active_marker_section(policy: dict[str, Any], key: str) -> dict[str, dict[str, Any]]:
+    section = policy.get(key)
+    if not isinstance(section, dict):
+        return {}
+    return {
+        str(name): spec
+        for name, spec in section.items()
+        if isinstance(spec, dict) and spec.get("approval_status") == "active"
+    }
+
+
+BENEFIT_LIMITS, DEDUCTIBLE_RULES = _load_graph_marker_specs()
+SOL_APPENDIX_GRADE_RATIO_MAP = _load_sol_appendix_grade_ratio_map()
 
 REQUIRED_DOCUMENTS = {
     "진료비 영수증": ["진료비 영수증", "영수증"],
@@ -803,16 +773,11 @@ class PolicyAppendixExtractor:
                         norm_rule_name = normalize_name(name)
                         rule_node_id = f"rule_sol_health_별표7_{num}"
 
-                        # Grade payment mapping
-                        grade_ratio_map = {
-                            "1": ("10%", 0.1),
-                            "2": ("30%", 0.3),
-                            "3": ("50%", 0.5),
-                            "4": ("100%", 1.0),
-                            "5": ("100%", 1.0),
-                            "N": ("0%", 0.0),
-                        }
-                        ratio_str, ratio_val = grade_ratio_map.get(grade, ("0%", 0.0))
+                        ratio_spec = SOL_APPENDIX_GRADE_RATIO_MAP.get(str(grade))
+                        if not ratio_spec:
+                            continue
+                        ratio_str = str(ratio_spec["payment_ratio"])
+                        ratio_val = float(ratio_spec["payment_ratio_numeric"])
 
                         rule_node = Node(
                             node_id=rule_node_id,

@@ -125,12 +125,16 @@ if [[ "$MODEL_SET" == "0" ]]; then
       MODEL="${INSURANCE_RAG_MODEL:-gemma-4-31b-it-nvfp4}"
       ;;
     trtllm)
-      MODEL="${INSURANCE_RAG_MODEL:-openai/gpt-oss-120b}"
+      die "TensorRT-LLM gpt-oss-120b is unsupported on this DGX Spark project state; use sglang or vllm."
       ;;
     ollama)
       MODEL="${INSURANCE_RAG_MODEL:-exaone3.5:7.8b}"
       ;;
   esac
+fi
+
+if [[ "$PROVIDER" == "trtllm" ]]; then
+  die "TensorRT-LLM runtime is retained only for historical diagnostics and is not an app startup provider."
 fi
 
 if [[ "$FOREGROUND" == "1" ]]; then

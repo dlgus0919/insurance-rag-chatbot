@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation
 import hashlib
 import re
+from typing import Any
 
 from .models import DetailRow, ValidationIssue
 
@@ -99,3 +100,12 @@ def _issue(row: DetailRow, severity: str, reason: str) -> ValidationIssue:
         source_file=row.source_file,
         bbox=row.bbox,
     )
+
+
+def build_human_task(row: dict[str, Any], reason: str) -> dict[str, Any]:
+    return {
+        "source_row_id": row.get("row_id"),
+        "reason": reason,
+        "status": "review_required",
+        "message": "OCR row requires human review before claim calculation input.",
+    }

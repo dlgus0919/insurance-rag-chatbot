@@ -118,9 +118,20 @@ def test_deterministic_guard_compares_nonsevere_generation_amounts() -> None:
     assert "100,000원" in answer
 
 
-def test_deterministic_guard_digestive_grade5_includes_pancreas_scores() -> None:
+def test_deterministic_guard_hira_fee_answer_uses_source_rows(monkeypatch) -> None:
+    monkeypatch.setattr(
+        pipeline_module,
+        "_HIRA_CHUNK_CACHE",
+        [
+            {
+                "text": "췌이식술\nQ8061 췌이식술-부분 147,455.74점\nQ8062 췌이식술-췌장 및 십이지장 159,457.97점",
+                "metadata": {"doc_short": "심평원", "page_start": 638, "source_file": "BZ20260305.pdf"},
+            }
+        ],
+    )
+
     answer = _deterministic_guard_answer(
-        "신1-5종 수술분류표에서 5종에 해당하는 수술을 소화기계 카테고리에서 나열하고 수가코드와 SOL 비율도 알려줘.",
+        "췌이식술의 수가코드와 점수를 알려줘.",
         [],
     )
 
@@ -129,6 +140,15 @@ def test_deterministic_guard_digestive_grade5_includes_pancreas_scores() -> None
     assert "147,455.74" in answer
     assert "Q8062" in answer
     assert "159,457.97" in answer
+
+
+def test_deterministic_guard_does_not_emit_sol_ratio_without_source_rows() -> None:
+    answer = _deterministic_guard_answer(
+        "신1-5종 수술분류표에서 5종에 해당하는 수술을 소화기계 카테고리에서 나열하고 수가코드와 SOL 비율도 알려줘.",
+        [],
+    )
+
+    assert answer is None
 
 
 def test_clause_detail_deductible_answer_uses_source_rows() -> None:

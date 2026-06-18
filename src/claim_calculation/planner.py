@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
-from decimal import Decimal
 from typing import Any
 
 from src.claim_calculation.models import ClaimItemInput, ClaimCaseContext, CalculationPlan
-from src.claim_calculation.code_sandbox import normalize_calculation_code
 from src.llm.factory import build_llm
 
 logger = logging.getLogger(__name__)
@@ -82,18 +80,10 @@ class LLMPlanner:
 
 	[작성 규칙]
 	1. 반드시 아래 스키마에 맞는 JSON 데이터 하나만을 출력하세요. 마크다운 코드 블록(예: ```json 등)이나 기타 부연 설명 텍스트를 절대 포함하지 말고, 순수 JSON 텍스트 하나만 출력하세요.
-	2. 'formula_intent' 필드에는 보안 Python AST 샌드박스에서 Decimal 연산으로 바로 실행될 수 있는 유효한 Python 코드 조각을 작성해야 합니다.
-	   - 반드시 'claimed_amount', 'deductible', 'payable_amount' 변수가 최종적으로 할당되도록 하세요.
-	   - 내장 함수는 max, min, abs만 사용할 수 있고, 수치는 Decimal('값')으로 감싸야 합니다. (예: Decimal('150000') * Decimal('0.2'))
-	   - import 문은 작성하지 마세요. Decimal, max, min, abs는 샌드박스 실행 환경에 이미 제공됩니다.
-	   - 사용자가 입력한 청구액은 이 MVP 계산에서 해당 항목의 보장대상/청구 의료비로 사용합니다. 약관에 "보장대상 의료비", "청구금액", "비급여 의료비" 같은 표현이 나오면 별도 금액이 명시되지 않는 한 입력 청구액(`claimed_amount`)에 대응시켜 계산하세요.
-	   - 수량/횟수가 1보다 크면 항목별 청구액과 수량을 곱한 총액을 `claimed_amount`로 사용하세요.
-	   - 예시:
-	     claimed_amount = Decimal('150000')
-	     deductible = max(Decimal('30000'), claimed_amount * Decimal('0.2'))
-	     payable_amount = claimed_amount - deductible
-	3. 근거 출처가 "GraphDB (검토 후보)"이거나 내용에 "[CANDIDATE]"가 포함된 정보는 확정 근거가 아닙니다. 이 정보만으로 보상 여부, 지급비율, 공제식, 계산식을 확정하지 말고 decision을 "needs_more_info"로 두거나 uncertainties에 사용자/심사자 확인 필요 사유를 적으세요.
-	4. 근거 내용에 "[MISSING]" 또는 "확인불가"가 포함된 항목은 임의로 수가코드, 지급비율, 약관 조항을 만들어 보완하지 마세요.
+	2. 'formula_intent'는 과거 호환용 필드입니다. 최종 계산은 승인된 rule table과 deterministic interpreter가 수행하므로, 새 계산식이나 공제율을 만들지 말고 빈 문자열로 두는 것을 기본으로 하세요.
+	3. 사용자가 입력한 청구액, 항목명, 수량은 계산 권한이 아니라 사례 설명과 불확실성 판단에만 사용하세요.
+	4. 근거 출처가 "GraphDB (검토 후보)"이거나 내용에 "[CANDIDATE]"가 포함된 정보는 확정 근거가 아닙니다. 이 정보만으로 보상 여부, 지급비율, 공제식, 계산식을 확정하지 말고 decision을 "needs_more_info"로 두거나 uncertainties에 사용자/심사자 확인 필요 사유를 적으세요.
+	5. 근거 내용에 "[MISSING]" 또는 "확인불가"가 포함된 항목은 임의로 수가코드, 지급비율, 약관 조항을 만들어 보완하지 마세요.
 
 JSON Schema:
 {{
@@ -110,7 +100,7 @@ JSON Schema:
   "calculation_steps": [
     "단계별 한글 설명"
   ],
-  "formula_intent": "Python 실행 코드 조각",
+  "formula_intent": "과거 호환용 선택 필드. 새 계산식 생성을 피하고 빈 문자열 권장",
   "uncertainties": [
     "계산 시 불확실한 요소나 확인이 필요한 내용 목록"
   ]
@@ -170,35 +160,6 @@ JSON Schema:
         if formula_intent is not None and not isinstance(formula_intent, str):
             raise ValueError("formula_intent는 문자열 형태여야 합니다.")
 
-        # 6. decision = calculable 이면 formula_intent 필수
-        if decision == "calculable":
-            if not formula_intent or not formula_intent.strip():
-                raise ValueError("decision이 'calculable'일 때는 formula_intent가 비어있을 수 없습니다.")
-
-            # formula_intent가 있을 경우, 'claimed_amount', 'deductible', 'payable_amount' 변수가 할당되는지 AST 분석
-            import ast
-            formula_intent = normalize_calculation_code(formula_intent)
-            data["formula_intent"] = formula_intent
-            try:
-                tree = ast.parse(formula_intent)
-            except SyntaxError as e:
-                raise ValueError(f"formula_intent 파이썬 코드 문법 오류: {str(e)}")
-
-            assigned_vars = set()
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Assign):
-                    for target in node.targets:
-                        if isinstance(target, ast.Name):
-                            assigned_vars.add(target.id)
-                elif isinstance(node, ast.AnnAssign):
-                    if isinstance(node.target, ast.Name):
-                        assigned_vars.add(node.target.id)
-
-            required_vars = {"claimed_amount", "deductible", "payable_amount"}
-            missing_vars = required_vars - assigned_vars
-            if missing_vars:
-                raise ValueError(f"formula_intent에서 필수 변수가 할당되지 않았습니다: {missing_vars}")
-
         return data
 
     def _map_to_plan(self, data: dict[str, Any]) -> CalculationPlan:
@@ -221,7 +182,11 @@ class FakePlanner:
         context: ClaimCaseContext,
         retrieved_evidences: list[dict[str, Any]]
     ) -> CalculationPlan:
-        """입력 조건에 부합하는 미리 정의된 계산 계획을 리턴한다."""
+        """입력 파싱과 상태 분기만 수행한다.
+
+        보험금 계산식과 공제율은 approved rule layer가 적용하므로 FakePlanner는
+        테스트 환경에서도 도메인 산식을 만들지 않는다.
+        """
         if not items:
             return CalculationPlan(decision="needs_more_info", uncertainties=["청구 항목이 없습니다."])
 
@@ -237,24 +202,13 @@ class FakePlanner:
         if "제외" in name or "not_covered" in name:
             return CalculationPlan(
                 decision="not_covered",
-                basis_summary=[
-                    {"source": "약관 면책조항", "content": "치료 목적이 아닌 단순 미용 또는 보상 제외 대상 항목입니다."}
-                ],
+                basis_summary=[],
                 variables={
-                    "claimed_amount": claimed_clean_str,
-                    "deductible": claimed_clean_str,
-                    "payable_amount": "0"
+                    "claimed_amount": claimed_clean_str
                 },
-                calculation_steps=[
-                    "1. 청구 항목이 보상 제외 대상으로 확인되었습니다.",
-                    "2. 지급예상액은 0원입니다."
-                ],
-                formula_intent=(
-                    f"claimed_amount = Decimal('{claimed_clean_str}')\n"
-                    f"deductible = Decimal('{claimed_clean_str}')\n"
-                    f"payable_amount = Decimal('0')"
-                ),
-                uncertainties=["비치료성 시술 여부를 서류상 재확인해야 합니다."]
+                calculation_steps=[],
+                formula_intent="",
+                uncertainties=["FakePlanner의 제외 판단은 최종 권한이 아니며 근거 확인이 필요합니다."]
             )
 
         # 2. 정보 부족 시나리오
@@ -264,49 +218,13 @@ class FakePlanner:
                 uncertainties=["진단서 혹은 영수증 세부 내역서 확인이 필요하여 계산을 보류합니다."]
             )
 
-        # 3. 도수치료 표준 계산 시나리오 (150,000원 청구 시 3만원/30% 중 큰 금액 공제 적용하여 105,000원 지급예상액 산출)
-        if "도수" in name or "도수치료" in name:
-            return CalculationPlan(
-                decision="calculable",
-                basis_summary=[
-                    {"source": "실손의료비 약관(4세대)", "content": "비급여 도수치료는 1회당 3만원과 보장대상 금액의 30% 중 큰 금액을 공제합니다."}
-                ],
-                variables={
-                    "claimed_amount": claimed_clean_str,
-                    "deductible_min": "30000",
-                    "co_ratio": "0.3"
-                },
-                calculation_steps=[
-                    f"1. 청구금액 {claimed_val}원 감지.",
-                    "2. 자기부담금 산출: max(30,000원, 청구금액 * 30%)",
-                    f"3. max(30,000, {claimed_decimal * Decimal('0.3'):.0f}) 적용"
-                ],
-                formula_intent=(
-                    f"claimed_amount = Decimal('{claimed_clean_str}')\n"
-                    f"deductible = max(Decimal('30000'), claimed_amount * Decimal('0.3'))\n"
-                    f"payable_amount = claimed_amount - deductible"
-                ),
-                uncertainties=["도수치료는 통산 50회 한도 내에서 지급됩니다."]
-            )
-
-        # 4. 기본 일반 계산 시나리오 (자기부담금 20% 적용)
         return CalculationPlan(
             decision="calculable",
-            basis_summary=[
-                {"source": "실손의료비 기본 약관", "content": "비급여 항목에 대해 자기부담금 20%를 적용합니다."}
-            ],
+            basis_summary=[],
             variables={
-                "claimed_amount": claimed_clean_str,
-                "co_ratio": "0.2"
+                "claimed_amount": claimed_clean_str
             },
-            calculation_steps=[
-                f"1. 청구금액 {claimed_val}원 확인.",
-                "2. 20% 자기부담비율 적용."
-            ],
-            formula_intent=(
-                f"claimed_amount = Decimal('{claimed_clean_str}')\n"
-                f"deductible = claimed_amount * Decimal('0.2')\n"
-                f"payable_amount = claimed_amount - deductible"
-            ),
+            calculation_steps=[f"청구금액 {claimed_val}원 입력을 파싱했습니다."],
+            formula_intent="",
             uncertainties=[]
         )

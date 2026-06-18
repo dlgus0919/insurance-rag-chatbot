@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections import OrderedDict
+from typing import Any
 
 import requests
 
@@ -36,9 +37,16 @@ LOCAL_STATUS_LABELS: dict[str, str] = {
     "staged": "검증대상",
     "experimental": "실험",
     "disabled": "비활성",
+    "unsupported_on_dgx_spark": "DGX Spark 미지원",
     "delete_candidate": "삭제 후보",
     "optional": "Optional(삭제 가능)",
 }
+
+UNSELECTABLE_MODEL_STATUSES = {"disabled", "unsupported_on_dgx_spark"}
+DGX_SPARK_120B_UNSUPPORTED_REASON = (
+    "DGX Spark single-device runtime was tested through SGLang, vLLM, "
+    "Transformers, and TensorRT-LLM paths and classified as not usable for this project."
+)
 
 LOCAL_LARGE_MODEL_INFO: dict[str, dict[str, str]] = {
     "gemma-4-26b-a4b-nvfp4": {
@@ -118,20 +126,23 @@ TRTLLM_MODEL_INFO: dict[str, dict[str, str]] = {
     "openai/gpt-oss-120b": {
         "family": "GPT-OSS",
         "size": "120B MXFP4",
-        "status": "experimental",
-        "use_case": "TensorRT-LLM endpoint가 준비된 경우에만 노출하는 120B 실험 모델",
+        "status": "unsupported_on_dgx_spark",
+        "use_case": "DGX Spark 단일 장비에서 편입 불가로 판정된 진단용 기록",
+        "reason": DGX_SPARK_120B_UNSUPPORTED_REASON,
     },
     "gpt-oss-120b": {
         "family": "GPT-OSS",
         "size": "120B MXFP4",
-        "status": "experimental",
-        "use_case": "TensorRT-LLM endpoint가 짧은 모델 ID를 광고할 때 사용하는 120B 실험 alias",
+        "status": "unsupported_on_dgx_spark",
+        "use_case": "DGX Spark 단일 장비에서 편입 불가로 판정된 진단용 alias",
+        "reason": DGX_SPARK_120B_UNSUPPORTED_REASON,
     },
     "/models/gpt-oss-120b": {
         "family": "GPT-OSS",
         "size": "120B MXFP4",
-        "status": "experimental",
-        "use_case": "TensorRT-LLM이 container 내부 local path를 모델 ID로 광고할 때 사용하는 120B 실험 alias",
+        "status": "unsupported_on_dgx_spark",
+        "use_case": "DGX Spark 단일 장비에서 편입 불가로 판정된 컨테이너 경로 alias",
+        "reason": DGX_SPARK_120B_UNSUPPORTED_REASON,
     },
 }
 TRTLLM_SUPPORTED_MODEL_IDS: frozenset[str] = frozenset(TRTLLM_MODEL_INFO)
@@ -182,7 +193,69 @@ def is_vllm_model_disabled(model: str) -> bool:
 def is_trtllm_model_disabled(model: str) -> bool:
     """Return whether a TensorRT-LLM model is blocked by local config."""
 
-    return normalize_model_id(model) in config.TRTLLM_DISABLED_MODELS
+    normalized = normalize_model_id(model)
+    info = TRTLLM_MODEL_INFO.get(normalized, {})
+    return normalized in config.TRTLLM_DISABLED_MODELS or info.get("status") in UNSELECTABLE_MODEL_STATUSES
+
+
+def _model_status(provider: str, model: str) -> str:
+    normalized = normalize_model_id(model)
+    if provider == "sglang":
+        return str(SGLANG_MODEL_INFO.get(normalized, {}).get("status") or "")
+    if provider == "vllm":
+        return str(LOCAL_LARGE_MODEL_INFO.get(normalized, {}).get("status") or "")
+    if provider == "trtllm":
+        return str(TRTLLM_MODEL_INFO.get(normalized, {}).get("status") or "")
+    return ""
+
+
+def _is_config_disabled(provider: str, model: str) -> bool:
+    if provider == "sglang":
+        return is_sglang_model_disabled(model)
+    if provider == "vllm":
+        return is_vllm_model_disabled(model)
+    if provider == "trtllm":
+        return is_trtllm_model_disabled(model)
+    return False
+
+
+def _runtime_model_payload(provider: str, model: str) -> dict[str, Any]:
+    normalized = normalize_model_id(model)
+    info = get_local_model_info(normalized, provider)
+    status = _model_status(provider, normalized) or info["status"] or "unknown"
+    selectable = not _is_config_disabled(provider, normalized) and status not in UNSELECTABLE_MODEL_STATUSES
+    reason = ""
+    if provider == "trtllm":
+        reason = str(TRTLLM_MODEL_INFO.get(normalized, {}).get("reason") or "")
+    if not reason and not selectable:
+        reason = info["use_case"]
+    return {
+        "id": normalized,
+        "provider": provider,
+        "label": format_model_label(normalized, provider),
+        "status": status,
+        "selectable": selectable,
+        "reason": reason,
+        "use_case": info["use_case"],
+    }
+
+
+def list_runtime_models(provider: str | None = None, include_diagnostics: bool = False) -> list[dict[str, Any]]:
+    """Return provider model metadata, including disabled diagnostics on request."""
+
+    registry: dict[str, tuple[str, ...]] = {
+        "sglang": tuple(SGLANG_MODEL_INFO),
+        "vllm": tuple(LOCAL_LARGE_MODEL_INFO),
+        "trtllm": tuple(TRTLLM_MODEL_INFO),
+    }
+    providers = [provider] if provider else list(registry)
+    models: list[dict[str, Any]] = []
+    for provider_name in providers:
+        for model in registry.get(provider_name, ()):
+            payload = _runtime_model_payload(provider_name, model)
+            if include_diagnostics or payload["selectable"]:
+                models.append(payload)
+    return models
 
 
 def _configured_sglang_models() -> list[str]:

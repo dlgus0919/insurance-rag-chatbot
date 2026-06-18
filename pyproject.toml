@@ -1,3 +1,13 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+markers = [
+    "unit: pure unit tests without external services",
+    "api: API tests that may require the local app dependency set",
+    "rag: retrieval or RAG pipeline tests",
+    "graph: GraphRAG and ontology graph tests",
+    "ocr: OCR parsing tests; keep mocked/unit OCR here unless marked slow",
+    "llm: tests that require a live LLM server or model switch",
+    "dgx: tests that require DGX runtime paths or hardware",
+    "slow: long-running tests excluded from the default local loop",
+]

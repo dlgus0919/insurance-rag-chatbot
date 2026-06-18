@@ -20,7 +20,7 @@ from src.rag.quick_code import build_quick_code_prompt, retrieve_quick_code_chun
 from src.rag.table_store import TableStore
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
-from src.retrieval.index_mode import INDEX_MODES, resolve_effective_index_mode, resolve_index_paths
+from src.retrieval.index_mode import INDEX_MODES, resolve_effective_index_mode, resolve_index_paths, resolve_index_profile
 from src.retrieval.reranker import build_reranker
 from src.retrieval.vector_store import VectorStore
 
@@ -120,8 +120,8 @@ def get_rag_pipeline(
 
 def _resolve_index_paths(index_mode: str):
     normalized = (index_mode or "default").strip().lower()
-    if normalized in INDEX_MODES:
-        return resolve_index_paths(normalized)
+    if normalized in INDEX_MODES or normalized in {"", "basic", "기본", "기본 인덱스"}:
+        return resolve_index_paths(resolve_index_profile(normalized, user_facing=True))
     version = config.normalize_ocr_version(normalized)
     paths = config.get_ingest_paths(version)
     return paths["bm25_path"], paths["chroma_dir"]

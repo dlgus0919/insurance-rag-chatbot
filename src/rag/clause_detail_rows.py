@@ -98,6 +98,23 @@ def resolve_clause_detail_source_chunks_path(index_mode: str) -> Path:
     return config.CHUNKS_PATH
 
 
+def describe_clause_detail_rows(path: Path | str | None) -> dict[str, Any]:
+    """Return lightweight diagnostics for a clause_detail_rows manifest."""
+
+    if path is None:
+        return {"path": "", "exists": False, "row_count": 0, "status": "missing"}
+    resolved = Path(path)
+    if not resolved.exists():
+        return {"path": str(resolved), "exists": False, "row_count": 0, "status": "missing"}
+    row_count = len(load_clause_detail_row_records(str(resolved)))
+    return {
+        "path": str(resolved),
+        "exists": True,
+        "row_count": row_count,
+        "status": "ok" if row_count > 0 else "empty",
+    }
+
+
 @lru_cache(maxsize=8)
 def load_clause_detail_row_records(path_value: str) -> tuple[ClauseDetailRowRecord, ...]:
     path = Path(path_value)

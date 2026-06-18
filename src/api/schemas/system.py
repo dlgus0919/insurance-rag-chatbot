@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class HealthResponse(BaseModel):
@@ -26,3 +26,4 @@ class ModelListResponse(BaseModel):
 class SystemStatusResponse(BaseModel):
     status: str
     paths: dict[str, bool]
+    diagnostics: dict[str, object] = Field(default_factory=dict)

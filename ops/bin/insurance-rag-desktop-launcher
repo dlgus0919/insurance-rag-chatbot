@@ -211,8 +211,6 @@ print_choices() {
     printf 'current|sglang|%s\n' "$sglang_model"
   elif [[ -n "$vllm_model" ]]; then
     printf 'current|vllm|%s\n' "$vllm_model"
-  elif [[ -n "$trtllm_model" ]]; then
-    printf 'current|trtllm|%s\n' "$trtllm_model"
   elif [[ -n "$ollama_model" ]]; then
     printf 'current|ollama|%s\n' "$ollama_model"
   fi
@@ -226,10 +224,6 @@ print_choices() {
       printf 'start|sglang|%s\n' "$model"
     fi
   done
-
-  if trtllm_model_ready "$TRTLLM_GPT_OSS_MODEL"; then
-    printf 'start|trtllm|%s\n' "$TRTLLM_GPT_OSS_MODEL"
-  fi
 
   for model in \
     gemma-4-26b-a4b-nvfp4 \
@@ -348,8 +342,6 @@ choose_action() {
     rows+=("TRUE" "current|sglang|$sglang_model" "현재 실행 중인 SGLang 유지" "$sglang_model")
   elif [[ -n "$vllm_model" ]]; then
     rows+=("TRUE" "current|vllm|$vllm_model" "현재 실행 중인 vLLM 유지" "$vllm_model")
-  elif [[ -n "$trtllm_model" ]]; then
-    rows+=("TRUE" "current|trtllm|$trtllm_model" "현재 실행 중인 TensorRT-LLM 유지" "$trtllm_model")
   elif [[ -n "$ollama_model" ]]; then
     rows+=("TRUE" "current|ollama|$ollama_model" "현재 실행 중인 Ollama 유지" "$ollama_model")
   fi
@@ -371,9 +363,6 @@ choose_action() {
   fi
   if sglang_model_ready "qwen3-next-80b-a3b-thinking-fp8"; then
     rows+=("FALSE" "start|sglang|qwen3-next-80b-a3b-thinking-fp8" "SGLang 서버 시작/전환" "qwen3-next-80b-a3b-thinking-fp8")
-  fi
-  if trtllm_model_ready "$TRTLLM_GPT_OSS_MODEL"; then
-    rows+=("FALSE" "start|trtllm|$TRTLLM_GPT_OSS_MODEL" "TensorRT-LLM 서버 시작/전환" "$TRTLLM_GPT_OSS_MODEL")
   fi
   if vllm_model_ready "gemma-4-26b-a4b-nvfp4"; then
     rows+=("FALSE" "start|vllm|gemma-4-26b-a4b-nvfp4" "vLLM 서버 시작/전환" "gemma-4-26b-a4b-nvfp4")
