@@ -135,7 +135,7 @@ Expected: all audit artifact tests pass.
 .venv/bin/python -m pytest -q
 ```
 
-- [ ] **Step 3: Commit and push intentionally**
+- [x] **Step 3: Commit and push intentionally**
 
 ```bash
 git add docs/246_PROJECT_FULL_LOGIC_REVIEW_NEXT_PHASE_REPORT.md docs/250_PROJECT_LOGIC_REVIEW_POST_P0_P2_FINDINGS.md docs/superpowers/plans/2026-06-17-p0-source-grounded-knowledge-removal.md docs/superpowers/plans/2026-06-17-p1-runtime-operations-alignment.md docs/superpowers/plans/2026-06-17-p2-data-ocr-test-operations.md docs/superpowers/plans/2026-06-18-project-review-stabilization.md scripts/audit_runtime_artifacts.py tests/test_audit_runtime_artifacts.py
