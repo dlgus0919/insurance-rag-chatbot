@@ -50,6 +50,7 @@ class SpreadsheetSource:
     source_name: str
     data_type: str
     cloud_safe: bool = False
+    doc_short: str | None = None
 
 
 PDF_SOURCES: list[PdfSource] = [
@@ -151,6 +152,7 @@ SPREADSHEET_SOURCES: list[SpreadsheetSource] = [
         source_name="비급여 표준 모델 전체판",
         data_type="nonpay_standard",
         cloud_safe=False,
+        doc_short="비급여 표준모델",
     )
 ]
 
@@ -282,14 +284,11 @@ TRTLLM_BASE_URL: str = os.getenv("TRTLLM_BASE_URL", "http://127.0.0.1:8355/v1")
 TRTLLM_API_KEY: str = os.getenv("TRTLLM_API_KEY", "EMPTY")
 TRTLLM_DEFAULT_MODEL: str = os.getenv("TRTLLM_DEFAULT_MODEL", "openai/gpt-oss-120b")
 TRTLLM_MAX_TOKENS: int = int(os.getenv("TRTLLM_MAX_TOKENS", "4096"))
-TRTLLM_DEFAULT_CANDIDATES = ""
+TRTLLM_DEFAULT_CANDIDATES = "openai/gpt-oss-120b"
 TRTLLM_CANDIDATE_MODELS: list[str] = _parse_csv_env("TRTLLM_CANDIDATE_MODELS", TRTLLM_DEFAULT_CANDIDATES)
 TRTLLM_DISABLED_MODELS: set[str] = {
     model.strip()
-    for model in os.getenv(
-        "TRTLLM_DISABLED_MODELS",
-        "openai/gpt-oss-120b,gpt-oss-120b,/models/gpt-oss-120b",
-    ).split(",")
+    for model in os.getenv("TRTLLM_DISABLED_MODELS", "").split(",")
     if model.strip()
 }
 TRTLLM_MODEL_ENDPOINTS: dict[str, str] = _parse_sglang_model_endpoints(os.getenv("TRTLLM_MODEL_ENDPOINTS", ""))
