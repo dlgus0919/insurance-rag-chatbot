@@ -48,6 +48,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Read-only runtime artifact inventory")
     parser.add_argument("--root", default=".", help="Project root to inspect")
     parser.add_argument("--output", help="Optional JSON output path")
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="Omit per-file artifacts from the JSON payload",
+    )
     args = parser.parse_args()
 
     root = Path(args.root).resolve()
@@ -58,8 +63,9 @@ def main() -> int:
             category: sum(item.size_bytes for item in results if item.category == category)
             for category in sorted({item.category for item in results})
         },
-        "artifacts": [asdict(item) for item in results],
     }
+    if not args.summary_only:
+        payload["artifacts"] = [asdict(item) for item in results]
 
     text = json.dumps(payload, ensure_ascii=False, indent=2)
     if args.output:

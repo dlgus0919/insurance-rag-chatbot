@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+from pathlib import Path
+
 from scripts.audit_runtime_artifacts import classify_artifact
 
 
@@ -29,3 +34,22 @@ def test_git_pack_requires_separate_project():
 
     assert result.category == "separate_project"
     assert result.reason == "git_history_pack"
+
+
+def test_cli_summary_only_omits_artifact_list(tmp_path):
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "note.md").write_text("review note", encoding="utf-8")
+
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "audit_runtime_artifacts.py"
+    result = subprocess.run(
+        [sys.executable, str(script_path), "--root", str(tmp_path), "--summary-only"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(result.stdout)
+
+    assert payload["summary"]["review"] == len("review note")
+    assert "artifacts" not in payload
