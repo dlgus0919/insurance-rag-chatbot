@@ -386,13 +386,18 @@ choose_action() {
 
   local current_text
   current_text="앱: $app_running\nSGLang: ${sglang_model:-실행 안 됨}\nvLLM: ${vllm_model:-실행 안 됨}\nTensorRT-LLM: ${trtllm_model:-실행 안 됨}\nOllama: ${ollama_model:-실행 안 됨}"
+  local row_count window_height
+  row_count=$(( ${#rows[@]} / 4 ))
+  window_height=$(( row_count * 32 + 190 ))
+  (( window_height < 320 )) && window_height=320
+  (( window_height > 560 )) && window_height=560
 
   zenity --list \
     --radiolist \
     --title="신한EZ손해보험 보상지원 AI 챗봇 실행" \
     --text="사용할 LLM 서버를 선택하세요.\n\n$current_text" \
     --width=900 \
-    --height=430 \
+    --height="$window_height" \
     --column="선택" \
     --column="key" \
     --column="동작" \

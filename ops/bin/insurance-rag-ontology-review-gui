@@ -78,6 +78,15 @@ show_error() {
   zenity --error --title="$title" --width=680 --text="$message" 2>/dev/null || true
 }
 
+window_height() {
+  local lines="${1:-0}"
+  local rows="${2:-0}"
+  local height=$(( lines * 14 + rows * 34 + 150 ))
+  (( height < 300 )) && height=300
+  (( height > 680 )) && height=680
+  printf '%s\n' "$height"
+}
+
 run_apply_with_progress() {
   mkdir -p "$LOG_DIR"
   local log_file="$LOG_DIR/ontology_review_$(date +%Y%m%d_%H%M%S).log"
@@ -142,12 +151,15 @@ review_pending_candidates() {
       printf '[DRY-RUN] would review candidate: %s\n%s\n' "$candidate_id" "$detail"
       continue
     fi
+    local detail_lines review_height
+    detail_lines="$(printf '%s\n' "$detail" | wc -l | tr -d ' ')"
+    review_height="$(window_height "$detail_lines" 4)"
     decision="$(zenity --list \
       --radiolist \
       --title="온톨로지 후보 검토" \
       --text="$detail" \
       --width=760 \
-      --height=560 \
+      --height="$review_height" \
       --column="선택" \
       --column="decision" \
       --column="처리" \
@@ -218,12 +230,14 @@ main() {
   fi
 
   local action
+  local action_height
+  action_height="$(window_height 4 5)"
   action="$(zenity --list \
     --radiolist \
     --title="온톨로지 승인 대기" \
     --text="온톨로지 구축 대기 중인 개념이 ${count}건 있습니다.\n\n승인된 개념만 운영 GraphDB에 반영됩니다." \
     --width=760 \
-    --height=320 \
+    --height="$action_height" \
     --column="선택" \
     --column="action" \
     --column="작업" \
