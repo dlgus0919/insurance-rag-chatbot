@@ -8,18 +8,33 @@ from pathlib import Path
 from src import config
 
 INDEX_MODES = ("default", "v2_only", "v1_v2_combined")
+USER_FACING_DEFAULT_INDEX_MODE = "v2_only"
+USER_FACING_DEFAULT_ALIASES = {"", "default", "basic", "기본", "기본 인덱스"}
+
+
+def resolve_index_profile(mode: str | None = "default", *, user_facing: bool = True) -> str:
+    """Resolve an index mode without letting user paths skip corrected OCR data."""
+
+    normalized = (mode or "default").strip().lower()
+    if user_facing and normalized in USER_FACING_DEFAULT_ALIASES:
+        return USER_FACING_DEFAULT_INDEX_MODE
+    if normalized in INDEX_MODES:
+        return normalized
+    if user_facing:
+        return USER_FACING_DEFAULT_INDEX_MODE
+    raise ValueError(f"지원하지 않는 인덱스 모드입니다: {mode}")
 
 
 def resolve_effective_index_mode(question: str, requested_index_mode: str = "default") -> str:
     """질문 유형에 맞춰 기본 운영 인덱스를 안전하게 라우팅한다."""
 
     requested = (requested_index_mode or "default").strip().lower()
-    if requested != "default":
-        return requested
+    if requested not in USER_FACING_DEFAULT_ALIASES:
+        return resolve_index_profile(requested, user_facing=True)
 
     text = re.sub(r"\s+", "", question or "").lower()
     if not text:
-        return "default"
+        return USER_FACING_DEFAULT_INDEX_MODE
 
     if any(keyword in text for keyword in ("원본ocr", "보정본", "ocr비교", "원본+보정본", "v1", "v2")):
         return "v1_v2_combined"
@@ -41,7 +56,7 @@ def resolve_effective_index_mode(question: str, requested_index_mode: str = "def
     if any(keyword in text for keyword in corrected_ocr_keywords):
         return "v2_only"
 
-    return "default"
+    return USER_FACING_DEFAULT_INDEX_MODE
 
 
 def resolve_index_paths(mode: str) -> tuple[Path, Path]:

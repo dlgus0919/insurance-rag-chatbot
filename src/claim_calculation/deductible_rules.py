@@ -1,245 +1,157 @@
-"""4/5세대 실손보험 공제 규칙 테이블.
-
-하드코딩된 공제율 분기를 구조화된 데이터 테이블로 분리한다.
-약관 원문 근거:
-- 4세대: 실손의료비 표준약관 (금융위원회 2017)
-- 5세대: (별첨3)[별표 15] 표준약관(제5-13조제1항관련) (6).pdf
-"""
+"""Claim deductible rule compatibility API backed by approved manifests."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from decimal import Decimal
-from typing import Any
+from functools import lru_cache
+from pathlib import Path
+
+from src import config
+from src.claim_calculation.rule_registry import (
+    ClaimDeductibleRule,
+    ClaimPrescriptionRule,
+    ClaimRuleRegistry,
+    ClaimSpecialRule,
+)
 
 
-# 의료기관 등급 상수
-FACILITY_CLINIC = "clinic"              # 의원
-FACILITY_HOSPITAL = "hospital"          # 병원
-FACILITY_GENERAL = "general_hospital"   # 종합병원
-FACILITY_TERTIARY = "tertiary_hospital" # 상급종합병원
+FACILITY_CLINIC = "clinic"
+FACILITY_HOSPITAL = "hospital"
+FACILITY_GENERAL = "general_hospital"
+FACILITY_TERTIARY = "tertiary_hospital"
 
 FACILITY_GRADES = (FACILITY_CLINIC, FACILITY_HOSPITAL, FACILITY_GENERAL, FACILITY_TERTIARY)
 DEFAULT_FACILITY = FACILITY_CLINIC
 
+CLAIM_RULES_PATH = config.ROOT_DIR / "data" / "rules" / "claim_deductible_rules.active.json"
+
 
 @dataclass(frozen=True)
 class DeductibleRule:
-    """하나의 공제 규칙 행."""
+    """Runtime view of one approved deductible rule row."""
 
     generation: str
     category: str
-    visit_type: str          # "hospitalization" | "outpatient"
+    visit_type: str
     copay_ratio: Decimal
-    min_deductible: dict[str, Decimal]   # 의료기관 등급 -> 최소공제금액
+    min_deductible: dict[str, Decimal]
     per_visit_limit: Decimal | None = None
     annual_limit: Decimal | None = None
     annual_visit_limit: int | None = None
     description: str = ""
+    source_doc: str = ""
+    source_page: str | None = None
+    source_clause: str = ""
+    source_chunk_id: str = ""
+    source_status: str = ""
 
     def get_min_deductible(self, facility_grade: str = "") -> Decimal:
-        """의료기관 등급에 해당하는 최소공제금액을 반환한다."""
         grade = facility_grade if facility_grade in self.min_deductible else DEFAULT_FACILITY
         return self.min_deductible.get(grade, Decimal("0"))
 
 
 @dataclass(frozen=True)
 class PrescriptionRule:
-    """처방약(약제비) 전용 공제 규칙."""
+    """Runtime view of one approved prescription deductible rule row."""
 
     generation: str
-    deductible_amount: Decimal           # 고정 공제금액
+    deductible_amount: Decimal
     per_visit_limit: Decimal | None = None
     description: str = ""
+    source_doc: str = ""
+    source_page: str | None = None
+    source_clause: str = ""
+    source_chunk_id: str = ""
+    source_status: str = ""
 
 
-# ---------------------------------------------------------------------------
-# 4세대 규칙 테이블
-# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class SpecialRule:
+    """Runtime view of one approved special calculation rule."""
 
-_NO_MIN = {g: Decimal("0") for g in FACILITY_GRADES}
-
-_4TH_OUTPATIENT_BENEFIT_MIN = {
-    FACILITY_CLINIC: Decimal("10000"),
-    FACILITY_HOSPITAL: Decimal("15000"),
-    FACILITY_GENERAL: Decimal("20000"),
-    FACILITY_TERTIARY: Decimal("20000"),
-}
-
-_4TH_OUTPATIENT_NON_BENEFIT_MIN = {
-    FACILITY_CLINIC: Decimal("30000"),
-    FACILITY_HOSPITAL: Decimal("30000"),
-    FACILITY_GENERAL: Decimal("30000"),
-    FACILITY_TERTIARY: Decimal("30000"),
-}
-
-_4TH_RULES: list[DeductibleRule] = [
-    # 급여 입원
-    DeductibleRule(
-        generation="4th", category="급여", visit_type="hospitalization",
-        copay_ratio=Decimal("0.2"), min_deductible=_NO_MIN,
-        annual_limit=Decimal("50000000"),
-        description="4세대 급여 입원: 본인부담금 20%, 연간 5천만원 한도",
-    ),
-    # 급여 통원
-    DeductibleRule(
-        generation="4th", category="급여", visit_type="outpatient",
-        copay_ratio=Decimal("0.2"), min_deductible=_4TH_OUTPATIENT_BENEFIT_MIN,
-        per_visit_limit=Decimal("250000"), annual_visit_limit=180,
-        description="4세대 급여 통원: 20% 및 의료기관별 최소공제, 건당 25만원, 연 180건",
-    ),
-    # 비급여/3대비급여/중증/비중증 입원 (4세대는 모두 동일 30%)
-    DeductibleRule(
-        generation="4th", category="비급여", visit_type="hospitalization",
-        copay_ratio=Decimal("0.3"), min_deductible=_NO_MIN,
-        annual_limit=Decimal("50000000"),
-        description="4세대 비급여 입원: 30% 공제, 연간 5천만원 한도",
-    ),
-    # 비급여 통원
-    DeductibleRule(
-        generation="4th", category="비급여", visit_type="outpatient",
-        copay_ratio=Decimal("0.3"), min_deductible=_4TH_OUTPATIENT_NON_BENEFIT_MIN,
-        per_visit_limit=Decimal("250000"), annual_visit_limit=180,
-        description="4세대 비급여 통원: 30% 및 최소공제 3만원, 건당 25만원, 연 180건",
-    ),
-]
-
-# 4세대 처방약
-_4TH_PRESCRIPTION = PrescriptionRule(
-    generation="4th",
-    deductible_amount=Decimal("8000"),
-    per_visit_limit=Decimal("50000"),
-    description="4세대 처방약: 건당 8천원 공제, 건당 5만원 한도",
-)
+    special_type: str
+    payout_ratio: Decimal | None = None
+    daily_limit: Decimal | None = None
+    description: str = ""
+    source_doc: str = ""
+    source_page: str | None = None
+    source_clause: str = ""
+    source_chunk_id: str = ""
+    source_status: str = ""
 
 
-# ---------------------------------------------------------------------------
-# 5세대 규칙 테이블
-# ---------------------------------------------------------------------------
-
-_5TH_OUTPATIENT_BENEFIT_MIN = {
-    FACILITY_CLINIC: Decimal("10000"),
-    FACILITY_HOSPITAL: Decimal("15000"),
-    FACILITY_GENERAL: Decimal("20000"),
-    FACILITY_TERTIARY: Decimal("20000"),
-}
-
-_5TH_OUTPATIENT_SERIOUS_MIN = {
-    FACILITY_CLINIC: Decimal("30000"),
-    FACILITY_HOSPITAL: Decimal("30000"),
-    FACILITY_GENERAL: Decimal("30000"),
-    FACILITY_TERTIARY: Decimal("30000"),
-}
-
-_5TH_OUTPATIENT_NON_SERIOUS_MIN = {
-    FACILITY_CLINIC: Decimal("50000"),
-    FACILITY_HOSPITAL: Decimal("50000"),
-    FACILITY_GENERAL: Decimal("50000"),
-    FACILITY_TERTIARY: Decimal("50000"),
-}
-
-_5TH_RULES: list[DeductibleRule] = [
-    # 급여 입원
-    DeductibleRule(
-        generation="5th", category="급여", visit_type="hospitalization",
-        copay_ratio=Decimal("0.2"), min_deductible=_NO_MIN,
-        annual_limit=Decimal("50000000"),
-        description="5세대 급여 입원: 본인부담금 20%, 연간 5천만원 한도",
-    ),
-    # 급여 통원
-    DeductibleRule(
-        generation="5th", category="급여", visit_type="outpatient",
-        copay_ratio=Decimal("0.2"), min_deductible=_5TH_OUTPATIENT_BENEFIT_MIN,
-        per_visit_limit=Decimal("200000"),
-        description="5세대 급여 통원: 20% 및 의료기관별 최소공제, 건당 20만원",
-    ),
-    # 중증비급여 입원
-    DeductibleRule(
-        generation="5th", category="중증비급여", visit_type="hospitalization",
-        copay_ratio=Decimal("0.3"), min_deductible=_NO_MIN,
-        annual_limit=Decimal("50000000"),
-        description="5세대 중증 비급여 입원: 30%, 연간 5천만원 한도",
-    ),
-    # 중증비급여 통원
-    DeductibleRule(
-        generation="5th", category="중증비급여", visit_type="outpatient",
-        copay_ratio=Decimal("0.3"), min_deductible=_5TH_OUTPATIENT_SERIOUS_MIN,
-        per_visit_limit=Decimal("200000"),
-        description="5세대 중증 비급여 통원: 30% 및 최소공제 3만원, 건당 20만원",
-    ),
-    # 3대비급여 입원
-    DeductibleRule(
-        generation="5th", category="3대비급여", visit_type="hospitalization",
-        copay_ratio=Decimal("0.5"), min_deductible=_NO_MIN,
-        annual_limit=Decimal("50000000"),
-        description="5세대 3대비급여 입원: 50%, 연간 5천만원 한도",
-    ),
-    # 3대비급여 통원
-    DeductibleRule(
-        generation="5th", category="3대비급여", visit_type="outpatient",
-        copay_ratio=Decimal("0.5"), min_deductible=_5TH_OUTPATIENT_NON_SERIOUS_MIN,
-        per_visit_limit=Decimal("200000"),
-        description="5세대 3대비급여 통원: 50% 및 최소공제 5만원, 건당 20만원",
-    ),
-    # 비중증비급여 입원
-    DeductibleRule(
-        generation="5th", category="비중증비급여", visit_type="hospitalization",
-        copay_ratio=Decimal("0.5"), min_deductible=_NO_MIN,
-        annual_limit=Decimal("50000000"),
-        description="5세대 비중증 비급여 입원: 50%, 연간 5천만원 한도",
-    ),
-    # 비중증비급여 통원
-    DeductibleRule(
-        generation="5th", category="비중증비급여", visit_type="outpatient",
-        copay_ratio=Decimal("0.5"), min_deductible=_5TH_OUTPATIENT_NON_SERIOUS_MIN,
-        per_visit_limit=Decimal("200000"),
-        description="5세대 비중증 비급여 통원: 50% 및 최소공제 5만원, 건당 20만원",
-    ),
-    # 비급여(미분류) 입원
-    DeductibleRule(
-        generation="5th", category="비급여", visit_type="hospitalization",
-        copay_ratio=Decimal("0.5"), min_deductible=_NO_MIN,
-        annual_limit=Decimal("50000000"),
-        description="5세대 비급여(미분류) 입원: 비중증 기준 임시 50%",
-    ),
-    # 비급여(미분류) 통원
-    DeductibleRule(
-        generation="5th", category="비급여", visit_type="outpatient",
-        copay_ratio=Decimal("0.5"), min_deductible=_5TH_OUTPATIENT_NON_SERIOUS_MIN,
-        per_visit_limit=Decimal("200000"),
-        description="5세대 비급여(미분류) 통원: 비중증 기준 임시 50%",
-    ),
-]
-
-# 5세대 처방약
-_5TH_PRESCRIPTION = PrescriptionRule(
-    generation="5th",
-    deductible_amount=Decimal("8000"),
-    per_visit_limit=Decimal("50000"),
-    description="5세대 처방약: 건당 8천원 공제, 건당 5만원 한도",
-)
-
-
-# ---------------------------------------------------------------------------
-# 인덱스 구성 (lookup 성능)
-# ---------------------------------------------------------------------------
-
-def _build_index(rules: list[DeductibleRule]) -> dict[tuple[str, str, str], DeductibleRule]:
-    return {(r.generation, r.category, r.visit_type): r for r in rules}
-
-
-_RULE_INDEX: dict[tuple[str, str, str], DeductibleRule] = {
-    **_build_index(_4TH_RULES),
-    **_build_index(_5TH_RULES),
-}
-
-_PRESCRIPTION_INDEX: dict[str, PrescriptionRule] = {
-    "4th": _4TH_PRESCRIPTION,
-    "5th": _5TH_PRESCRIPTION,
-}
-
-# 4세대 비급여 카테고리 통합 매핑 (4세대는 3대비급여, 중증, 비중증 모두 동일 30%)
+_NO_MIN = {grade: Decimal("0") for grade in FACILITY_GRADES}
 _4TH_NON_BENEFIT_ALIASES = {"3대비급여", "중증비급여", "비중증비급여"}
+
+
+@lru_cache(maxsize=1)
+def _load_registry() -> ClaimRuleRegistry:
+    return ClaimRuleRegistry.from_file(Path(CLAIM_RULES_PATH))
+
+
+def _normalize_generation(generation: str) -> str:
+    return generation if generation in {"4th", "5th"} else "4th"
+
+
+def _normalize_visit_type(visit_type: str) -> str:
+    return visit_type if visit_type in {"hospitalization", "outpatient"} else "outpatient"
+
+
+def _rule_to_runtime(rule: ClaimDeductibleRule, facility_grade: str = "") -> DeductibleRule:
+    min_by_facility = dict(rule.min_deductible_by_facility)
+    if not min_by_facility:
+        if rule.facility_grade in FACILITY_GRADES:
+            min_by_facility = dict(_NO_MIN)
+            min_by_facility[rule.facility_grade] = rule.min_deductible
+        else:
+            min_by_facility = {grade: rule.min_deductible for grade in FACILITY_GRADES}
+    elif facility_grade and facility_grade not in min_by_facility:
+        min_by_facility[facility_grade] = rule.min_deductible
+    return DeductibleRule(
+        generation=rule.generation,
+        category=rule.category,
+        visit_type=rule.visit_type,
+        copay_ratio=rule.copay_ratio,
+        min_deductible=min_by_facility,
+        per_visit_limit=rule.per_visit_limit,
+        annual_limit=rule.annual_limit,
+        annual_visit_limit=rule.annual_visit_limit,
+        description=rule.description,
+        source_doc=rule.source_doc,
+        source_page=rule.source_page,
+        source_clause=rule.source_clause,
+        source_chunk_id=rule.source_chunk_id,
+        source_status=rule.source_status,
+    )
+
+
+def _prescription_to_runtime(rule: ClaimPrescriptionRule) -> PrescriptionRule:
+    return PrescriptionRule(
+        generation=rule.generation,
+        deductible_amount=rule.deductible_amount,
+        per_visit_limit=rule.per_visit_limit,
+        description=rule.description,
+        source_doc=rule.source_doc,
+        source_page=rule.source_page,
+        source_clause=rule.source_clause,
+        source_chunk_id=rule.source_chunk_id,
+        source_status=rule.source_status,
+    )
+
+
+def _special_to_runtime(rule: ClaimSpecialRule) -> SpecialRule:
+    return SpecialRule(
+        special_type=rule.special_type,
+        payout_ratio=rule.payout_ratio,
+        daily_limit=rule.daily_limit,
+        description=rule.description,
+        source_doc=rule.source_doc,
+        source_page=rule.source_page,
+        source_clause=rule.source_clause,
+        source_chunk_id=rule.source_chunk_id,
+        source_status=rule.source_status,
+    )
 
 
 def lookup_rule(
@@ -248,42 +160,38 @@ def lookup_rule(
     visit_type: str,
     facility_grade: str = "",
 ) -> DeductibleRule:
-    """세대, 카테고리, 방문형태에 해당하는 공제 규칙을 반환한다.
+    """Return a deductible rule for generation/category/visit type.
 
-    4세대의 경우 3대비급여, 중증비급여, 비중증비급여 모두 "비급여"와 동일 규칙.
-    미지원 조합은 해당 세대의 미분류 기본 규칙을 반환한다.
+    The function preserves the legacy fallback behavior while sourcing values
+    from the active rule manifest.
     """
-    gen = generation if generation in {"4th", "5th"} else "4th"
-    vt = visit_type if visit_type in {"hospitalization", "outpatient"} else "outpatient"
 
-    # 직접 매칭
-    key = (gen, category, vt)
-    rule = _RULE_INDEX.get(key)
-    if rule:
-        return rule
+    gen = _normalize_generation(generation)
+    vt = _normalize_visit_type(visit_type)
+    registry = _load_registry()
 
-    # 4세대 비급여 alias 매핑
+    candidates = [category]
     if gen == "4th" and category in _4TH_NON_BENEFIT_ALIASES:
-        fallback_key = (gen, "비급여", vt)
-        rule = _RULE_INDEX.get(fallback_key)
-        if rule:
-            return rule
+        candidates.append("비급여")
+    candidates.append("급여")
 
-    # 미분류 fallback: 해당 세대의 급여 규칙을 기본으로 반환
-    fallback_key = (gen, "급여", vt)
-    rule = _RULE_INDEX.get(fallback_key)
-    if rule:
-        return rule
+    for candidate in dict.fromkeys(candidates):
+        try:
+            return _rule_to_runtime(registry.lookup(gen, candidate, vt, facility_grade), facility_grade)
+        except KeyError:
+            continue
 
-    # 최종 fallback (도달하지 않아야 함)
-    return DeductibleRule(
-        generation=gen, category=category, visit_type=vt,
-        copay_ratio=Decimal("0.2"), min_deductible=_NO_MIN,
-        description="최종 fallback 규칙",
-    )
+    raise KeyError((gen, category, vt, facility_grade))
 
 
 def lookup_prescription_rule(generation: str) -> PrescriptionRule:
-    """세대에 해당하는 처방약 공제 규칙을 반환한다."""
-    gen = generation if generation in {"4th", "5th"} else "4th"
-    return _PRESCRIPTION_INDEX[gen]
+    """Return the approved prescription deductible rule for a generation."""
+
+    gen = _normalize_generation(generation)
+    return _prescription_to_runtime(_load_registry().lookup_prescription(gen))
+
+
+def lookup_special_rule(special_type: str) -> SpecialRule:
+    """Return an approved special calculation rule."""
+
+    return _special_to_runtime(_load_registry().lookup_special(special_type))

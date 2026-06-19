@@ -44,6 +44,39 @@ MODEL_ALIAS = {
 }
 
 
+@router.get("/documents")
+async def chat_documents(
+    user: User = Depends(require_permission("chat.stream")),
+) -> dict[str, list[dict[str, str]]]:
+    """Return document filters available to the chat UI."""
+
+    return {"documents": _document_filter_options()}
+
+
+def _document_filter_options() -> list[dict[str, str]]:
+    seen: dict[str, dict[str, str]] = {}
+    for source in config.PDF_SOURCES:
+        seen.setdefault(
+            source.doc_short,
+            {
+                "doc_short": source.doc_short,
+                "doc_name": source.doc_name,
+                "doc_type": source.doc_type,
+            },
+        )
+    for source in config.SPREADSHEET_SOURCES:
+        doc_short = source.doc_short or source.source_name
+        seen.setdefault(
+            doc_short,
+            {
+                "doc_short": doc_short,
+                "doc_name": source.source_name,
+                "doc_type": source.data_type,
+            },
+        )
+    return list(seen.values())
+
+
 @router.post("/stream")
 @limiter.limit("20/minute")
 async def chat_stream(

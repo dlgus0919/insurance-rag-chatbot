@@ -7,14 +7,6 @@ import { toast } from '../modules/ui.js';
 import { apiFetch, escapeHTML, formatSource, readSse } from '../utils.js';
 
 const FALLBACK_LOGO_SRC = '';
-const SCOPE_DOC_FILTERS = {
-  '전체': null,
-  '실손 약관': ['약관', '표준약관'],
-  '3대비급여': ['약관', '표준약관'],
-  '급여/비급여': ['심평원', '비급여 표준모델'],
-  '분류점수산정': ['심평원'],
-  '판례/심사례': ['상담사례집'],
-};
 const EMBEDDED_REVIEW_TEMPLATE_MARKERS = ['■ 섹션 1', '섹션 1️⃣', '【확정 근거】'];
 const EMBEDDED_REVIEW_SECTION_PATTERN = /^\s*■\s*섹션\s*\d/;
 const EMBEDDED_REVIEW_HEADING_PATTERN = /^\s*【[^】]+】\s*$/;
@@ -39,8 +31,10 @@ export async function initChatPage({ currentUser, onGoAdmin, onLogout } = {}) {
   setupChatInput();
   setupChatDelegatedHandlers();
   setupSettingsHandlers();
+  setupDocumentScopeHandlers();
   syncCurrentSessionFromActiveHistory();
 
+  await loadDocumentScopeOptions();
   await loadSessions();
 }
 
@@ -180,8 +174,6 @@ function setupChatDelegatedHandlers() {
       addClaimLine();
     } else if (action === 'remove-claim-line') {
       removeClaimLine(actionTarget);
-    } else if (action === 'toggle-scope') {
-      toggleScope(actionTarget);
     } else if (action === 'remove-tag') {
       actionTarget.closest('.tag-chip')?.remove();
     }
@@ -239,8 +231,11 @@ function setupSettingsHandlers() {
     page.addEventListener('click', (event) => {
       if (event.target.closest('.export-wrap')) return;
       if (event.target.closest('.adaptive-k-wrap')) return;
+      if (event.target.closest('.doc-scope')) return;
       document.getElementById('exp-menu')?.classList.remove('open');
       document.getElementById('adaptive-k-wrap')?.classList.remove('open');
+      const docScope = document.getElementById('doc-scope');
+      if (docScope) docScope.open = false;
     });
   }
 
@@ -255,6 +250,66 @@ function setupSettingsHandlers() {
     });
   }
   updateReasoningToggleVisibility();
+}
+
+function setupDocumentScopeHandlers() {
+  const scope = document.getElementById('doc-scope');
+  if (!scope || scope.dataset.scopeBound) return;
+  scope.dataset.scopeBound = 'true';
+  scope.addEventListener('change', (event) => {
+    const input = event.target;
+    if (!input?.matches?.('[data-doc-scope]')) return;
+
+    const all = scope.querySelector('[data-doc-scope][value="__all__"]');
+    if (input.value === '__all__' && input.checked) {
+      scope.querySelectorAll('[data-doc-scope]').forEach((item) => {
+        if (item !== input) item.checked = false;
+      });
+    } else if (input.checked && all) {
+      all.checked = false;
+    }
+    if (!selectedDocScopeInputs().length && all) all.checked = true;
+    updateDocScopeSummary();
+  });
+}
+
+async function loadDocumentScopeOptions() {
+  try {
+    const response = await apiFetch('/chat/documents');
+    const data = await response.json();
+    renderDocumentScopeOptions(data.documents || []);
+  } catch {
+    updateDocScopeSummary();
+  }
+}
+
+function renderDocumentScopeOptions(documents) {
+  const list = document.getElementById('doc-scope-options');
+  if (!list) return;
+  const options = (Array.isArray(documents) ? documents : [])
+    .filter((doc) => doc?.doc_short)
+    .map((doc) => {
+      const name = doc.doc_name && doc.doc_name !== doc.doc_short
+        ? `<small>${escapeHTML(doc.doc_name)}</small>`
+        : '';
+      return `<label class="scope-check"><input type="checkbox" data-doc-scope value="${escapeHTML(doc.doc_short)}"><span>${escapeHTML(doc.doc_short)}${name}</span></label>`;
+    });
+  if (options.length) list.innerHTML = options.join('');
+  updateDocScopeSummary();
+}
+
+function selectedDocScopeInputs() {
+  return [...document.querySelectorAll('[data-doc-scope]:checked')]
+    .filter((input) => input.value !== '__all__');
+}
+
+function updateDocScopeSummary() {
+  const summary = document.getElementById('doc-scope-summary');
+  if (!summary) return;
+  const selected = selectedDocScopeInputs();
+  summary.textContent = selected.length
+    ? `문서 범위: ${selected.length}개 선택`
+    : '문서 범위: 전체';
 }
 
 function syncCurrentSessionFromActiveHistory() {
@@ -480,9 +535,7 @@ function appendMsg(role, text, sources, track = true, uiPayload = null) {
   const isUser = role === 'user';
   const graphResult = role === 'bot' ? (uiPayload?.graphResult || null) : null;
   const messageText = role === 'bot' ? sanitizeAssistantAnswer(text, graphResult) : String(text || '');
-  const sourceHtml = sources?.length
-    ? `<div class="msg-sources">📄 참고: ${sources.map((source) => `<span class="src-badge">${escapeHTML(formatSource(source))}</span>`).join('')}</div>`
-    : '';
+  const sourceHtml = renderSourcesHtml(sources);
   const warnings = role === 'bot' ? (uiPayload?.warnings || []) : [];
   const legacyStructuredNotice = role === 'bot' ? Boolean(uiPayload?.legacyStructuredNotice) : false;
   const botExtras = role === 'bot'
@@ -769,7 +822,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
       + renderWarningHtml(warnings)
       + renderGraphReviewPathsHtml(graphResult)
       + renderGraphFactsHtml(graphResult)
-      + (sources.length ? `<div class="msg-sources">📄 참고: ${sources.map((source) => `<span class="src-badge">${escapeHTML(formatSource(source))}</span>`).join('')}</div>` : '');
+      + renderSourcesHtml(sources);
     msgs.push({
       role: 'bot',
       text: answer,
@@ -1258,16 +1311,11 @@ function autoH(element) {
   element.style.height = Math.min(element.scrollHeight, 120) + 'px';
 }
 
-function toggleScope(element) {
-  document.querySelectorAll('.scope-chip').forEach((chip) => chip.classList.remove('active'));
-  element.classList.add('active');
-}
-
 function getActiveScopeFilters() {
-  const active = document.querySelector('.scope-chip.active');
-  const scope = active?.dataset.scope || active?.textContent?.trim() || '전체';
-  const docFilter = SCOPE_DOC_FILTERS[scope];
-  return docFilter ? { doc_filter: docFilter } : {};
+  const selected = [...document.querySelectorAll('[data-doc-scope]:checked')]
+    .map((input) => input.value)
+    .filter((value) => value && value !== '__all__');
+  return selected.length ? { doc_filter: selected } : {};
 }
 
 function toggleExport(event) {
@@ -1277,6 +1325,26 @@ function toggleExport(event) {
 
 function filterVisibleSources(sources) {
   return (Array.isArray(sources) ? sources : []).filter((source) => source?.__kind !== 'assistant_meta');
+}
+
+function renderSourcesHtml(sources) {
+  const visibleSources = filterVisibleSources(sources);
+  if (!visibleSources.length) return '';
+  return `<div class="msg-sources">📄 참고: ${visibleSources.map(renderSourceBadgeHtml).join('')}</div>`;
+}
+
+function renderSourceBadgeHtml(source) {
+  const label = escapeHTML(formatSource(source));
+  const preview = sourcePreviewText(source);
+  const previewAttrs = preview
+    ? ` data-source-preview="${escapeHTML(preview)}" title="${escapeHTML(preview)}"`
+    : '';
+  return `<span class="src-badge"${previewAttrs}>${label}</span>`;
+}
+
+function sourcePreviewText(source) {
+  if (!source || typeof source === 'string') return '';
+  return String(source.snippet || source.content || source.text || '').trim();
 }
 
 function extractAssistantUiPayload(sources) {
@@ -1317,8 +1385,10 @@ async function exportChat(format) {
 
 export {
   formatSelectedModelLabel,
+  getActiveScopeFilters,
   hasRenderableGraphPayload,
   isReasoningSupportedModel,
+  renderSourcesHtml,
   sanitizeAssistantAnswer,
   renderGraphReviewPathsHtml,
   renderGraphFactsHtml,

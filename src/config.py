@@ -50,6 +50,7 @@ class SpreadsheetSource:
     source_name: str
     data_type: str
     cloud_safe: bool = False
+    doc_short: str | None = None
 
 
 PDF_SOURCES: list[PdfSource] = [
@@ -151,11 +152,13 @@ SPREADSHEET_SOURCES: list[SpreadsheetSource] = [
         source_name="비급여 표준 모델 전체판",
         data_type="nonpay_standard",
         cloud_safe=False,
+        doc_short="비급여 표준모델",
     )
 ]
 
 PDF_PATH: Path = PDF_SOURCES[0].path
 CHUNKS_PATH: Path = ROOT_DIR / "data" / "processed" / "chunks.jsonl"
+DIGITAL_PDF_TABLES_DIR: Path = ROOT_DIR / "data" / "extracted_digital_pdf"
 CHROMA_DIR: Path = ROOT_DIR / "data" / "index" / "chroma"
 BM25_PATH: Path = ROOT_DIR / "data" / "index" / "bm25.pkl"
 RELATIONAL_INDEX_DIR: Path = ROOT_DIR / "data" / "index" / "relational"
@@ -275,6 +278,28 @@ def vllm_base_url_for_model(model: str) -> str:
     """Return the OpenAI-compatible endpoint for a vLLM served model."""
 
     return VLLM_MODEL_ENDPOINTS.get(model, VLLM_BASE_URL).rstrip("/")
+
+
+TRTLLM_BASE_URL: str = os.getenv("TRTLLM_BASE_URL", "http://127.0.0.1:8355/v1")
+TRTLLM_API_KEY: str = os.getenv("TRTLLM_API_KEY", "EMPTY")
+TRTLLM_DEFAULT_MODEL: str = os.getenv("TRTLLM_DEFAULT_MODEL", "openai/gpt-oss-120b")
+TRTLLM_MAX_TOKENS: int = int(os.getenv("TRTLLM_MAX_TOKENS", "4096"))
+TRTLLM_DEFAULT_CANDIDATES = "openai/gpt-oss-120b"
+TRTLLM_CANDIDATE_MODELS: list[str] = _parse_csv_env("TRTLLM_CANDIDATE_MODELS", TRTLLM_DEFAULT_CANDIDATES)
+TRTLLM_DISABLED_MODELS: set[str] = {
+    model.strip()
+    for model in os.getenv("TRTLLM_DISABLED_MODELS", "").split(",")
+    if model.strip()
+}
+TRTLLM_MODEL_ENDPOINTS: dict[str, str] = _parse_sglang_model_endpoints(os.getenv("TRTLLM_MODEL_ENDPOINTS", ""))
+# TensorRT-LLM 120B must only appear when the endpoint is already alive.
+TRTLLM_STRICT_AVAILABLE_MODELS: bool = os.getenv("TRTLLM_STRICT_AVAILABLE_MODELS", "true").lower() == "true"
+
+
+def trtllm_base_url_for_model(model: str) -> str:
+    """Return the OpenAI-compatible endpoint for a TensorRT-LLM served model."""
+
+    return TRTLLM_MODEL_ENDPOINTS.get(model, TRTLLM_BASE_URL).rstrip("/")
 
 
 OLLAMA_DEFAULT_CANDIDATES = (

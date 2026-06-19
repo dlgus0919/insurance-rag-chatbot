@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections import OrderedDict
+from typing import Any
 
 import requests
 
@@ -22,9 +23,30 @@ OPENAI_MODEL_INFO: dict[str, dict] = {
 PROVIDER_LABELS: dict[str, str] = {
     "sglang": "Local · SGLang",
     "vllm": "Local · vLLM",
+    "trtllm": "Local · TensorRT-LLM",
     "ollama": "Local · Ollama",
     "openai": "Cloud · OpenAI",
 }
+
+LOCAL_STATUS_LABELS: dict[str, str] = {
+    "validated": "검증완료",
+    "answer_primary": "답변 주력",
+    "ontology_primary": "온톨로지 주력",
+    "fallback": "Fallback",
+    "vision_candidate": "이미지 후보",
+    "staged": "검증대상",
+    "experimental": "실험",
+    "disabled": "비활성",
+    "unsupported_on_dgx_spark": "DGX Spark 미지원",
+    "delete_candidate": "삭제 후보",
+    "optional": "Optional(삭제 가능)",
+}
+
+UNSELECTABLE_MODEL_STATUSES = {"disabled", "unsupported_on_dgx_spark"}
+DGX_SPARK_120B_UNSUPPORTED_REASON = (
+    "DGX Spark single-device runtime was tested through SGLang, vLLM, "
+    "Transformers, and TensorRT-LLM paths and classified as not usable for this project."
+)
 
 LOCAL_LARGE_MODEL_INFO: dict[str, dict[str, str]] = {
     "gemma-4-26b-a4b-nvfp4": {
@@ -100,6 +122,30 @@ SGLANG_MODEL_INFO: dict[str, dict[str, str]] = {
 
 SGLANG_SUPPORTED_MODEL_IDS: frozenset[str] = frozenset(SGLANG_MODEL_INFO)
 VLLM_SUPPORTED_MODEL_IDS: frozenset[str] = frozenset(LOCAL_LARGE_MODEL_INFO)
+TRTLLM_MODEL_INFO: dict[str, dict[str, str]] = {
+    "openai/gpt-oss-120b": {
+        "family": "GPT-OSS",
+        "size": "120B MXFP4",
+        "status": "unsupported_on_dgx_spark",
+        "use_case": "DGX Spark 단일 장비에서 편입 불가로 판정된 진단용 기록",
+        "reason": DGX_SPARK_120B_UNSUPPORTED_REASON,
+    },
+    "gpt-oss-120b": {
+        "family": "GPT-OSS",
+        "size": "120B MXFP4",
+        "status": "unsupported_on_dgx_spark",
+        "use_case": "DGX Spark 단일 장비에서 편입 불가로 판정된 진단용 alias",
+        "reason": DGX_SPARK_120B_UNSUPPORTED_REASON,
+    },
+    "/models/gpt-oss-120b": {
+        "family": "GPT-OSS",
+        "size": "120B MXFP4",
+        "status": "unsupported_on_dgx_spark",
+        "use_case": "DGX Spark 단일 장비에서 편입 불가로 판정된 컨테이너 경로 alias",
+        "reason": DGX_SPARK_120B_UNSUPPORTED_REASON,
+    },
+}
+TRTLLM_SUPPORTED_MODEL_IDS: frozenset[str] = frozenset(TRTLLM_MODEL_INFO)
 
 
 def _ordered_unique(items: list[str]) -> list[str]:
@@ -126,6 +172,12 @@ def is_vllm_model_supported(model: str) -> bool:
     return normalize_model_id(model) in VLLM_SUPPORTED_MODEL_IDS
 
 
+def is_trtllm_model_supported(model: str) -> bool:
+    """Return whether the app knows how to call this TensorRT-LLM model."""
+
+    return normalize_model_id(model) in TRTLLM_SUPPORTED_MODEL_IDS
+
+
 def is_sglang_model_disabled(model: str) -> bool:
     """Return whether a staged model is blocked for the current SGLang runtime."""
 
@@ -136,6 +188,74 @@ def is_vllm_model_disabled(model: str) -> bool:
     """Return whether a staged model is blocked for the current vLLM runtime."""
 
     return normalize_model_id(model) in config.VLLM_DISABLED_MODELS
+
+
+def is_trtllm_model_disabled(model: str) -> bool:
+    """Return whether a TensorRT-LLM model is blocked by local config."""
+
+    normalized = normalize_model_id(model)
+    info = TRTLLM_MODEL_INFO.get(normalized, {})
+    return normalized in config.TRTLLM_DISABLED_MODELS or info.get("status") in UNSELECTABLE_MODEL_STATUSES
+
+
+def _model_status(provider: str, model: str) -> str:
+    normalized = normalize_model_id(model)
+    if provider == "sglang":
+        return str(SGLANG_MODEL_INFO.get(normalized, {}).get("status") or "")
+    if provider == "vllm":
+        return str(LOCAL_LARGE_MODEL_INFO.get(normalized, {}).get("status") or "")
+    if provider == "trtllm":
+        return str(TRTLLM_MODEL_INFO.get(normalized, {}).get("status") or "")
+    return ""
+
+
+def _is_config_disabled(provider: str, model: str) -> bool:
+    if provider == "sglang":
+        return is_sglang_model_disabled(model)
+    if provider == "vllm":
+        return is_vllm_model_disabled(model)
+    if provider == "trtllm":
+        return is_trtllm_model_disabled(model)
+    return False
+
+
+def _runtime_model_payload(provider: str, model: str) -> dict[str, Any]:
+    normalized = normalize_model_id(model)
+    info = get_local_model_info(normalized, provider)
+    status = _model_status(provider, normalized) or info["status"] or "unknown"
+    selectable = not _is_config_disabled(provider, normalized) and status not in UNSELECTABLE_MODEL_STATUSES
+    reason = ""
+    if provider == "trtllm":
+        reason = str(TRTLLM_MODEL_INFO.get(normalized, {}).get("reason") or "")
+    if not reason and not selectable:
+        reason = info["use_case"]
+    return {
+        "id": normalized,
+        "provider": provider,
+        "label": format_model_label(normalized, provider),
+        "status": status,
+        "selectable": selectable,
+        "reason": reason,
+        "use_case": info["use_case"],
+    }
+
+
+def list_runtime_models(provider: str | None = None, include_diagnostics: bool = False) -> list[dict[str, Any]]:
+    """Return provider model metadata, including disabled diagnostics on request."""
+
+    registry: dict[str, tuple[str, ...]] = {
+        "sglang": tuple(SGLANG_MODEL_INFO),
+        "vllm": tuple(LOCAL_LARGE_MODEL_INFO),
+        "trtllm": tuple(TRTLLM_MODEL_INFO),
+    }
+    providers = [provider] if provider else list(registry)
+    models: list[dict[str, Any]] = []
+    for provider_name in providers:
+        for model in registry.get(provider_name, ()):
+            payload = _runtime_model_payload(provider_name, model)
+            if include_diagnostics or payload["selectable"]:
+                models.append(payload)
+    return models
 
 
 def _configured_sglang_models() -> list[str]:
@@ -196,6 +316,18 @@ def list_vllm_large_models() -> list[str]:
     return [model for model in candidates if not is_vllm_model_disabled(model)]
 
 
+def list_trtllm_large_models() -> list[str]:
+    """Return configured TensorRT-LLM models that are supported by app code."""
+
+    candidates = _ordered_unique(
+        [config.TRTLLM_DEFAULT_MODEL]
+        + list(config.TRTLLM_CANDIDATE_MODELS)
+        + list(config.TRTLLM_MODEL_ENDPOINTS.keys())
+    )
+    candidates = _filter_supported_model_ids(candidates, TRTLLM_SUPPORTED_MODEL_IDS)
+    return [model for model in candidates if not is_trtllm_model_disabled(model)]
+
+
 def _available_vllm_models() -> list[str]:
     """Return vLLM models exposed in the UI."""
 
@@ -237,6 +369,60 @@ def _runtime_available_vllm_models() -> list[str]:
     available: list[str] = []
     for model in _ordered_unique(candidates + served_models):
         served = served_by_endpoint.get(config.vllm_base_url_for_model(model), [])
+        if model in served:
+            available.append(model)
+    return _ordered_unique(available)
+
+
+def _available_trtllm_models() -> list[str]:
+    """Return TensorRT-LLM models exposed in the UI."""
+
+    candidates = list_trtllm_large_models()
+    endpoints = [
+        config.TRTLLM_BASE_URL,
+        *config.TRTLLM_MODEL_ENDPOINTS.values(),
+        *[config.trtllm_base_url_for_model(model) for model in candidates],
+    ]
+    served_by_endpoint = _served_models_by_endpoint(endpoints, api_key=config.TRTLLM_API_KEY)
+    served_models = [
+        model
+        for model in _filter_supported_model_ids([model for models in served_by_endpoint.values() for model in models], TRTLLM_SUPPORTED_MODEL_IDS)
+        if not is_trtllm_model_disabled(model)
+    ]
+    if not served_models and not config.TRTLLM_STRICT_AVAILABLE_MODELS:
+        return candidates
+
+    candidates = _ordered_unique(candidates + served_models)
+
+    available: list[str] = []
+    for model in candidates:
+        served = served_by_endpoint.get(config.trtllm_base_url_for_model(model), [])
+        if model in served:
+            available.append(model)
+    return _ordered_unique(available)
+
+
+def _runtime_available_trtllm_models() -> list[str]:
+    """Return only TensorRT-LLM models currently advertised by a live endpoint."""
+
+    candidates = list_trtllm_large_models()
+    endpoints = [
+        config.TRTLLM_BASE_URL,
+        *config.TRTLLM_MODEL_ENDPOINTS.values(),
+        *[config.trtllm_base_url_for_model(model) for model in candidates],
+    ]
+    served_by_endpoint = _served_models_by_endpoint(endpoints, api_key=config.TRTLLM_API_KEY)
+    served_models = [
+        model
+        for model in _filter_supported_model_ids([model for models in served_by_endpoint.values() for model in models], TRTLLM_SUPPORTED_MODEL_IDS)
+        if not is_trtllm_model_disabled(model)
+    ]
+    if not served_models:
+        return []
+
+    available: list[str] = []
+    for model in _ordered_unique(candidates + served_models):
+        served = served_by_endpoint.get(config.trtllm_base_url_for_model(model), [])
         if model in served:
             available.append(model)
     return _ordered_unique(available)
@@ -312,7 +498,7 @@ def parse_openai_candidate_models(raw: str | None, default: list[str] | None = N
 def normalize_model_id(model: str) -> str:
     """Remove known provider prefixes from a model ID."""
 
-    for prefix in ("openai:", "sglang:", "vllm:", "ollama:"):
+    for prefix in ("openai:", "sglang:", "vllm:", "trtllm:", "ollama:"):
         if model.startswith(prefix):
             return model.removeprefix(prefix)
     return model
@@ -384,6 +570,8 @@ def get_local_model_info(model: str, provider: str) -> dict[str, str]:
         info = SGLANG_MODEL_INFO.get(normalized, {})
     elif provider == "vllm":
         info = LOCAL_LARGE_MODEL_INFO.get(normalized, SGLANG_MODEL_INFO.get(normalized, {}))
+    elif provider == "trtllm":
+        info = TRTLLM_MODEL_INFO.get(normalized, {})
     else:
         info = {}
     status = str(info.get("status") or "").strip()
@@ -410,44 +598,34 @@ def format_model_label(model: str, provider: str) -> str:
     if provider == "sglang":
         info = SGLANG_MODEL_INFO.get(normalized)
         if info:
-            status_labels = {
-                "validated": "검증완료",
-                "answer_primary": "답변 주력",
-                "ontology_primary": "온톨로지 주력",
-                "fallback": "Fallback",
-                "vision_candidate": "이미지 후보",
-                "staged": "검증대상",
-                "disabled": "비활성",
-                "delete_candidate": "삭제 후보",
-                "optional": "Optional(삭제 가능)",
-            }
-            status = status_labels.get(info["status"], "검증대상")
+            status = LOCAL_STATUS_LABELS.get(info["status"], "검증대상")
             return f"Local · SGLang · {info['family']} · {info['size']} · {status}"
         return f"Local · SGLang · {normalized}"
     if provider == "vllm":
         info = LOCAL_LARGE_MODEL_INFO.get(normalized, SGLANG_MODEL_INFO.get(normalized))
         if info:
-            status_labels = {
-                "validated": "검증완료",
-                "answer_primary": "답변 주력",
-                "ontology_primary": "온톨로지 주력",
-                "fallback": "Fallback",
-                "vision_candidate": "이미지 후보",
-                "staged": "검증대상",
-                "disabled": "비활성",
-                "delete_candidate": "삭제 후보",
-                "optional": "Optional(삭제 가능)",
-            }
-            status = status_labels.get(info["status"], "검증대상")
+            status = LOCAL_STATUS_LABELS.get(info["status"], "검증대상")
             return f"Local · vLLM · {info['family']} · {info['size']} · {status}"
         return f"Local · vLLM · {normalized}"
+    if provider == "trtllm":
+        info = TRTLLM_MODEL_INFO.get(normalized)
+        if info:
+            status = LOCAL_STATUS_LABELS.get(info["status"], "검증대상")
+            return f"Local · TensorRT-LLM · {info['family']} · {info['size']} · {status}"
+        return f"Local · TensorRT-LLM · {normalized}"
     return f"Local · Ollama · {normalized}"
 
 
 def list_available_models() -> dict[str, list[str]]:
     """Return model candidates grouped by provider."""
 
-    grouped: dict[str, list[str]] = {"sglang": _available_sglang_models(), "vllm": _available_vllm_models(), "ollama": [], "openai": []}
+    grouped: dict[str, list[str]] = {
+        "sglang": _available_sglang_models(),
+        "vllm": _available_vllm_models(),
+        "trtllm": _available_trtllm_models(),
+        "ollama": [],
+        "openai": [],
+    }
     if is_ollama_allowed():
         try:
             installed = set(OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL).list_models())
@@ -467,6 +645,7 @@ def list_runtime_available_models() -> dict[str, list[str]]:
     grouped: dict[str, list[str]] = {
         "sglang": _runtime_available_sglang_models(),
         "vllm": _runtime_available_vllm_models(),
+        "trtllm": _runtime_available_trtllm_models(),
         "ollama": [],
         "openai": [],
     }
@@ -510,6 +689,20 @@ def build_llm(model: str, provider: str | None = None) -> LLMClient:
             base_url=config.vllm_base_url_for_model(selected_model),
             api_key=config.VLLM_API_KEY,
             provider="vllm",
+        )
+    if selected_provider == "trtllm":
+        if not is_trtllm_model_supported(selected_model):
+            raise RuntimeError(f"{selected_model} 모델은 현재 TensorRT-LLM provider에서 지원되지 않습니다.")
+        if is_trtllm_model_disabled(selected_model):
+            raise RuntimeError(f"{selected_model} 모델은 현재 TensorRT-LLM 런타임에서 비활성화되어 있습니다.")
+        from src.llm.openai_compatible_client import OpenAICompatibleClient
+
+        return OpenAICompatibleClient(
+            selected_model,
+            base_url=config.trtllm_base_url_for_model(selected_model),
+            api_key=config.TRTLLM_API_KEY,
+            max_tokens=config.TRTLLM_MAX_TOKENS,
+            provider="trtllm",
         )
     if selected_provider == "openai":
         if config.OFFLINE_MODE:

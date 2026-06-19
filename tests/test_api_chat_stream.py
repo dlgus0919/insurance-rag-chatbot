@@ -6,7 +6,7 @@ from src.api.db import Base
 from src.api.models import AuditLog, ChatMessage, ChatSession
 from src.api.rag_service import prepare_retrieved_context
 from src.api.routes import chat, sessions
-from src.api.routes.chat import _select_model as select_chat_model
+from src.api.routes.chat import _document_filter_options, _select_model as select_chat_model
 from src.api.schemas.chat import ChatRequest
 from src.api.schemas.sessions import SessionCreateRequest
 from src.auth.users import User
@@ -109,6 +109,15 @@ class FakePipeline:
 
     def build_prompt(self, question, chunks, graph_context=None):
         return f"질문: {question}\n근거 수: {len(chunks)}"
+
+
+def test_document_filter_options_include_configured_documents() -> None:
+    docs = _document_filter_options()
+    doc_shorts = [doc["doc_short"] for doc in docs]
+
+    assert "약관" in doc_shorts
+    assert "상담사례집" in doc_shorts
+    assert "비급여 표준모델" in doc_shorts
 
 
 def test_chat_default_model_uses_answer_primary_sglang(monkeypatch) -> None:

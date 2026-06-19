@@ -27,13 +27,14 @@ Starts the production FastAPI + SPA app for DGX local use.
 Default target: SGLang qwen3-next-80b-a3b-instruct-fp8 + http://127.0.0.1:18080
 
 Options:
-  --provider <sglang|vllm|ollama>  LLM provider. Default: sglang
+  --provider <sglang|vllm|trtllm|ollama>
+                                  LLM provider. Default: sglang
   --model <model-id>               Model id. Default: qwen3-next-80b-a3b-instruct-fp8
   --port <port>                    FastAPI app port. Default: 18080
   --host <host>                    FastAPI bind host. Default: 127.0.0.1
   --replace                        Stop existing app session/listener first.
   --skip-prepare                   Skip runtime artifact readiness check.
-  --no-llm-switch                  Do not call switch-sglang-model/switch-vllm-model.
+  --no-llm-switch                  Do not call provider switch wrappers.
   --foreground                     Run uvicorn in the current shell, not tmux.
   -h, --help                       Show this help.
 EOF
@@ -111,7 +112,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$PROVIDER" in
-  sglang|vllm|ollama) ;;
+  sglang|vllm|trtllm|ollama) ;;
   *) die "unsupported provider: $PROVIDER" ;;
 esac
 
@@ -123,10 +124,17 @@ if [[ "$MODEL_SET" == "0" ]]; then
     vllm)
       MODEL="${INSURANCE_RAG_MODEL:-gemma-4-31b-it-nvfp4}"
       ;;
+    trtllm)
+      die "TensorRT-LLM gpt-oss-120b is unsupported on this DGX Spark project state; use sglang or vllm."
+      ;;
     ollama)
       MODEL="${INSURANCE_RAG_MODEL:-exaone3.5:7.8b}"
       ;;
   esac
+fi
+
+if [[ "$PROVIDER" == "trtllm" ]]; then
+  die "TensorRT-LLM runtime is retained only for historical diagnostics and is not an app startup provider."
 fi
 
 if [[ "$FOREGROUND" == "1" ]]; then
@@ -154,6 +162,14 @@ if [[ "$NO_LLM_SWITCH" != "1" ]]; then
       "$VLLM_SWITCH_SCRIPT" "$MODEL"
       export VLLM_DEFAULT_MODEL="$MODEL"
       export VLLM_CANDIDATE_MODELS="$MODEL"
+      ;;
+    trtllm)
+      require_file "$TRTLLM_SWITCH_SCRIPT" "TensorRT-LLM switch script"
+      log "switching TensorRT-LLM model: $MODEL"
+      "$TRTLLM_SWITCH_SCRIPT" "$MODEL"
+      export TRTLLM_DEFAULT_MODEL="$MODEL"
+      export TRTLLM_CANDIDATE_MODELS="$MODEL"
+      export TRTLLM_STRICT_AVAILABLE_MODELS=true
       ;;
     ollama)
       ensure_ollama_gguf_model "$MODEL"

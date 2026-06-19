@@ -1,0 +1,207 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+MODEL="${1:-}"
+PROJECT_DIR="${INSURANCE_RAG_PROJECT_DIR:-/srv/shared/projects/insurance-rag-chatbot}"
+AI_OPS_ROOT="${AI_OPS_ROOT:-/srv/ai-ops}"
+LOG_DIR="${TRTLLM_LOG_DIR:-$AI_OPS_ROOT/logs/trtllm}"
+BASE_URL="${TRTLLM_BASE_URL:-http://127.0.0.1:8355/v1}"
+TRTLLM_API_KEY="${TRTLLM_API_KEY:-EMPTY}"
+# Keep this tag unchanged until it passes a real DGX TensorRT-LLM smoke run.
+TRTLLM_IMAGE="${TRTLLM_IMAGE:-nvcr.io/nvidia/tensorrt-llm/release:spark-single-gpu-dev}"
+TRTLLM_REQUIRE_LOCAL_IMAGE="${TRTLLM_REQUIRE_LOCAL_IMAGE:-true}"
+TRTLLM_CONTAINER_NAME="${TRTLLM_CONTAINER_NAME:-trtllm-gpt-oss-120b}"
+TRTLLM_SESSION="${TRTLLM_SESSION:-trtllm-gpt-oss-120b}"
+TRTLLM_SWITCH_TIMEOUT="${TRTLLM_SWITCH_TIMEOUT:-1800}"
+TRTLLM_WAIT_STEPS="${TRTLLM_SWITCH_WAIT_STEPS:-$((TRTLLM_SWITCH_TIMEOUT / 5))}"
+TRTLLM_HOST="${TRTLLM_HOST:-127.0.0.1}"
+TRTLLM_PORT="${TRTLLM_PORT:-8355}"
+TRTLLM_MODEL_HOST_PATH="${TRTLLM_MODEL_HOST_PATH:-$AI_OPS_ROOT/llm/models/gpt-oss-120b}"
+TRTLLM_MODEL_CONTAINER_PATH="${TRTLLM_MODEL_CONTAINER_PATH:-/models/gpt-oss-120b}"
+TRTLLM_MODEL_ARG="${TRTLLM_MODEL_ARG:-$TRTLLM_MODEL_CONTAINER_PATH}"
+TRTLLM_CONFIG_FILE="${TRTLLM_CONFIG_FILE:-$LOG_DIR/gpt-oss-120b-dgx-spark.yaml}"
+TRTLLM_CONFIG_CONTAINER_PATH="${TRTLLM_CONFIG_CONTAINER_PATH:-/configs/gpt-oss-120b-dgx-spark.yaml}"
+TRTLLM_CONFIG_FLAG="${TRTLLM_CONFIG_FLAG:---extra_llm_api_options}"
+TRTLLM_MAX_BATCH_SIZE="${TRTLLM_MAX_BATCH_SIZE:-1}"
+TRTLLM_MAX_NUM_TOKENS="${TRTLLM_MAX_NUM_TOKENS:-8192}"
+TRTLLM_MAX_SEQ_LEN="${TRTLLM_MAX_SEQ_LEN:-8192}"
+TRTLLM_KV_CACHE_FREE_GPU_MEMORY_FRACTION="${TRTLLM_KV_CACHE_FREE_GPU_MEMORY_FRACTION:-0.6}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  switch-trtllm-model <model-id>
+
+Supported model ids:
+  openai/gpt-oss-120b
+  gpt-oss-120b
+  /models/gpt-oss-120b
+
+This wrapper starts a TensorRT-LLM OpenAI-compatible server for the local
+GPT-OSS 120B model. It does not download Docker images or model weights.
+EOF
+}
+
+download_complete() {
+  local path="$1"
+  [[ -d "$path" ]] || return 1
+  [[ -f "$path/config.json" ]] || return 1
+  if [[ ! -f "$path/tokenizer.json" && ! -f "$path/tokenizer.model" ]]; then
+    return 1
+  fi
+  if ! find "$path" -maxdepth 1 \( -name 'model.safetensors' -o -name 'model-*.safetensors' -o -name '*.safetensors.index.json' \) -print -quit | grep -q .; then
+    return 1
+  fi
+  if find "$path" -path '*/.cache/huggingface/download/*' -name '*.incomplete' -print -quit | grep -q .; then
+    return 1
+  fi
+}
+
+trtllm_health_url() {
+  local base="${BASE_URL%/}"
+  base="${base%/v1}"
+  printf '%s/health\n' "$base"
+}
+
+trtllm_health_ok() {
+  curl -fsS "$(trtllm_health_url)" >/dev/null 2>&1
+}
+
+trtllm_chat_smoke() {
+  local model="$1"
+  curl -fsS "${BASE_URL%/}/chat/completions" \
+    -H 'Content-Type: application/json' \
+    -H "Authorization: Bearer $TRTLLM_API_KEY" \
+    -d "{\"model\":\"$model\",\"messages\":[{\"role\":\"user\",\"content\":\"한국어로 한 문장으로 테스트 응답하세요.\"}],\"max_tokens\":48,\"temperature\":0}" >/dev/null 2>&1
+}
+
+served_model_id() {
+  local payload="$1"
+  JSON_PAYLOAD="$payload" python3 - "$MODEL" "$TRTLLM_MODEL_ARG" "$TRTLLM_MODEL_CONTAINER_PATH" <<'PY'
+import json
+import os
+import sys
+
+preferred = [item for item in sys.argv[1:] if item]
+try:
+    data = json.loads(os.environ.get("JSON_PAYLOAD", ""))
+except Exception:
+    raise SystemExit(1)
+
+ids = [item.get("id", "") for item in data.get("data", []) if item.get("id")]
+for model_id in preferred:
+    if model_id in ids:
+        print(model_id)
+        raise SystemExit(0)
+for model_id in ids:
+    if "gpt-oss-120b" in model_id:
+        print(model_id)
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
+write_default_config() {
+  if [[ -f "$TRTLLM_CONFIG_FILE" ]]; then
+    if ! grep -q '^kv_cache_free_gpu_memory_fraction:' "$TRTLLM_CONFIG_FILE"; then
+      return
+    fi
+    mv "$TRTLLM_CONFIG_FILE" "$TRTLLM_CONFIG_FILE.invalid-kv-cache.$(date +%Y%m%d%H%M%S)"
+  fi
+  mkdir -p "$(dirname "$TRTLLM_CONFIG_FILE")"
+  cat >"$TRTLLM_CONFIG_FILE" <<YAML
+max_batch_size: $TRTLLM_MAX_BATCH_SIZE
+max_num_tokens: $TRTLLM_MAX_NUM_TOKENS
+max_seq_len: $TRTLLM_MAX_SEQ_LEN
+tensor_parallel_size: 1
+moe_expert_parallel_size: 1
+trust_remote_code: true
+kv_cache_config:
+  free_gpu_memory_fraction: $TRTLLM_KV_CACHE_FREE_GPU_MEMORY_FRACTION
+cuda_graph_config:
+  enable_padding: true
+  max_batch_size: $TRTLLM_MAX_BATCH_SIZE
+moe_config:
+  backend: TRTLLM
+YAML
+}
+
+if [[ -z "$MODEL" || "$MODEL" == "-h" || "$MODEL" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+case "$MODEL" in
+  openai/gpt-oss-120b|gpt-oss-120b|/models/gpt-oss-120b) ;;
+  *)
+    echo "unsupported TensorRT-LLM model: $MODEL" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
+
+mkdir -p "$LOG_DIR"
+
+if ! download_complete "$TRTLLM_MODEL_HOST_PATH"; then
+  echo "model download is not complete or required files are missing: $TRTLLM_MODEL_HOST_PATH" >&2
+  echo "required minimum: config.json, tokenizer file, safetensors shard/index, no *.incomplete downloads" >&2
+  exit 3
+fi
+command -v docker >/dev/null 2>&1 || {
+  echo "docker command is required for TensorRT-LLM" >&2
+  exit 3
+}
+command -v tmux >/dev/null 2>&1 || {
+  echo "tmux command is required for TensorRT-LLM switch wrapper" >&2
+  exit 3
+}
+if [[ "$TRTLLM_REQUIRE_LOCAL_IMAGE" == "true" ]] && ! docker image inspect "$TRTLLM_IMAGE" >/dev/null 2>&1; then
+  echo "TensorRT-LLM image is not available locally: $TRTLLM_IMAGE" >&2
+  echo "preload the image in the approved environment, or set TRTLLM_REQUIRE_LOCAL_IMAGE=false explicitly" >&2
+  exit 3
+fi
+
+if current_json=$(curl -fsS -H "Authorization: Bearer $TRTLLM_API_KEY" "${BASE_URL%/}/models" 2>/dev/null); then
+  if active_model="$(served_model_id "$current_json" 2>/dev/null)"; then
+    if trtllm_health_ok && trtllm_chat_smoke "$active_model"; then
+      echo "$active_model is already active via TensorRT-LLM"
+      exit 0
+    fi
+    echo "$active_model is listed but TensorRT-LLM health/chat smoke failed; restarting" >&2
+  fi
+fi
+
+write_default_config
+LOG_FILE="$LOG_DIR/gpt-oss-120b.log"
+
+tmux kill-session -t sglang-local 2>/dev/null || true
+tmux kill-session -t sglang-gemma4 2>/dev/null || true
+tmux kill-session -t vllm-gemma4 2>/dev/null || true
+tmux kill-session -t "$TRTLLM_SESSION" 2>/dev/null || true
+docker rm -f "$TRTLLM_CONTAINER_NAME" >/dev/null 2>&1 || true
+sleep 3
+
+cmd="docker rm -f '$TRTLLM_CONTAINER_NAME' >/dev/null 2>&1 || true; docker run --rm --gpus all --name '$TRTLLM_CONTAINER_NAME' --ipc=host --ulimit memlock=-1 --ulimit stack=67108864 -p '$TRTLLM_HOST:$TRTLLM_PORT:$TRTLLM_PORT' -e HF_HUB_OFFLINE=1 -e TRANSFORMERS_OFFLINE=1 -v '$TRTLLM_MODEL_HOST_PATH:$TRTLLM_MODEL_CONTAINER_PATH:ro' -v '$TRTLLM_CONFIG_FILE:$TRTLLM_CONFIG_CONTAINER_PATH:ro' '$TRTLLM_IMAGE' trtllm-serve '$TRTLLM_MODEL_ARG' --host 0.0.0.0 --port '$TRTLLM_PORT' '$TRTLLM_CONFIG_FLAG' '$TRTLLM_CONFIG_CONTAINER_PATH' 2>&1 | tee -a '$LOG_FILE'"
+tmux new-session -d -s "$TRTLLM_SESSION" "$cmd"
+
+for _ in $(seq 1 "$TRTLLM_WAIT_STEPS"); do
+  if json=$(curl -fsS -H "Authorization: Bearer $TRTLLM_API_KEY" "${BASE_URL%/}/models" 2>/dev/null); then
+    if request_model="$(served_model_id "$json" 2>/dev/null)"; then
+      if trtllm_health_ok && trtllm_chat_smoke "$request_model"; then
+        echo "$request_model is active via TensorRT-LLM"
+        exit 0
+      fi
+    fi
+  fi
+  if ! tmux has-session -t "$TRTLLM_SESSION" 2>/dev/null; then
+    echo "TensorRT-LLM session exited while loading $MODEL" >&2
+    tail -160 "$LOG_FILE" >&2 || true
+    exit 1
+  fi
+  sleep 5
+done
+
+echo "timeout waiting for $MODEL via TensorRT-LLM" >&2
+tail -160 "$LOG_FILE" >&2 || true
+exit 1

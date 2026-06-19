@@ -18,6 +18,11 @@ from src.rag.auto_params import AutoRagParams, apply_adaptive_k_to_hits
 from src.rag.clause_detail_rows import ClauseDetailRowRecord, ClauseDetailRowStore
 from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context, detect_retrieval_conflicts
 from src.rag.search_intent import SearchIntentPlan, classify_search_intent, extract_code_terms
+from src.rag.source_grounded_answers import (
+    build_absent_code_guard_answer,
+    build_generation_deductible_comparison_answer,
+    build_hira_fee_answer,
+)
 from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.hybrid import rrf_fuse
@@ -696,20 +701,6 @@ def _is_low_value_wide_range(hit: Hit) -> bool:
     char_count = hit.metadata.get("char_count", len(hit.document))
     return (end - start) > 10 and char_count < 300
 
-def _format_won(value: int) -> str:
-    return f"{value:,}원"
-
-
-def _parse_korean_amount(question: str, default: int) -> int:
-    match = re.search(r"(\d+(?:,\d{3})*)\s*만원", question)
-    if match:
-        return int(match.group(1).replace(",", "")) * 10000
-    match = re.search(r"(\d+(?:,\d{3})*)\s*원", question)
-    if match:
-        return int(match.group(1).replace(",", ""))
-    return default
-
-
 def _normalize_answer_text(answer: str) -> str:
     """모델 출력의 호환 문자와 HTML 줄바꿈 토큰을 UI/채점 친화적으로 정리한다."""
 
@@ -918,6 +909,11 @@ def _score_clause_detail_row(
     return score
 
 
+def _clause_detail_has_category_context(row_text: str, category_keywords: tuple[str, ...]) -> bool:
+    compact_row = _compact_text(row_text)
+    return any(_compact_text(keyword) in compact_row for keyword in category_keywords)
+
+
 def _extract_clause_detail_source_label(text: str) -> str:
     labels: list[str] = []
     article_pattern = _clause_detail_pattern("article_pattern", _CLAUSE_DETAIL_ARTICLE_PATTERN)
@@ -1068,6 +1064,8 @@ def _extract_clause_detail_table_rows(
                 continue
             if _clause_detail_has_coverage_conflict(compact_row, question_facets):
                 continue
+            if "deductible" in categories and not _clause_detail_has_category_context(match_text, category_keywords):
+                continue
             score = _score_clause_detail_row(
                 match_text,
                 question_facets=question_facets,
@@ -1164,6 +1162,8 @@ def _extract_clause_detail_text_rows(
                 continue
             if _clause_detail_has_coverage_conflict(compact_row, question_facets):
                 continue
+            if "deductible" in categories and not _clause_detail_has_category_context(row_text, category_keywords):
+                continue
             score = _score_clause_detail_row(
                 row_text,
                 question_facets=question_facets,
@@ -1247,6 +1247,8 @@ def _extract_clause_detail_manifest_rows(
             continue
         if _clause_detail_has_coverage_conflict(compact_row, question_facets):
             continue
+        if "deductible" in categories and not _clause_detail_has_category_context(match_text, category_keywords):
+            continue
         score = _score_clause_detail_row(
             match_text,
             question_facets=question_facets,
@@ -1302,9 +1304,7 @@ def _extract_clause_detail_evidence_rows(
 ) -> list[ClauseDetailEvidenceRow]:
     """검색된 chunk에서 질문 facet과 숫자를 함께 가진 source-grounded row를 찾는다."""
 
-    if manifest_rows and len(manifest_rows) >= limit:
-        return manifest_rows[:limit]
-    table_rows = _extract_clause_detail_table_rows(question, chunks, categories, limit=limit)
+    table_rows = _extract_clause_detail_table_rows(question, chunks, categories, limit=limit * 2)
     combined = list(manifest_rows or [])
     seen = {
         (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
@@ -1316,39 +1316,46 @@ def _extract_clause_detail_evidence_rows(
             continue
         combined.append(row)
         seen.add(key)
-        if len(combined) >= limit:
-            break
-    if len(combined) >= limit:
-        combined.sort(
-            key=lambda row: (
-                0 if row.source_kind in {"clause_detail_rows", "table_json"} else 1,
-                -row.score,
-                row.doc_short,
-                row.page_start or 0,
-                row.chunk_id,
-            )
-        )
-        return combined[:limit]
 
-    text_rows = _extract_clause_detail_text_rows(question, chunks, categories, limit=limit)
+    text_rows = _extract_clause_detail_text_rows(question, chunks, categories, limit=limit * 2)
     for row in text_rows:
         key = (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
         if key in seen:
             continue
         combined.append(row)
         seen.add(key)
-        if len(combined) >= limit:
-            break
-    combined.sort(
+    sorted_rows = sorted(
+        combined,
         key=lambda row: (
             0 if row.source_kind in {"clause_detail_rows", "table_json"} else 1,
             -row.score,
             row.doc_short,
             row.page_start or 0,
             row.chunk_id,
-        )
+        ),
     )
-    return combined[:limit]
+    selected: list[ClauseDetailEvidenceRow] = []
+    selected_keys: set[tuple[str, str, str]] = set()
+    covered_numbers: set[str] = set()
+    for row in sorted_rows:
+        key = (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
+        row_numbers = {number for number in row.numbers if number}
+        if not row_numbers or row_numbers.issubset(covered_numbers):
+            continue
+        selected.append(row)
+        selected_keys.add(key)
+        covered_numbers.update(row_numbers)
+        if len(selected) >= limit:
+            return selected
+    for row in sorted_rows:
+        key = (row.doc_short, str(row.page_start), _compact_text(row.value_text or row.text)[:220])
+        if key in selected_keys:
+            continue
+        selected.append(row)
+        selected_keys.add(key)
+        if len(selected) >= limit:
+            break
+    return selected
 
 
 def _format_clause_detail_source(row: ClauseDetailEvidenceRow) -> str:
@@ -1384,7 +1391,7 @@ def _build_clause_detail_evidence_answer(
         "deductible": "자기부담금/공제 기준",
     }
     label = " / ".join(category_labels.get(category, "조항 세부 기준") for category in categories)
-    displayed_rows = rows[:3]
+    displayed_rows = rows[:2]
     all_numbers: list[str] = []
     for row in displayed_rows:
         for number in row.numbers:
@@ -1500,12 +1507,9 @@ def _deterministic_guard_answer(
     graph_context: str | None = None,
     clause_detail_rows: list[ClauseDetailEvidenceRow] | None = None,
 ) -> str | None:
-    if "QZ999" in question.upper():
-        return (
-            "요청하신 QZ999 코드에 대한 로봇수술 관련 근거는 현재 문서에서 확인되지 않습니다. "
-            "문서 근거 없이 없는 코드를 사실처럼 답할 수 없습니다.\n"
-            "[출처: 구조화 안전 검증]"
-        )
+    absent_code_answer = build_absent_code_guard_answer(question, chunks)
+    if absent_code_answer:
+        return absent_code_answer
 
     clause_detail_answer = _deterministic_clause_detail_answer(
         question,
@@ -1515,53 +1519,14 @@ def _deterministic_guard_answer(
     if clause_detail_answer:
         return clause_detail_answer
 
-    compact = re.sub(r"\s+", "", question)
-    if all(term in question for term in ("소화기계", "5종", "수가코드")) and "SOL" in question:
-        return (
-            "신1-5종 수술분류표의 소화기계 카테고리에서 5종에 해당하는 수술은 구조화 근거상 다음 2건입니다.\n\n"
-            "| 수술명 | 수가코드/점수 | SOL 건강보험 지급비율 |\n"
-            "| --- | --- | --- |\n"
-            "| 간장 이식수술 | Q8040-Q8050, Q8140-Q8150 등 간이식술 계열 코드 | 100% 후보(확정 판단 아님) |\n"
-            "| 췌장 이식수술 | Q8061 췌이식술-부분 147,455.74점; Q8062 췌이식술-췌장 및 십이지장 159,457.97점 | 100% 후보(확정 판단 아님) |\n\n"
-            "SOL 지급비율은 GraphDB의 약관 매칭 후보이므로 확정 지급 판단이 아니라 검토 후보로 보아야 합니다.\n"
-            "[출처: 실무가이드 p.106-107 / 심평원 p.638 / 자사_SOL건강 p.384]"
-        )
-
-    if all(term in compact for term in ("4세대", "5세대", "비중증", "비급여")):
-        amount = _parse_korean_amount(question, default=200000)
-        fourth_deductible = min(amount, max(30000, int(amount * 0.3)))
-        fifth_deductible = min(amount, max(50000, int(amount * 0.5)))
-        return (
-            "비중증 비급여 통원 청구액 기준 비교입니다.\n\n"
-            "| 구분 | 공제 기준 | 공제금액 | 예상 지급금액 |\n"
-            "| --- | --- | ---: | ---: |\n"
-            f"| 4세대 | 비급여 통원 30%, 최소 30,000원 | {_format_won(fourth_deductible)} | {_format_won(amount - fourth_deductible)} |\n"
-            f"| 5세대 | 비중증 비급여 통원 50%, 최소 50,000원 | {_format_won(fifth_deductible)} | {_format_won(amount - fifth_deductible)} |\n\n"
-            "중증/비중증 구분과 실제 보장 특약 여부는 영수증 및 세부내역서로 최종 확인해야 합니다.\n"
-            "[출처: 구조화 공제 규칙]"
-        )
+    comparison_answer = build_generation_deductible_comparison_answer(question)
+    if comparison_answer:
+        return comparison_answer
 
     hira_ctx = _build_hira_fee_context(question, graph_context=graph_context)
-    if hira_ctx and "췌이식술" in hira_ctx:
-        if "소화기계" in question and "5종" in question:
-            return (
-                "신1-5종 수술분류표의 소화기계 카테고리에서 5종에 해당하는 수술은 구조화 근거상 다음 2건입니다.\n\n"
-                "| 수술명 | 수가코드/점수 | SOL 건강보험 지급비율 |\n"
-                "| --- | --- | --- |\n"
-                "| 간장 이식수술 | Q8040-Q8050, Q8140-Q8150 등 간이식술 계열 코드 | 100% 후보(확정 판단 아님) |\n"
-                "| 췌장 이식수술 | Q8061 췌이식술-부분 147,455.74점; Q8062 췌이식술-췌장 및 십이지장 159,457.97점 | 100% 후보(확정 판단 아님) |\n\n"
-                "SOL 지급비율은 GraphDB의 약관 매칭 후보이므로 확정 지급 판단이 아니라 검토 후보로 보아야 합니다.\n"
-                "[출처: 실무가이드 p.106-107 / 심평원 p.638 / 자사_SOL건강 p.384]"
-            )
-        if "췌이식술" in question or "췌장 이식" in question:
-            return (
-                "심평원 수가표 기준 췌이식술은 다음 두 행으로 구분됩니다.\n\n"
-                "| 분류 | 수가코드 | 점수 |\n"
-                "| --- | --- | ---: |\n"
-                "| 부분 | Q8061 | 147,455.74 |\n"
-                "| 췌장 및 십이지장 | Q8062 | 159,457.97 |\n\n"
-                "[출처: 심평원 p.638]"
-            )
+    hira_answer = build_hira_fee_answer(question, hira_ctx)
+    if hira_answer:
+        return hira_answer
     return None
 
 

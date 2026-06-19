@@ -49,12 +49,23 @@ def test_model_info_and_label_for_known_and_custom_models() -> None:
     assert "답변 주력" in factory.format_model_label("qwen3-next-80b-a3b-instruct-fp8", "sglang")
     assert "삭제 후보" in factory.format_model_label("gemma-4-26b-a4b-nvfp4", "vllm")
     assert "이미지 후보" in factory.format_model_label("gemma-4-31b-it-nvfp4", "vllm")
+    assert "Local · TensorRT-LLM · GPT-OSS · 120B MXFP4 · DGX Spark 미지원" == factory.format_model_label(
+        "openai/gpt-oss-120b",
+        "trtllm",
+    )
+    assert "Local · TensorRT-LLM · GPT-OSS · 120B MXFP4 · DGX Spark 미지원" == factory.format_model_label(
+        "/models/gpt-oss-120b",
+        "trtllm",
+    )
     ontology_info = factory.get_local_model_info("qwen3-30b-a3b-instruct-2507-fp8", "sglang")
     answer_info = factory.get_local_model_info("qwen3-next-80b-a3b-instruct-fp8", "sglang")
+    trtllm_info = factory.get_local_model_info("openai/gpt-oss-120b", "trtllm")
     assert ontology_info["status"] == "ontology_primary"
     assert ontology_info["optional"] == "false"
     assert answer_info["status"] == "answer_primary"
     assert answer_info["optional"] == "false"
+    assert trtllm_info["status"] == "unsupported_on_dgx_spark"
+    assert trtllm_info["optional"] == "false"
     local_info = factory.get_local_model_info("gemma-4-26b-a4b-nvfp4", "vllm")
     assert local_info["status"] == "delete_candidate"
     assert local_info["delete_candidate"] == "true"
@@ -144,6 +155,7 @@ def test_list_runtime_available_models_only_exposes_live_local_endpoints(monkeyp
     assert grouped == {
         "sglang": ["gpt-oss-20b"],
         "vllm": [],
+        "trtllm": [],
         "ollama": ["gemma3:4b", "gemma3:1b"],
         "openai": [],
     }
@@ -270,6 +282,91 @@ def test_gpt_oss_120b_is_not_exposed_by_default_and_is_disabled(monkeypatch) -> 
     assert grouped["sglang"] == ["qwen3-next-80b-a3b-instruct-fp8"]
     with pytest.raises(RuntimeError, match="비활성화"):
         factory.build_llm("gpt-oss-120b", provider="sglang")
+
+
+def test_trtllm_gpt_oss_120b_is_not_exposed_even_when_endpoint_advertises_it(monkeypatch) -> None:
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "qwen3-next-80b-a3b-instruct-fp8")
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["qwen3-next-80b-a3b-instruct-fp8"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", True)
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "VLLM_DEFAULT_MODEL", "gemma-4-31b-it-nvfp4")
+    monkeypatch.setattr(factory.config, "VLLM_CANDIDATE_MODELS", ["gemma-4-31b-it-nvfp4"])
+    monkeypatch.setattr(factory.config, "VLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "VLLM_STRICT_AVAILABLE_MODELS", True)
+    monkeypatch.setattr(factory.config, "VLLM_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "TRTLLM_BASE_URL", "http://127.0.0.1:8355/v1")
+    monkeypatch.setattr(factory.config, "TRTLLM_API_KEY", "EMPTY")
+    monkeypatch.setattr(factory.config, "TRTLLM_DEFAULT_MODEL", "openai/gpt-oss-120b")
+    monkeypatch.setattr(factory.config, "TRTLLM_CANDIDATE_MODELS", ["openai/gpt-oss-120b"])
+    monkeypatch.setattr(factory.config, "TRTLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "TRTLLM_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "TRTLLM_STRICT_AVAILABLE_MODELS", True)
+    monkeypatch.setenv("ALLOW_OLLAMA", "false")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+
+    def fake_served(endpoint, api_key=None):
+        if endpoint.endswith("8355/v1"):
+            return ["openai/gpt-oss-120b"]
+        return []
+
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", fake_served)
+
+    grouped = factory.list_available_models()
+    runtime = factory.list_runtime_available_models()
+
+    assert grouped["sglang"] == []
+    assert grouped["vllm"] == []
+    assert grouped["trtllm"] == []
+    assert runtime["trtllm"] == []
+
+
+def test_trtllm_local_path_model_id_is_hidden_when_endpoint_advertises_it(monkeypatch) -> None:
+    monkeypatch.setattr(factory.config, "SGLANG_DEFAULT_MODEL", "qwen3-next-80b-a3b-instruct-fp8")
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["qwen3-next-80b-a3b-instruct-fp8"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_STRICT_AVAILABLE_MODELS", True)
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "VLLM_DEFAULT_MODEL", "gemma-4-31b-it-nvfp4")
+    monkeypatch.setattr(factory.config, "VLLM_CANDIDATE_MODELS", ["gemma-4-31b-it-nvfp4"])
+    monkeypatch.setattr(factory.config, "VLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "VLLM_STRICT_AVAILABLE_MODELS", True)
+    monkeypatch.setattr(factory.config, "VLLM_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "TRTLLM_BASE_URL", "http://127.0.0.1:8355/v1")
+    monkeypatch.setattr(factory.config, "TRTLLM_API_KEY", "EMPTY")
+    monkeypatch.setattr(factory.config, "TRTLLM_DEFAULT_MODEL", "openai/gpt-oss-120b")
+    monkeypatch.setattr(factory.config, "TRTLLM_CANDIDATE_MODELS", ["openai/gpt-oss-120b"])
+    monkeypatch.setattr(factory.config, "TRTLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "TRTLLM_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "TRTLLM_STRICT_AVAILABLE_MODELS", True)
+    monkeypatch.setenv("ALLOW_OLLAMA", "false")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+    monkeypatch.setattr(factory, "_served_models_for_endpoint", lambda endpoint, api_key=None: ["/models/gpt-oss-120b"] if endpoint.endswith("8355/v1") else [])
+
+    grouped = factory.list_available_models()
+
+    assert grouped["trtllm"] == []
+
+
+def test_build_llm_rejects_unsupported_trtllm_120b(monkeypatch) -> None:
+    class FakeClient:
+        provider = "trtllm"
+
+        def __init__(self, model: str, **kwargs):
+            self.model = model
+            self.kwargs = kwargs
+            self.provider = kwargs.get("provider")
+
+    import src.llm.openai_compatible_client as module
+
+    monkeypatch.setattr(module, "OpenAICompatibleClient", FakeClient)
+    monkeypatch.setattr(factory.config, "TRTLLM_API_KEY", "EMPTY")
+    monkeypatch.setattr(factory.config, "TRTLLM_MAX_TOKENS", 4096)
+    monkeypatch.setattr(factory.config, "TRTLLM_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "trtllm_base_url_for_model", lambda model: "http://127.0.0.1:8355/v1")
+
+    with pytest.raises(RuntimeError, match="비활성화"):
+        factory.build_llm("openai/gpt-oss-120b", provider="trtllm")
 
 
 def test_strict_sglang_models_only_exposes_served_models(monkeypatch) -> None:

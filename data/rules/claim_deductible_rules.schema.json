@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "required_rule_fields": [
+    "rule_id",
+    "generation",
+    "category",
+    "visit_type",
+    "facility_grade",
+    "copay_ratio",
+    "min_deductible",
+    "source_doc",
+    "source_page",
+    "source_clause",
+    "source_chunk_id",
+    "approval_status"
+  ],
+  "allowed_approval_status": ["active", "pending", "held", "rejected"],
+  "special_rule_fields": [
+    "rule_id",
+    "special_type",
+    "payout_ratio",
+    "daily_limit",
+    "source_doc",
+    "source_page",
+    "source_clause",
+    "source_chunk_id",
+    "approval_status"
+  ],
+  "description": "Schema contract for source-grounded claim deductible rule rows. Runtime code interprets approved rows instead of embedding insurance payout values."
+}

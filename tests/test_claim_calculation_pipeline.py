@@ -457,6 +457,35 @@ def test_llm_wrong_fifth_generation_formula_is_overridden_by_deterministic_guard
     assert "from decimal import Decimal" not in result.executed_code
 
 
+def test_llm_not_covered_decision_without_rule_evidence_is_review_only(monkeypatch):
+    """LLM 단독 면책 판단은 최종 지급거절 근거가 아니며 rule layer 계산값을 유지한다."""
+    items = [ClaimItemInput(line_id="line_llm_not_covered", input_name="급여 통원 치료비", claimed_amount="100000", user_category_hint="급여")]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient")
+
+    class WrongDecisionLLM:
+        def generate(self, *_args, **_kwargs) -> str:
+            return (
+                "{"
+                '"decision":"not_covered",'
+                '"basis_summary":[{"source":"LLM 추정","content":"근거 없이 면책"}],'
+                '"variables":{},'
+                '"calculation_steps":["면책으로 판단"],'
+                '"formula_intent":"",'
+                '"uncertainties":["근거 부족"]'
+                "}"
+            )
+
+    monkeypatch.setattr("src.claim_calculation.planner.build_llm", lambda *_args, **_kwargs: WrongDecisionLLM())
+
+    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+        result = run_claim_calculation(None, items, context, use_fake_planner=False, provider="vllm", model_id="local-test")
+
+    assert result.payable_amount == "80000"
+    assert result.deductible == "20000"
+    assert result.calculation_status == "blocked_missing_info"
+    assert any("LLM 단독 면책 판단" in reason for reason in result.review_reasons)
+
+
 @pytest.mark.parametrize(
     ("generation", "category", "claimed", "expected_deductible", "expected_payable"),
     [
@@ -623,7 +652,7 @@ def test_mixed_receipt_line_items_total_like_medical_bill_detail():
         ),
     ],
 )
-def test_llm_generated_formula_variants_execute_in_sandbox(
+def test_llm_generated_formula_variants_do_not_override_rule_layer(
     monkeypatch,
     case_name: str,
     items: list[ClaimItemInput],
@@ -633,7 +662,7 @@ def test_llm_generated_formula_variants_execute_in_sandbox(
     expected_deductible: str,
     expected_payable: str,
 ):
-    """LLM이 생성한 서로 다른 계산 코드 형태도 샌드박스에서 실행되어 결과값으로 반영된다."""
+    """LLM이 생성한 계산 코드는 최종 계산 권한이 아니며 rule layer 결과가 유지된다."""
 
     class FormulaLLM:
         def generate(self, prompt: str, temperature: float = 0.0) -> str:
@@ -658,8 +687,10 @@ def test_llm_generated_formula_variants_execute_in_sandbox(
     assert result.claimed_amount == expected_claimed
     assert result.deductible == expected_deductible
     assert result.payable_amount == expected_payable
-    assert result.executed_code == formula
+    assert result.executed_code != formula
+    assert "claimed_amount = Decimal" in result.executed_code
     assert "Decimal" in result.executed_code
+    assert any("LLM 산식은 최종 계산 권한이 아니므로" in reason for reason in result.review_reasons)
 
 
 def test_pipeline_multi_line_claim_totals_by_generation():
@@ -911,7 +942,7 @@ def test_pipeline_mri_does_not_match_unrelated_treatment_material():
 
 
 def test_fake_planner_amount_formatting_variations():
-    """FakePlanner가 150000, 150,000, 150,000원 등 포맷팅된 금액을 예외 없이 파싱하여 계획을 세우는지 검증한다."""
+    """FakePlanner는 포맷팅된 금액을 파싱하되 도메인 산식은 만들지 않는다."""
     from src.claim_calculation.planner import FakePlanner
 
     test_cases = ["150000", "150,000", "150,000원", " 150,000 원 "]
@@ -930,7 +961,7 @@ def test_fake_planner_amount_formatting_variations():
         plan = planner.plan(items, context, [])
         assert plan.decision == "calculable"
         assert plan.variables["claimed_amount"] == "150000"
-        assert "Decimal('150000')" in plan.formula_intent
+        assert plan.formula_intent == ""
 
 
 def test_pipeline_confirmed_without_evidence_excluded():
