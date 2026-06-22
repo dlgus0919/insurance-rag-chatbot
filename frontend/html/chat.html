@@ -28,17 +28,13 @@
       </div>
     </div>
     <div class="sidebar-bottom">
-      <div id="admin-link" class="admin-link hidden" data-action="admin">
-        <svg width="13" height="13" fill="none" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="3" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/><rect x="14" y="14" width="7" height="7" rx="1" stroke="currentColor" stroke-width="1.5"/></svg>
-        관리자 페이지
-      </div>
-      <div class="user-row">
+      <button id="admin-link" class="user-row" type="button">
         <div class="user-av" id="uav">U</div>
         <div>
           <div class="user-name" id="uname">사용자</div>
           <div class="user-role-txt" id="urole">일반 사용자</div>
         </div>
-      </div>
+      </button>
       <button id="logout-btn" class="logout-btn" type="button" data-action="logout">
         <svg width="13" height="13" fill="none" viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         로그아웃
@@ -56,14 +52,46 @@
           </svg>
         </button>
         <div class="adaptive-k-menu" id="adaptive-k-menu">
-          <label class="auto-param-toggle" id="auto-param-toggle-wrap" title="질의 유형에 따라 Top-K와 온도를 자동으로 조절합니다.">
-            <input type="checkbox" id="auto-param-toggle" checked>
-            <span class="auto-param-toggle-text">검색/답변 자동 설정</span>
-          </label>
-          <label class="adaptive-k-toggle" id="adaptive-k-toggle-wrap" title="Reranker 점수 급락 지점을 기준으로 최종 검색 청크 수를 줄입니다.">
-            <input type="checkbox" id="adaptive-k-toggle" checked>
-            <span>Semi-adaptive K</span>
-          </label>
+          <div class="settings-section">
+            <label class="auto-param-toggle" id="auto-param-toggle-wrap" title="질의 유형에 따라 Top-K와 온도를 자동으로 조절합니다.">
+              <input type="checkbox" id="auto-param-toggle" checked>
+              <span class="auto-param-toggle-text">검색/답변 자동 설정</span>
+            </label>
+          </div>
+          <div class="settings-section">
+            <div class="settings-section-title">OCR 인덱스</div>
+            <div class="settings-radio-group">
+              <label class="radio-pill">
+                <input type="radio" name="ocr-index" value="v2_only" checked>
+                <span>보정본 OCR만</span>
+              </label>
+              <label class="radio-pill">
+                <input type="radio" name="ocr-index" value="v1_v2_combined">
+                <span>원본+보정본 OCR 통합</span>
+              </label>
+            </div>
+          </div>
+          <div class="settings-section doc-scope" id="doc-scope">
+            <div class="settings-section-title">문서 범위</div>
+            <div class="doc-scope-summary" id="doc-scope-summary">전체</div>
+            <div class="doc-scope-menu">
+              <label class="scope-check">
+                <input type="checkbox" data-doc-scope value="__all__" checked>
+                <span>전체 문서</span>
+              </label>
+              <div id="doc-scope-options">
+                <label class="scope-check"><input type="checkbox" data-doc-scope value="심평원"><span>심평원<small>건강보험 행위 급여·비급여 목록표 및 급여 상대가치점수</small></span></label>
+                <label class="scope-check"><input type="checkbox" data-doc-scope value="약관"><span>약관<small>신한 이지로운 실손의료보험(무배당) 약관</small></span></label>
+                <label class="scope-check"><input type="checkbox" data-doc-scope value="가이드북"><span>가이드북<small>보상가이드북</small></span></label>
+                <label class="scope-check"><input type="checkbox" data-doc-scope value="자사_SOL건강"><span>자사_SOL건강<small>신한 SOL 처음건강보험(무배당)(자동갱신형) 약관</small></span></label>
+                <label class="scope-check"><input type="checkbox" data-doc-scope value="자사_SOL운전자"><span>자사_SOL운전자<small>신한 SOL 처음운전자보험(무배당) 약관</small></span></label>
+                <label class="scope-check"><input type="checkbox" data-doc-scope value="표준약관"><span>표준약관<small>표준약관(제5-13조제1항관련)</small></span></label>
+                <label class="scope-check"><input type="checkbox" data-doc-scope value="실무가이드"><span>실무가이드<small>Claim 실무종합가이드</small></span></label>
+                <label class="scope-check"><input type="checkbox" data-doc-scope value="상담사례집"><span>상담사례집<small>소비자 상담 주요 사례집</small></span></label>
+                <label class="scope-check"><input type="checkbox" data-doc-scope value="비급여 표준모델"><span>비급여 표준모델<small>비급여 표준 모델 전체판</small></span></label>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="s-divider" id="manual-param-divider"></div>
@@ -87,10 +115,6 @@
         <span class="model-badge-label">활성 모델</span>
         <span class="model-badge-value" id="active-model-label">확인 중...</span>
       </div>
-      <div class="model-switcher-wrap" id="model-switcher-wrap">
-        <label class="model-switcher-label" for="active-model-select">모델 변경</label>
-        <select class="model-switcher-select" id="active-model-select" aria-label="활성 모델 변경"></select>
-      </div>
       <label class="reasoning-toggle hidden" id="reasoning-toggle-wrap" title="내부 추론 문장은 화면에 표시하지 않습니다.">
         <input type="checkbox" id="reasoning-mode-toggle">
         <span class="reasoning-toggle-text">추론 모드</span>
@@ -113,18 +137,6 @@
       <span class="mode-label">검색 모드</span>
       <button class="mode-tab active" type="button" data-mode="general">일반 질의</button>
       <button class="mode-tab" type="button" data-mode="claim">보험금 계산</button>
-    </div>
-
-    <div class="ocr-index-bar">
-      <span class="mode-label">OCR 인덱스</span>
-      <label class="radio-pill">
-        <input type="radio" name="ocr-index" value="v2_only" checked>
-        <span>보정본 OCR만</span>
-      </label>
-      <label class="radio-pill">
-        <input type="radio" name="ocr-index" value="v1_v2_combined">
-        <span>원본+보정본 OCR 통합</span>
-      </label>
     </div>
 
     <div class="sub-panel" id="panel-claim">
@@ -204,26 +216,6 @@
     <div class="chat-messages" id="chat-msgs"></div>
 
     <div class="input-area">
-      <details class="doc-scope" id="doc-scope">
-        <summary id="doc-scope-summary">문서 범위: 전체</summary>
-        <div class="doc-scope-menu">
-          <label class="scope-check">
-            <input type="checkbox" data-doc-scope value="__all__" checked>
-            <span>전체 문서</span>
-          </label>
-          <div id="doc-scope-options">
-            <label class="scope-check"><input type="checkbox" data-doc-scope value="심평원"><span>심평원<small>건강보험 행위 급여·비급여 목록표 및 급여 상대가치점수</small></span></label>
-            <label class="scope-check"><input type="checkbox" data-doc-scope value="약관"><span>약관<small>신한 이지로운 실손의료보험(무배당) 약관</small></span></label>
-            <label class="scope-check"><input type="checkbox" data-doc-scope value="가이드북"><span>가이드북<small>보상가이드북</small></span></label>
-            <label class="scope-check"><input type="checkbox" data-doc-scope value="자사_SOL건강"><span>자사_SOL건강<small>신한 SOL 처음건강보험(무배당)(자동갱신형) 약관</small></span></label>
-            <label class="scope-check"><input type="checkbox" data-doc-scope value="자사_SOL운전자"><span>자사_SOL운전자<small>신한 SOL 처음운전자보험(무배당) 약관</small></span></label>
-            <label class="scope-check"><input type="checkbox" data-doc-scope value="표준약관"><span>표준약관<small>표준약관(제5-13조제1항관련)</small></span></label>
-            <label class="scope-check"><input type="checkbox" data-doc-scope value="실무가이드"><span>실무가이드<small>Claim 실무종합가이드</small></span></label>
-            <label class="scope-check"><input type="checkbox" data-doc-scope value="상담사례집"><span>상담사례집<small>소비자 상담 주요 사례집</small></span></label>
-            <label class="scope-check"><input type="checkbox" data-doc-scope value="비급여 표준모델"><span>비급여 표준모델<small>비급여 표준 모델 전체판</small></span></label>
-          </div>
-        </div>
-      </details>
       <div class="input-row">
         <textarea class="chat-ta" id="chat-input" placeholder="보상 관련 질문을 입력하세요... (Shift+Enter 줄바꿈)" rows="1"></textarea>
         <button class="send-btn" type="button" data-action="send-message">

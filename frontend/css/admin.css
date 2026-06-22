@@ -9,6 +9,11 @@
   .nav-item:hover{background:rgba(255,255,255,0.07);color:#fff;}
   .nav-item.active{background:rgba(0,70,255,0.35);color:#fff;font-weight:700;}
   .nav-item svg{width:15px;height:15px;flex-shrink:0;}
+  .admin-sidebar .sidebar-bottom{padding:10px 10px 12px;border-top:1px solid rgba(255,255,255,0.07);}
+  .admin-back-btn{display:flex;align-items:center;gap:8px;width:100%;min-height:40px;padding:9px 11px;margin-bottom:4px;border:1px solid rgba(255,255,255,0.14);border-radius:8px;background:rgba(255,255,255,0.08);color:#fff;font-size:13px;font-weight:700;font-family:var(--font);cursor:pointer;text-align:left;transition:background .15s,border-color .15s,color .15s;}
+  .admin-back-btn:hover{background:rgba(0,70,255,0.28);border-color:rgba(255,255,255,0.28);}
+  .admin-back-btn:focus-visible{outline:2px solid rgba(255,255,255,0.85);outline-offset:2px;}
+  .admin-back-btn svg{width:15px;height:15px;flex-shrink:0;}
   .admin-main{flex:1;display:flex;flex-direction:column;height:100vh;overflow:hidden;}
   .admin-topbar{background:var(--white);border-bottom:1px solid var(--border);padding:0 24px;display:flex;align-items:center;justify-content:space-between;height:54px;flex-shrink:0;}
   .admin-topbar h1{font-size:15px;font-weight:900;color:var(--navy);}
