@@ -24,7 +24,6 @@ export async function initChatPage({ currentUser, onGoAdmin, onLogout } = {}) {
 
   applyUserToChatPage();
   applySelectedModelLabel();
-  await setupModelSwitcher();
   renderWelcome();
   showFreshChatNoticeIfNeeded();
   setupChatMenuHandlers({ onGoAdmin, onLogout });
@@ -206,24 +205,9 @@ function setupSettingsHandlers() {
         autoParamToggle.checked ? 'on' : 'off'
       );
       syncAutoParamControls();
-      syncAdaptiveKControls();
     });
   }
   syncAutoParamControls();
-
-  const adaptiveKToggle = document.getElementById('adaptive-k-toggle');
-  if (adaptiveKToggle && !adaptiveKToggle.dataset.adaptiveKBound) {
-    adaptiveKToggle.dataset.adaptiveKBound = 'true';
-    adaptiveKToggle.checked = isAdaptiveKEnabled();
-    adaptiveKToggle.addEventListener('change', () => {
-      localStorage.setItem(
-        STORAGE_KEYS.ADAPTIVE_K,
-        adaptiveKToggle.checked ? 'on' : 'off'
-      );
-      syncAdaptiveKControls();
-    });
-  }
-  syncAdaptiveKControls();
 
   const page = document.getElementById('page-chat');
   if (page && !page.dataset.exportCloseBound) {
@@ -234,8 +218,6 @@ function setupSettingsHandlers() {
       if (event.target.closest('.doc-scope')) return;
       document.getElementById('exp-menu')?.classList.remove('open');
       document.getElementById('adaptive-k-wrap')?.classList.remove('open');
-      const docScope = document.getElementById('doc-scope');
-      if (docScope) docScope.open = false;
     });
   }
 
@@ -308,8 +290,8 @@ function updateDocScopeSummary() {
   if (!summary) return;
   const selected = selectedDocScopeInputs();
   summary.textContent = selected.length
-    ? `문서 범위: ${selected.length}개 선택`
-    : '문서 범위: 전체';
+    ? `${selected.length}개 선택`
+    : '전체';
 }
 
 function syncCurrentSessionFromActiveHistory() {
@@ -335,7 +317,16 @@ function applyUserToChatPage() {
   if (uname) uname.textContent = me.name;
   if (uav) uav.textContent = me.name[0] || 'U';
   if (urole) urole.textContent = me.role === 'admin' ? '관리자' : '일반 사용자';
-  if (adminLink) adminLink.classList.toggle('hidden', me.role !== 'admin');
+  if (adminLink) {
+    adminLink.disabled = me.role !== 'admin';
+    if (me.role === 'admin') {
+      adminLink.dataset.action = 'admin';
+      adminLink.title = '관리자 페이지';
+    } else {
+      delete adminLink.dataset.action;
+      adminLink.removeAttribute('title');
+    }
+  }
 }
 
 function applySelectedModelLabel() {
@@ -343,62 +334,6 @@ function applySelectedModelLabel() {
   if (!label) return;
   label.textContent = formatSelectedModelLabel(getSelectedModel());
   updateReasoningToggleVisibility();
-}
-
-async function setupModelSwitcher() {
-  const select = document.getElementById('active-model-select');
-  const wrap = document.getElementById('model-switcher-wrap');
-  if (!select || !wrap) return;
-
-  select.disabled = true;
-  select.innerHTML = '<option value="">모델 확인 중...</option>';
-
-  try {
-    const response = await apiFetch('/system/models');
-    const payload = await response.json();
-    const localModels = Array.isArray(payload.providers?.local) ? payload.providers.local : [];
-
-    if (!localModels.length) {
-      wrap.classList.add('hidden');
-      return;
-    }
-
-    const currentModel = getSelectedModel();
-    const defaultModel = payload.defaults?.local || localModels[0]?.id || '';
-    const resolvedModel = localModels.some((model) => model.id === currentModel)
-      ? currentModel
-      : defaultModel;
-
-    select.innerHTML = localModels.map((model) => `
-      <option value="${escapeHTML(model.id)}">${escapeHTML(model.label || formatSelectedModelLabel(model.id))}</option>
-    `).join('');
-
-    if (resolvedModel && resolvedModel !== currentModel) {
-      localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, resolvedModel);
-      localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE, 'default');
-    }
-
-    select.value = resolvedModel;
-    select.disabled = localModels.length <= 1;
-    applySelectedModelLabel();
-
-    if (!select.dataset.phase3Bound) {
-      select.dataset.phase3Bound = 'true';
-      select.addEventListener('change', () => {
-        const nextModel = select.value;
-        if (!nextModel) return;
-        localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, nextModel);
-        localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE, 'explicit');
-        applySelectedModelLabel();
-        updateReasoningToggleVisibility();
-        toast(`활성 모델을 ${formatSelectedModelLabel(nextModel)}로 변경했습니다.`, 'success');
-      });
-    }
-  } catch (error) {
-    console.warn('Failed to load model switcher options:', error);
-    select.innerHTML = '<option value="">모델 목록 로드 실패</option>';
-    select.disabled = true;
-  }
 }
 
 function getLogoSrc() {
@@ -782,7 +717,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
       top_k: getTopK(),
       temperature: getTemperature(),
       auto_params: isAutoParamsEnabled(),
-      adaptive_k: isAdaptiveKEnabled(),
+      adaptive_k: isAutoParamsEnabled(),
       filters,
       index_mode: getIndexMode(),
     };
@@ -1450,10 +1385,6 @@ function isAutoParamsEnabled() {
   return localStorage.getItem(STORAGE_KEYS.AUTO_RAG_PARAMS) !== 'off';
 }
 
-function isAdaptiveKEnabled() {
-  return localStorage.getItem(STORAGE_KEYS.ADAPTIVE_K) !== 'off';
-}
-
 function syncAutoParamControls() {
   const enabled = isAutoParamsEnabled();
   const toggle = document.getElementById('auto-param-toggle');
@@ -1461,14 +1392,6 @@ function syncAutoParamControls() {
   document.querySelectorAll('.manual-param-control, #manual-param-divider').forEach((element) => {
     element.classList.toggle('hidden', enabled);
   });
-}
-
-function syncAdaptiveKControls() {
-  const enabled = isAdaptiveKEnabled();
-  const toggle = document.getElementById('adaptive-k-toggle');
-  const wrap = document.getElementById('adaptive-k-wrap');
-  if (toggle) toggle.checked = enabled;
-  if (wrap) wrap.classList.toggle('disabled', !isAutoParamsEnabled());
 }
 
 function toggleAdaptiveKSettings(event) {
