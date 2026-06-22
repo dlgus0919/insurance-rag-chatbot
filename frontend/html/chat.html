@@ -59,6 +59,12 @@
             </label>
           </div>
           <div class="settings-section">
+            <label class="adaptive-k-toggle" id="adaptive-k-toggle-wrap" title="Reranker 점수 급락 지점을 기준으로 최종 검색 청크 수를 조절합니다.">
+              <input type="checkbox" id="adaptive-k-toggle" checked>
+              <span>Semi-adaptive K</span>
+            </label>
+          </div>
+          <div class="settings-section">
             <div class="settings-section-title">OCR 인덱스</div>
             <div class="settings-radio-group">
               <label class="radio-pill">
@@ -114,6 +120,10 @@
       <div class="model-badge-wrap" id="active-model-badge" aria-live="polite">
         <span class="model-badge-label">활성 모델</span>
         <span class="model-badge-value" id="active-model-label">확인 중...</span>
+      </div>
+      <div class="model-switcher-wrap" id="model-switcher-wrap">
+        <label class="model-switcher-label" for="active-model-select">모델 변경</label>
+        <select class="model-switcher-select" id="active-model-select" aria-label="활성 모델 변경"></select>
       </div>
       <label class="reasoning-toggle hidden" id="reasoning-toggle-wrap" title="내부 추론 문장은 화면에 표시하지 않습니다.">
         <input type="checkbox" id="reasoning-mode-toggle">

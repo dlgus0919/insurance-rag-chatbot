@@ -52,10 +52,10 @@ test('document scope checklist sends selected doc_short filters', () => {
   }
 });
 
-test('document scope UI is a button-like checklist menu', async () => {
+test('document scope UI is a settings checklist section', async () => {
   const html = await readFile(new URL('../frontend/html/chat.html', import.meta.url), 'utf8');
 
-  assert.match(html, /<details class="doc-scope"/);
+  assert.match(html, /class="settings-section doc-scope"/);
   assert.match(html, /id="doc-scope-summary"/);
   assert.match(html, /id="doc-scope-options"/);
   assert.match(html, /data-doc-scope value="__all__"/);
