@@ -992,10 +992,14 @@ def run_claim_calculation(
         if match.std_cd:
             table_basis = _match_basis_summary(match)
             extra = f" | {table_basis}" if table_basis else ""
-            applied_basis.append({
+            basis = {
                 "source": f"비급여 표준모델 (코드: {match.std_cd})",
                 "content": f"표준명: {match.std_cd_nm} | 분류: {repr(match.mid_category_cd_nm)} | 보상의견: {match.pay_opn_cd_nm or '없음'}{extra}"
-            })
+            }
+            line_result = deterministic_line_results[idx] if idx < len(deterministic_line_results) else {}
+            if getattr(match, "requires_review", False) or line_result.get("requires_review") or line_result.get("calculation_status") in {"human_task", "partial_human_task"} or line_result.get("excluded_from_calculation"):
+                basis["review_status"] = "review_required"
+            applied_basis.append(basis)
     # RAG 문서 근거 추가
     for ev in retrieved_evidences:
         if not ev.get("display_in_applied_basis", True):

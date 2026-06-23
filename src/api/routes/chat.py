@@ -101,9 +101,10 @@ async def chat_stream(
         tokens: list[str] = []
         selected_model = _select_model(chat_request)
         requested_index_mode, effective_index_mode = _resolve_chat_index_modes(
-            chat_request.query,
+            _query_with_policy_generation(chat_request.query, chat_request.policy_generation),
             chat_request.index_mode,
         )
+        context_query = _query_with_policy_generation(chat_request.query, chat_request.policy_generation)
         started = time.perf_counter()
         try:
             yield _sse("status", "searching")
@@ -152,7 +153,7 @@ async def chat_stream(
             elif resolved_mode == "formal":
                 chunks, sources, prompt, doc_filter = await prepare_formal_context(
                     pipeline,
-                    chat_request.query,
+                    context_query,
                     effective_top_k,
                     history,
                     effective_filters,
@@ -161,12 +162,13 @@ async def chat_stream(
             else:
                 chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug_info = await prepare_retrieved_context(
                     pipeline,
-                    chat_request.query,
+                    context_query,
                     retrieval_top_k,
                     history,
                     effective_filters,
                     auto_params=auto_decision,
                 )
+            prompt = _prompt_with_policy_generation(prompt, chat_request.policy_generation)
             yield _sse("sources", sources)
             if graph_payload is not None:
                 logger.info(
@@ -254,6 +256,7 @@ async def chat_stream(
                     "index_mode": requested_index_mode,
                     "effective_index_mode": effective_index_mode,
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
+                    "policy_generation": chat_request.policy_generation,
                     "session_id": chat_session.id,
                     "source_count": len(sources),
                     "query_preview": chat_request.query.strip()[:200],
@@ -332,6 +335,26 @@ def _get_pipeline(model: str, top_k: int, index_mode: str):
     if index_mode == "default":
         return get_rag_pipeline(model, top_k)
     return get_rag_pipeline(model, top_k, index_mode)
+
+
+def _policy_generation_label(policy_generation: str | None) -> str | None:
+    if policy_generation == "5th":
+        return "5세대"
+    if policy_generation == "4th":
+        return "4세대"
+    return None
+
+
+def _query_with_policy_generation(query: str, policy_generation: str | None) -> str:
+    label = _policy_generation_label(policy_generation)
+    return f"[선택된 실손 세대 기준: {label} 실손]\n{query}" if label else query
+
+
+def _prompt_with_policy_generation(prompt: str, policy_generation: str | None) -> str:
+    label = _policy_generation_label(policy_generation)
+    if not label:
+        return prompt
+    return f"[답변 기준]\n사용자가 선택한 실손 세대는 {label} 실손입니다. 세대별 기준이 다른 내용은 이 선택을 우선 적용하고, 답변에 해당 세대 기준임을 명시하세요.\n\n{prompt}"
 
 
 def _llm_safety_warnings(llm) -> list[dict]:

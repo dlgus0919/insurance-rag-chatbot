@@ -1,5 +1,9 @@
 import pytest
+from sqlalchemy import event, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from src.api.db import Base
+from src.api.models import ChatMessage, ChatSession
 from src.api.routes import claim
 from src.api.schemas.claim import ClaimCalculationRequest, ClaimItemRequest
 from src.auth import users
@@ -8,6 +12,26 @@ from src.auth.users import User
 
 def _employee() -> User:
     return User("employee01", "hash", users.ROLE_EMPLOYEE, "직원", "2026-05-20T00:00:00Z", "2026-05-20T00:00:00Z")
+
+
+@pytest.fixture
+async def db_session(tmp_path):
+    engine = create_async_engine(f"sqlite+aiosqlite:///{tmp_path / 'claim_chat.db'}")
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _enable_foreign_keys(connection, _):
+        cursor = connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    async with engine.begin() as connection:
+        await connection.run_sync(Base.metadata.create_all)
+
+    sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
+    async with sessionmaker() as session:
+        yield session
+
+    await engine.dispose()
 
 
 def test_claim_default_model_uses_answer_primary_sglang(monkeypatch) -> None:
@@ -206,3 +230,41 @@ async def test_claim_calculation_route_uses_fixed_rag_top_k(monkeypatch) -> None
     assert captured["top_k"] == 6
     assert captured["index_mode"] == "v2_only"
     assert response.claimed_amount == "100000"
+
+
+@pytest.mark.anyio
+async def test_claim_calculation_route_persists_history(monkeypatch, db_session) -> None:
+    monkeypatch.setattr("src.api.routes.claim.get_rag_pipeline", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "src.db.standard_codes.lookup_by_std_cd",
+        lambda *_args, **_kwargs: {
+            "std_cd": "MX122",
+            "std_cd_nm": "도수치료",
+            "mid_category_cd_nm": "3대비급여",
+            "pay_opn_cd_nm": "보상",
+        },
+    )
+
+    response = await claim.calculate_claim(
+        ClaimCalculationRequest(
+            items=[
+                ClaimItemRequest(
+                    input_name="도수치료",
+                    input_code="MX122",
+                    claimed_amount="150000",
+                    user_category_hint="3대비급여",
+                )
+            ]
+        ),
+        request=None,
+        user=_employee(),
+        db=db_session,
+    )
+
+    assert response.session_id
+    sessions = list((await db_session.execute(select(ChatSession))).scalars())
+    messages = list((await db_session.execute(select(ChatMessage).order_by(ChatMessage.id))).scalars())
+    assert sessions[0].title == "보험금 계산: 도수치료"
+    assert [message.role for message in messages] == ["user", "assistant"]
+    assert "보험금 계산/4세대" in messages[0].content
+    assert "예상 지급금액" in messages[1].content

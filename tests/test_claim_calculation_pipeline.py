@@ -231,6 +231,7 @@ def test_split_receipt_standard_opinion_excludes_only_nonpay_part():
     assert result.deductible == "52000"
     assert result.requires_review
     assert any("급여외/비급여 산정 제한" in reason for reason in result.review_reasons)
+    assert result.applied_basis[0]["review_status"] == "review_required"
 
 
 def test_fifth_generation_unresolved_split_nonpay_is_human_task_excluded_from_totals():

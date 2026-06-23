@@ -10,6 +10,10 @@ export function compactClaimBasisItems(items, maxItems = 4) {
     const existing = bySource.get(source);
     if (existing) {
       existing.extraCount += 1;
+      const reviewStatus = rawItem?.reviewStatus || rawItem?.review_status;
+      if (!existing.reviewStatus && reviewStatus) {
+        existing.reviewStatus = reviewStatus;
+      }
       continue;
     }
 
@@ -18,6 +22,10 @@ export function compactClaimBasisItems(items, maxItems = 4) {
       content,
       extraCount: 0,
     };
+    const reviewStatus = rawItem?.reviewStatus || rawItem?.review_status;
+    if (reviewStatus) {
+      compacted.reviewStatus = reviewStatus;
+    }
     bySource.set(source, compacted);
     grouped.push(compacted);
   }
