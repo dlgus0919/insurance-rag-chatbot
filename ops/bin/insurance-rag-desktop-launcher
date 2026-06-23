@@ -19,6 +19,22 @@ elif [[ -x "$BIN_DIR/insurance-rag-ontology-review-gui" ]]; then
 else
   ONTOLOGY_REVIEW_GUI="$PROJECT_DIR/ops/bin/insurance-rag-ontology-review-gui"
 fi
+
+if [[ -n "${INSURANCE_RAG_RULE_REVIEW_GUI:-}" ]]; then
+  RULE_REVIEW_GUI="$INSURANCE_RAG_RULE_REVIEW_GUI"
+elif [[ -x "$BIN_DIR/insurance-rag-rule-review-gui" ]]; then
+  RULE_REVIEW_GUI="$BIN_DIR/insurance-rag-rule-review-gui"
+else
+  RULE_REVIEW_GUI="$PROJECT_DIR/ops/bin/insurance-rag-rule-review-gui"
+fi
+
+if [[ -n "${INSURANCE_RAG_RULE_CANDIDATE_REVIEW_GUI:-}" ]]; then
+  RULE_CANDIDATE_REVIEW_GUI="$INSURANCE_RAG_RULE_CANDIDATE_REVIEW_GUI"
+elif [[ -x "$BIN_DIR/insurance-rag-rule-candidate-review-gui" ]]; then
+  RULE_CANDIDATE_REVIEW_GUI="$BIN_DIR/insurance-rag-rule-candidate-review-gui"
+else
+  RULE_CANDIDATE_REVIEW_GUI="$PROJECT_DIR/ops/bin/insurance-rag-rule-candidate-review-gui"
+fi
 SGLANG_BASE_URL="${SGLANG_BASE_URL:-http://127.0.0.1:30000/v1}"
 VLLM_BASE_URL="${VLLM_BASE_URL:-http://127.0.0.1:30001/v1}"
 TRTLLM_BASE_URL="${TRTLLM_BASE_URL:-http://127.0.0.1:8355/v1}"
@@ -38,6 +54,7 @@ Usage:
   insurance-rag-desktop-launcher
   insurance-rag-desktop-launcher --status
   insurance-rag-desktop-launcher --choices
+  insurance-rag-desktop-launcher --model-choices
 
 Shows a DGX desktop LLM selection dialog, starts the insurance RAG app,
 and opens the browser.
@@ -104,6 +121,14 @@ ontology_pending_count() {
     python_bin="python3"
   fi
   PYTHONPATH="$PROJECT_DIR" "$python_bin" "$PROJECT_DIR/scripts/ontology_review.py" --pending-count 2>/dev/null | tail -n 1 || printf '0\n'
+}
+
+rule_candidate_pending_count() {
+  local python_bin="$PYTHON_BIN"
+  if [[ ! -x "$python_bin" ]]; then
+    python_bin="python3"
+  fi
+  PYTHONPATH="$PROJECT_DIR" "$python_bin" "$PROJECT_DIR/scripts/claim_rule_candidate_review.py" --pending-count 2>/dev/null | tail -n 1 || printf '0\n'
 }
 
 model_config_ready() {
@@ -193,7 +218,7 @@ print_status() {
   printf 'ollama=%s\n' "${ollama_model:-}"
 }
 
-print_choices() {
+print_model_choices() {
   local sglang_model
   local vllm_model
   local ollama_model
@@ -202,10 +227,6 @@ print_choices() {
   vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
   trtllm_model="$(detect_openai_compatible_model "$TRTLLM_BASE_URL" "${TRTLLM_API_KEY:-EMPTY}")"
   ollama_model="$(detect_ollama_model)"
-
-  if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
-    printf 'ontology|review|%s\n' "$(ontology_pending_count)"
-  fi
 
   if [[ -n "$sglang_model" ]]; then
     printf 'current|sglang|%s\n' "$sglang_model"
@@ -241,6 +262,33 @@ print_choices() {
   if ollama_gguf_model_ready "$LLAMA_GGUF_OLLAMA_MODEL" \
     && [[ "$ollama_model" != "$LLAMA_GGUF_OLLAMA_MODEL" && "$ollama_model" != "$LLAMA_GGUF_OLLAMA_MODEL:latest" ]]; then
     printf 'start|ollama|%s\n' "$LLAMA_GGUF_OLLAMA_MODEL"
+  fi
+}
+
+print_choices() {
+  local sglang_model
+  local vllm_model
+  local ollama_model
+  sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
+  vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
+  ollama_model="$(detect_ollama_model)"
+
+  if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
+    printf 'ontology|review|%s\n' "$(ontology_pending_count)"
+  fi
+  if [[ -x "$RULE_CANDIDATE_REVIEW_GUI" ]]; then
+    printf 'rules|candidate|%s\n' "$(rule_candidate_pending_count)"
+  fi
+  if [[ -x "$RULE_REVIEW_GUI" ]]; then
+    printf 'rules|review|active\n'
+  fi
+  printf 'model|select|available\n'
+  if [[ -n "$sglang_model" ]]; then
+    printf 'current|sglang|%s\n' "$sglang_model"
+  elif [[ -n "$vllm_model" ]]; then
+    printf 'current|vllm|%s\n' "$vllm_model"
+  elif [[ -n "$ollama_model" ]]; then
+    printf 'current|ollama|%s\n' "$ollama_model"
   fi
 }
 
@@ -333,11 +381,24 @@ choose_action() {
   local ollama_model="$5"
   local ontology_pending_count="${6:-0}"
   local rows=()
+  local candidate_count
+  candidate_count="$(rule_candidate_pending_count)"
 
   if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
     rows+=("FALSE" "ontology|review|${ontology_pending_count:-0}" "온톨로지 승인 검토" "승인 대기 ${ontology_pending_count:-0}건")
   fi
+  if [[ -x "$RULE_CANDIDATE_REVIEW_GUI" ]]; then
+    rows+=("FALSE" "rules|candidate|${candidate_count:-0}" "액티브 룰 신규 후보" "검토 대기 ${candidate_count:-0}건")
+  fi
+  if [[ -x "$RULE_REVIEW_GUI" ]]; then
+    rows+=("FALSE" "rules|review|active" "액티브 룰 검토" "승인된 계산 룰 값 수정")
+  fi
 
+  if [[ -n "$sglang_model" || -n "$vllm_model" || -n "$ollama_model" ]]; then
+    rows+=("FALSE" "model|select|available" "모델 기동 선택" "사용 가능한 모델 목록 보기")
+  else
+    rows+=("TRUE" "model|select|available" "모델 기동 선택" "사용 가능한 모델 목록 보기")
+  fi
   if [[ -n "$sglang_model" ]]; then
     rows+=("TRUE" "current|sglang|$sglang_model" "현재 실행 중인 SGLang 유지" "$sglang_model")
   elif [[ -n "$vllm_model" ]]; then
@@ -346,15 +407,35 @@ choose_action() {
     rows+=("TRUE" "current|ollama|$ollama_model" "현재 실행 중인 Ollama 유지" "$ollama_model")
   fi
 
-  local default_pick="FALSE"
-  if [[ "${#rows[@]}" -eq 0 ]]; then
-    default_pick="TRUE"
-  fi
+  local current_text
+  current_text="앱: $app_running\nSGLang: ${sglang_model:-실행 안 됨}\nvLLM: ${vllm_model:-실행 안 됨}\nTensorRT-LLM: ${trtllm_model:-실행 안 됨}\nOllama: ${ollama_model:-실행 안 됨}"
+  local row_count window_height
+  row_count=$(( ${#rows[@]} / 4 ))
+  window_height=$(( row_count * 44 + 250 ))
+  (( window_height < 460 )) && window_height=460
+  (( window_height > 620 )) && window_height=620
+
+  zenity --list \
+    --radiolist \
+    --title="신한EZ손해보험 보상지원 AI 챗봇 실행" \
+    --text="실행할 작업을 선택하세요.\n\n$current_text" \
+    --width=880 \
+    --height="$window_height" \
+    --column="선택" \
+    --column="key" \
+    --column="동작" \
+    --column="내용" \
+    --hide-column=2 \
+    --print-column=2 \
+    "${rows[@]}"
+}
+
+choose_model_action() {
+  local rows=()
 
   if sglang_model_ready "gpt-oss-20b"; then
-    rows+=("$default_pick" "start|sglang|gpt-oss-20b" "SGLang 서버 시작/전환" "gpt-oss-20b")
+    rows+=("TRUE" "start|sglang|gpt-oss-20b" "SGLang 서버 시작/전환" "gpt-oss-20b")
   fi
-
   if sglang_model_ready "qwen3-30b-a3b-instruct-2507-fp8"; then
     rows+=("FALSE" "start|sglang|qwen3-30b-a3b-instruct-2507-fp8" "SGLang 서버 시작/전환" "qwen3-30b-a3b-instruct-2507-fp8")
   fi
@@ -376,6 +457,8 @@ choose_action() {
   if vllm_model_ready "exaone-4.0-32b-awq"; then
     rows+=("FALSE" "start|vllm|exaone-4.0-32b-awq" "vLLM 서버 시작/전환" "exaone-4.0-32b-awq")
   fi
+  local ollama_model
+  ollama_model="$(detect_ollama_model)"
   if [[ -n "$ollama_model" ]]; then
     rows+=("FALSE" "start|ollama|$ollama_model" "Ollama 모델 사용" "$ollama_model")
   fi
@@ -384,19 +467,21 @@ choose_action() {
     rows+=("FALSE" "start|ollama|$LLAMA_GGUF_OLLAMA_MODEL" "Ollama GGUF 모델 생성/사용" "$LLAMA_GGUF_OLLAMA_MODEL")
   fi
 
-  local current_text
-  current_text="앱: $app_running\nSGLang: ${sglang_model:-실행 안 됨}\nvLLM: ${vllm_model:-실행 안 됨}\nTensorRT-LLM: ${trtllm_model:-실행 안 됨}\nOllama: ${ollama_model:-실행 안 됨}"
+  if [[ "${#rows[@]}" -eq 0 ]]; then
+    show_error "사용 가능한 모델 없음" "현재 로컬 모델 준비 조건을 만족하는 기동 후보가 없습니다."
+    return 1
+  fi
+
   local row_count window_height
   row_count=$(( ${#rows[@]} / 4 ))
-  window_height=$(( row_count * 32 + 190 ))
-  (( window_height < 320 )) && window_height=320
-  (( window_height > 560 )) && window_height=560
-
+  window_height=$(( row_count * 34 + 190 ))
+  (( window_height < 340 )) && window_height=340
+  (( window_height > 640 )) && window_height=640
   zenity --list \
     --radiolist \
-    --title="신한EZ손해보험 보상지원 AI 챗봇 실행" \
-    --text="사용할 LLM 서버를 선택하세요.\n\n$current_text" \
-    --width=900 \
+    --title="모델 기동 선택" \
+    --text="시작하거나 전환할 LLM 서버와 모델을 선택하세요." \
+    --width=920 \
     --height="$window_height" \
     --column="선택" \
     --column="key" \
@@ -421,6 +506,10 @@ main() {
       print_choices
       exit 0
       ;;
+    --model-choices)
+      print_model_choices
+      exit 0
+      ;;
     "")
       ;;
     *)
@@ -438,10 +527,6 @@ main() {
   local pending_ontology_count="0"
   if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
     pending_ontology_count="$(ontology_pending_count)"
-    if [[ "${INSURANCE_RAG_SKIP_ONTOLOGY_PREFLIGHT:-0}" != "1" && "${pending_ontology_count:-0}" =~ ^[0-9]+$ && "$pending_ontology_count" -gt 0 ]]; then
-      "$ONTOLOGY_REVIEW_GUI" || exit "$?"
-      pending_ontology_count="$(ontology_pending_count)"
-    fi
   fi
 
   local app_running="stopped"
@@ -462,7 +547,20 @@ main() {
   IFS='|' read -r mode provider model <<<"$choice"
   if [[ "$mode" == "ontology" ]]; then
     "$ONTOLOGY_REVIEW_GUI" || exit "$?"
-    INSURANCE_RAG_SKIP_ONTOLOGY_PREFLIGHT=1 exec "$0"
+    exec "$0"
+  fi
+  if [[ "$mode" == "rules" ]]; then
+    if [[ "$provider" == "candidate" ]]; then
+      "$RULE_CANDIDATE_REVIEW_GUI" || exit "$?"
+    else
+      "$RULE_REVIEW_GUI" || exit "$?"
+    fi
+    exec "$0"
+  fi
+  if [[ "$mode" == "model" ]]; then
+    choice="$(choose_model_action)" || exit 0
+    [[ -n "$choice" ]] || exit 0
+    IFS='|' read -r mode provider model <<<"$choice"
   fi
 
   local log_file

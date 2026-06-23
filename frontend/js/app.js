@@ -5,12 +5,12 @@ import { toast } from './modules/ui.js';
 import { apiFetch } from './utils.js';
 import { STORAGE_KEYS } from './config.js';
 import { initLoginCanvas, initLoginPage } from './pages/login.js?v=20260602_model_sync_fix1';
-import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260623_claim_result_priority';
+import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260623_master_merge_ui';
 import { initAdminPage } from './pages/admin.js?v=20260609_ontology_review_mvp';
 
 const PAGES = {
   LOGIN: '/html/login.html',
-  CHAT: '/html/chat.html?v=20260623_claim_result_priority',
+  CHAT: '/html/chat.html?v=20260623_master_merge_ui',
   ADMIN: '/html/admin.html?v=20260622_admin_back_button',
 };
 

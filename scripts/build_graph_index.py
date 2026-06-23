@@ -48,6 +48,12 @@ def main() -> None:
         help="Output JSONL path for low confidence report."
     )
     parser.add_argument(
+        "--rule-links",
+        type=str,
+        default="data/rules/rule_links.active.json",
+        help="Optional active rule-to-source/ontology link manifest.",
+    )
+    parser.add_argument(
         "--source-mode",
         type=str,
         default="v1_v2_combined",
@@ -94,6 +100,7 @@ def main() -> None:
         skip_standard_codes=args.skip_standard_codes,
         skip_policy_appendix=args.skip_policy_appendix,
         skip_hira_codes=args.skip_hira_codes,
+        rule_links_path=args.rule_links,
     )
 
 if __name__ == "__main__":

@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_DIR="${INSURANCE_RAG_PROJECT_DIR:-/srv/shared/projects/insurance-rag-chatbot}"
+PYTHON_BIN="${INSURANCE_RAG_PYTHON:-$PROJECT_DIR/.venv/bin/python}"
+if [[ ! -x "$PYTHON_BIN" ]]; then
+  PYTHON_BIN="python3"
+fi
+
+cd "$PROJECT_DIR"
+PYTHONPATH="$PROJECT_DIR" "$PYTHON_BIN" "$PROJECT_DIR/scripts/claim_rule_candidate_review.py" --gui "$@"
