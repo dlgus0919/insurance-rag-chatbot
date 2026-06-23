@@ -527,10 +527,6 @@ main() {
   local pending_ontology_count="0"
   if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
     pending_ontology_count="$(ontology_pending_count)"
-    if [[ "${INSURANCE_RAG_SKIP_ONTOLOGY_PREFLIGHT:-0}" != "1" && "${pending_ontology_count:-0}" =~ ^[0-9]+$ && "$pending_ontology_count" -gt 0 ]]; then
-      "$ONTOLOGY_REVIEW_GUI" || exit "$?"
-      pending_ontology_count="$(ontology_pending_count)"
-    fi
   fi
 
   local app_running="stopped"
@@ -551,7 +547,7 @@ main() {
   IFS='|' read -r mode provider model <<<"$choice"
   if [[ "$mode" == "ontology" ]]; then
     "$ONTOLOGY_REVIEW_GUI" || exit "$?"
-    INSURANCE_RAG_SKIP_ONTOLOGY_PREFLIGHT=1 exec "$0"
+    exec "$0"
   fi
   if [[ "$mode" == "rules" ]]; then
     if [[ "$provider" == "candidate" ]]; then
@@ -559,7 +555,7 @@ main() {
     else
       "$RULE_REVIEW_GUI" || exit "$?"
     fi
-    INSURANCE_RAG_SKIP_ONTOLOGY_PREFLIGHT=1 exec "$0"
+    exec "$0"
   fi
   if [[ "$mode" == "model" ]]; then
     choice="$(choose_model_action)" || exit 0

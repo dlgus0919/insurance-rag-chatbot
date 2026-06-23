@@ -77,6 +77,13 @@ def test_launcher_model_choices_show_available_models(tmp_path: Path) -> None:
     assert "start|sglang|gpt-oss-20b" in result.stdout
 
 
+def test_launcher_does_not_auto_open_ontology_preflight() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "INSURANCE_RAG_SKIP_ONTOLOGY_PREFLIGHT" not in source
+    assert '[[ "$mode" == "ontology" ]]' in source
+
+
 def test_rule_candidate_gui_wrapper_dry_run() -> None:
     result = subprocess.run(
         ["bash", str(CANDIDATE_GUI), "--dry-run"],
