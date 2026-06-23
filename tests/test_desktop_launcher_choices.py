@@ -65,6 +65,13 @@ def test_launcher_primary_choices_hide_model_rows(tmp_path: Path) -> None:
         assert result.stdout.index("model|select|available") < result.stdout.index("current|")
 
 
+def test_launcher_primary_dialog_height_fits_default_choices() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "row_count * 44 + 250" in source
+    assert "window_height < 460" in source
+
+
 def test_launcher_model_choices_show_available_models(tmp_path: Path) -> None:
     result = subprocess.run(
         ["bash", str(LAUNCHER), "--model-choices"],

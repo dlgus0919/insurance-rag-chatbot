@@ -411,9 +411,9 @@ choose_action() {
   current_text="앱: $app_running\nSGLang: ${sglang_model:-실행 안 됨}\nvLLM: ${vllm_model:-실행 안 됨}\nTensorRT-LLM: ${trtllm_model:-실행 안 됨}\nOllama: ${ollama_model:-실행 안 됨}"
   local row_count window_height
   row_count=$(( ${#rows[@]} / 4 ))
-  window_height=$(( row_count * 34 + 210 ))
-  (( window_height < 340 )) && window_height=340
-  (( window_height > 560 )) && window_height=560
+  window_height=$(( row_count * 44 + 250 ))
+  (( window_height < 460 )) && window_height=460
+  (( window_height > 620 )) && window_height=620
 
   zenity --list \
     --radiolist \
