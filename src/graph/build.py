@@ -256,16 +256,18 @@ def _ingest_rule_links(store: GraphStore, rule_links_path: Path | None) -> None:
                     created_by="rule_link_manifest",
                 )
             )
-            _link_rule_sources(store, rule_node_id, source_refs)
-            _link_rule_ontology_refs(store, rule_node_id, ontology_refs)
+            source_node_ids = _link_rule_sources(store, rule_node_id, source_refs)
+            _link_rule_ontology_refs(store, rule_node_id, ontology_refs, source_node_ids)
 
 
-def _link_rule_sources(store: GraphStore, rule_node_id: str, source_refs: list[str]) -> None:
+def _link_rule_sources(store: GraphStore, rule_node_id: str, source_refs: list[str]) -> list[str]:
+    source_node_ids: list[str] = []
     for source_ref in source_refs:
         chunk_id = _source_ref_chunk_id(source_ref)
         if not chunk_id:
             continue
         source_node_id = f"source_chunk:{chunk_id}"
+        source_node_ids.append(source_node_id)
         evidence_id = f"evidence:{chunk_id}"
         store.upsert_node(
             Node(
@@ -301,9 +303,15 @@ def _link_rule_sources(store: GraphStore, rule_node_id: str, source_refs: list[s
             )
         )
         store.link_edge_evidence(edge_id, evidence_id, role="source")
+    return source_node_ids
 
 
-def _link_rule_ontology_refs(store: GraphStore, rule_node_id: str, ontology_refs: list[str]) -> None:
+def _link_rule_ontology_refs(
+    store: GraphStore,
+    rule_node_id: str,
+    ontology_refs: list[str],
+    source_node_ids: list[str],
+) -> None:
     for ontology_ref in ontology_refs:
         concept_id = ontology_ref.strip()
         if not concept_id:
@@ -321,6 +329,16 @@ def _link_rule_ontology_refs(store: GraphStore, rule_node_id: str, ontology_refs
         )
         store.upsert_edge(
             Edge(
+                edge_id=f"edge_rule_ontology_{rule_node_id}_{concept_node_id}",
+                source_node_id=rule_node_id,
+                target_node_id=concept_node_id,
+                edge_type=EdgeType.HAS_TOPIC,
+                properties={"ontology_ref": concept_id},
+                created_by="rule_link_manifest",
+            )
+        )
+        store.upsert_edge(
+            Edge(
                 edge_id=f"edge_ontology_rule_{concept_node_id}_{rule_node_id}",
                 source_node_id=concept_node_id,
                 target_node_id=rule_node_id,
@@ -329,6 +347,17 @@ def _link_rule_ontology_refs(store: GraphStore, rule_node_id: str, ontology_refs
                 created_by="rule_link_manifest",
             )
         )
+        for source_node_id in source_node_ids:
+            store.upsert_edge(
+                Edge(
+                    edge_id=f"edge_ontology_source_{concept_node_id}_{source_node_id}",
+                    source_node_id=concept_node_id,
+                    target_node_id=source_node_id,
+                    edge_type=EdgeType.HAS_CANONICAL_SOURCE,
+                    properties={"ontology_ref": concept_id},
+                    created_by="rule_link_manifest",
+                )
+            )
 
 
 def _source_ref_chunk_id(source_ref: str) -> str:

@@ -123,3 +123,28 @@ def test_apply_dry_run_does_not_write_active_manifest(tmp_path: Path) -> None:
     assert "deductible.test.cli" in result.stdout
     assert json.loads(rules.read_text(encoding="utf-8"))["rules"] == []
     assert not links.exists()
+
+
+def test_gui_dry_run_prints_candidate_preview(tmp_path: Path) -> None:
+    candidates = tmp_path / "candidates.jsonl"
+    review_log = tmp_path / "review_log.jsonl"
+    _write_jsonl(candidates, _candidate())
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--candidates",
+            str(candidates),
+            "--review-log",
+            str(review_log),
+            "--gui",
+            "--dry-run",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert "candidate_count=1" in result.stdout
+    assert "후보 ID: rulecand.test.cli" in result.stdout

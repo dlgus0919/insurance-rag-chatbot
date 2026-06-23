@@ -42,13 +42,15 @@ def test_ingest_rule_links_creates_traceability_nodes(tmp_path: Path) -> None:
             row["edge_type"]
             for row in store.query("SELECT edge_type FROM graph_edges")
         }
+        edge_count = store.query("SELECT COUNT(*) AS count FROM graph_edges")[0]["count"]
         evidence = store.query("SELECT chunk_id FROM graph_evidence WHERE evidence_id = ?", ("evidence:chunk-123",))
 
         assert nodes["deductible_rule:deductible.test.5th.outpatient.benefit"] == "DeductibleRule"
         assert nodes["source_chunk:chunk-123"] == "DocumentSection"
         assert nodes["ontology:cov.indemnity_medical"] == "DecisionConcept"
         assert "deductible_rule:deductible.pending" not in nodes
-        assert edge_types == {"HAS_CANONICAL_SOURCE", "HAS_DEDUCTIBLE_RULE"}
+        assert edge_types == {"HAS_CANONICAL_SOURCE", "HAS_DEDUCTIBLE_RULE", "HAS_TOPIC"}
+        assert edge_count == 4
         assert evidence[0]["chunk_id"] == "chunk-123"
     finally:
         store.close()
