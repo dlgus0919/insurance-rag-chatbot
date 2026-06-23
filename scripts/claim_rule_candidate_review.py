@@ -212,18 +212,48 @@ def json_text(value: Any) -> str:
     return str(value)
 
 
+GENERATION_LABELS = {"1th": "1세대", "2th": "2세대", "3th": "3세대", "4th": "4세대", "5th": "5세대"}
+VISIT_TYPE_LABELS = {"hospitalization": "입원", "outpatient": "통원", "unknown": "입원/통원 미확정"}
+FACILITY_LABELS = {
+    "all": "전체 의료기관",
+    "clinic": "의원",
+    "hospital": "병원",
+    "general_hospital": "종합병원",
+    "tertiary_hospital": "상급종합병원",
+}
+CATEGORY_LABELS = {"unknown": "급여/비급여 미확정"}
+
+
+def practitioner_label(value: Any, labels: dict[str, str]) -> str:
+    text = str(value or "")
+    return labels.get(text, text)
+
+
 def candidate_summary(record: dict[str, Any]) -> str:
     rule = record.get("proposed_rule") or {}
     return " ".join(
         part
         for part in (
-            str(rule.get("generation") or ""),
-            str(rule.get("category") or ""),
-            str(rule.get("visit_type") or ""),
-            str(rule.get("facility_grade") or ""),
+            practitioner_label(rule.get("generation"), GENERATION_LABELS),
+            practitioner_label(rule.get("category"), CATEGORY_LABELS),
+            practitioner_label(rule.get("visit_type"), VISIT_TYPE_LABELS),
+            practitioner_label(rule.get("facility_grade"), FACILITY_LABELS),
         )
         if part
     )
+
+
+def candidate_description(record: dict[str, Any]) -> str:
+    rule = record.get("proposed_rule") or {}
+    ratio = rule.get("copay_ratio") or rule.get("payout_ratio")
+    if ratio in (None, ""):
+        return str(rule.get("description", ""))
+    try:
+        percent = int(round(float(ratio) * 100))
+    except (TypeError, ValueError):
+        return str(rule.get("description", ""))
+    value_label = "지급률" if rule.get("payout_ratio") not in (None, "") else "본인부담금"
+    return f"{candidate_summary(record)}: {value_label} {percent}%"
 
 
 def format_candidate_detail(record: dict[str, Any]) -> str:
@@ -315,7 +345,7 @@ def run_gui(args: argparse.Namespace) -> None:
                     str(record.get("candidate_id")),
                     str(record.get("status")),
                     candidate_summary(record),
-                    str(rule.get("description", "")),
+                    candidate_description(record),
                 ]
             )
         selected = zenity(*list_args, check=False)

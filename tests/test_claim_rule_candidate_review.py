@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import subprocess
 import sys
 from pathlib import Path
@@ -148,3 +149,38 @@ def test_gui_dry_run_prints_candidate_preview(tmp_path: Path) -> None:
 
     assert "candidate_count=1" in result.stdout
     assert "후보 ID: rulecand.test.cli" in result.stdout
+    assert "구분: 5세대 급여 통원 전체 의료기관" in result.stdout
+
+
+def test_candidate_description_uses_practitioner_labels() -> None:
+    namespace = runpy.run_path(str(SCRIPT))
+
+    assert namespace["candidate_description"](_candidate()) == "5세대 급여 통원 전체 의료기관: 본인부담금 20%"
+
+
+def test_gui_dry_run_uses_practitioner_labels_for_unknown_fields(tmp_path: Path) -> None:
+    candidates = tmp_path / "candidates.jsonl"
+    review_log = tmp_path / "review_log.jsonl"
+    candidate = _candidate()
+    candidate["proposed_rule"]["category"] = "unknown"
+    candidate["proposed_rule"]["visit_type"] = "unknown"
+    _write_jsonl(candidates, candidate)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "--candidates",
+            str(candidates),
+            "--review-log",
+            str(review_log),
+            "--gui",
+            "--dry-run",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+    assert "구분: 5세대 급여/비급여 미확정 입원/통원 미확정 전체 의료기관" in result.stdout
+    assert "outpatient" not in result.stdout
