@@ -12,7 +12,7 @@ from typing import Any
 
 import re
 from src.graph.store import GraphStore
-from src.graph.schema import Edge, EdgeType, Node, NodeType
+from src.graph.schema import Edge, EdgeType, Evidence, Node, NodeType
 from src.graph.normalizer import normalize_name, normalize_code
 from src.parser.chunker import save_chunks
 from src.graph.extractors import (
@@ -97,6 +97,7 @@ def build_graph(
     skip_standard_codes: bool = False,
     skip_policy_appendix: bool = False,
     skip_hira_codes: bool = False,
+    rule_links_path: str | Path | None = None,
 ) -> None:
     chunks_path = Path(chunks_path)
     canonical_manifest_path = Path(canonical_manifest_path) if canonical_manifest_path else None
@@ -104,6 +105,7 @@ def build_graph(
     output_db_path = Path(output_db_path)
     manifest_path = Path(manifest_path)
     low_confidence_report_path = Path(low_confidence_report_path)
+    rule_links_path = Path(rule_links_path) if rule_links_path else None
 
     # 1. Clean up and Rebuild if requested
     if rebuild and output_db_path.exists():
@@ -171,11 +173,14 @@ def build_graph(
     review_extractor = PolicyReviewExtractor(store)
     review_extractor.extract(resolved_chunks_path)
 
-    # 5. Build cross-reference edges based on normalization & aliases
+    # 5. Link approved claim rules to source/ontology graph nodes without copying payout values.
+    _ingest_rule_links(store, rule_links_path)
+
+    # 6. Build cross-reference edges based on normalization & aliases
     print("[INFO] Building cross-reference edges...")
     _build_cross_references(store)
 
-    # 6. Generate low confidence reports (placeholders/log for now as deterministic rule-based is high confidence)
+    # 7. Generate low confidence reports (placeholders/log for now as deterministic rule-based is high confidence)
     # Write empty/sample log to low_confidence_report_path
     low_confidence_report_path.parent.mkdir(parents=True, exist_ok=True)
     with open(low_confidence_report_path, "w", encoding="utf-8") as f:
@@ -189,6 +194,7 @@ def build_graph(
         "chunks_path": str(resolved_chunks_path),
         "canonical_manifest_path": str(canonical_manifest_path) if canonical_manifest_path else "",
         "standard_code_db": str(standard_db_path),
+        "rule_links_path": str(rule_links_path) if rule_links_path else "",
         "node_count": store.query("SELECT COUNT(*) as count FROM graph_nodes")[0]["count"],
         "edge_count": store.query("SELECT COUNT(*) as count FROM graph_edges")[0]["count"],
         "evidence_count": store.query("SELECT COUNT(*) as count FROM graph_evidence")[0]["count"],
@@ -207,6 +213,131 @@ def build_graph(
         with contextlib.suppress(FileNotFoundError):
             Path(temp_chunk_file.name).unlink()
     print("[INFO] GraphDB build finished successfully.")
+
+
+def _ingest_rule_links(store: GraphStore, rule_links_path: Path | None) -> None:
+    """Attach approved claim rules to ontology/source nodes in GraphDB.
+
+    The calculation values remain in the active rule manifest. This layer only
+    records traceability links so future graph queries can explain where an
+    active rule came from and which ontology concepts it belongs to.
+    """
+    if not rule_links_path or not rule_links_path.exists():
+        return
+    data = json.loads(rule_links_path.read_text(encoding="utf-8"))
+    records = data.get("links", data) if isinstance(data, dict) else data
+    if not isinstance(records, list):
+        raise ValueError(f"rule links must be a list or object with links: {rule_links_path}")
+
+    with store.transaction():
+        for record in records:
+            if not isinstance(record, dict) or record.get("link_status") != "active":
+                continue
+            rule_id = str(record.get("rule_id") or "").strip()
+            if not rule_id:
+                continue
+            rule_node_id = f"deductible_rule:{rule_id}"
+            source_refs = [str(ref) for ref in record.get("source_refs") or [] if str(ref).strip()]
+            ontology_refs = [str(ref) for ref in record.get("ontology_refs") or [] if str(ref).strip()]
+            graph_refs = [str(ref) for ref in record.get("graph_refs") or [] if str(ref).strip()]
+            store.upsert_node(
+                Node(
+                    node_id=rule_node_id,
+                    node_type=NodeType.DeductibleRule,
+                    canonical_name=rule_id,
+                    normalized_name=normalize_name(rule_id),
+                    properties={
+                        "rule_id": rule_id,
+                        "source_refs": source_refs,
+                        "ontology_refs": ontology_refs,
+                        "graph_refs": graph_refs,
+                        "link_status": "active",
+                    },
+                    created_by="rule_link_manifest",
+                )
+            )
+            _link_rule_sources(store, rule_node_id, source_refs)
+            _link_rule_ontology_refs(store, rule_node_id, ontology_refs)
+
+
+def _link_rule_sources(store: GraphStore, rule_node_id: str, source_refs: list[str]) -> None:
+    for source_ref in source_refs:
+        chunk_id = _source_ref_chunk_id(source_ref)
+        if not chunk_id:
+            continue
+        source_node_id = f"source_chunk:{chunk_id}"
+        evidence_id = f"evidence:{chunk_id}"
+        store.upsert_node(
+            Node(
+                node_id=source_node_id,
+                node_type=NodeType.DocumentSection,
+                canonical_name=chunk_id,
+                normalized_name=normalize_name(chunk_id),
+                properties={"source_ref": source_ref, "chunk_id": chunk_id},
+                created_by="rule_link_manifest",
+            )
+        )
+        store.upsert_evidence(
+            Evidence(
+                evidence_id=evidence_id,
+                chunk_id=chunk_id,
+                doc_short="rule_source",
+                source_method="rule_link_manifest",
+                metadata_json={"source_ref": source_ref},
+            )
+        )
+        store.link_node_evidence(rule_node_id, evidence_id, role="source")
+        store.link_node_evidence(source_node_id, evidence_id, role="source")
+        edge_id = f"edge_rule_source_{rule_node_id}_{source_node_id}"
+        store.upsert_edge(
+            Edge(
+                edge_id=edge_id,
+                source_node_id=rule_node_id,
+                target_node_id=source_node_id,
+                edge_type=EdgeType.HAS_CANONICAL_SOURCE,
+                properties={"source_ref": source_ref},
+                source_evidence_id=evidence_id,
+                created_by="rule_link_manifest",
+            )
+        )
+        store.link_edge_evidence(edge_id, evidence_id, role="source")
+
+
+def _link_rule_ontology_refs(store: GraphStore, rule_node_id: str, ontology_refs: list[str]) -> None:
+    for ontology_ref in ontology_refs:
+        concept_id = ontology_ref.strip()
+        if not concept_id:
+            continue
+        concept_node_id = f"ontology:{concept_id}"
+        store.upsert_node(
+            Node(
+                node_id=concept_node_id,
+                node_type=NodeType.DecisionConcept,
+                canonical_name=concept_id,
+                normalized_name=normalize_name(concept_id),
+                properties={"concept_id": concept_id, "source": "rule_link_manifest"},
+                created_by="rule_link_manifest",
+            )
+        )
+        store.upsert_edge(
+            Edge(
+                edge_id=f"edge_ontology_rule_{concept_node_id}_{rule_node_id}",
+                source_node_id=concept_node_id,
+                target_node_id=rule_node_id,
+                edge_type=EdgeType.HAS_DEDUCTIBLE_RULE,
+                properties={"ontology_ref": concept_id},
+                created_by="rule_link_manifest",
+            )
+        )
+
+
+def _source_ref_chunk_id(source_ref: str) -> str:
+    prefix = "policy_chunk:"
+    if source_ref.startswith(prefix):
+        return source_ref[len(prefix):].strip()
+    if source_ref.startswith("source_chunk:"):
+        return source_ref.split(":", 1)[1].strip()
+    return ""
 
 
 def _build_cross_references(store: GraphStore) -> None:
