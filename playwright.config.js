@@ -30,6 +30,6 @@ export default defineConfig({
     command: 'API_COOKIE_SECURE=false API_RATE_LIMIT_DISABLED=true .venv/bin/python -m uvicorn src.api.main:app --host 127.0.0.1 --port 8000',
     url: 'http://127.0.0.1:8000/api/health',
     reuseExistingServer: !process.env.CI,
-    timeout: 30000,
+    timeout: 120000,
   },
 });

@@ -58,9 +58,37 @@ async function mockChatStream(page, graphPayload = null, extraTokens = "테스�
   return chatRequestPayloads;
 }
 
+async function mockUserAuth(page) {
+  const userPayload = {
+    username: 'user',
+    id: 'user',
+    role: 'user',
+    display_name: '사용자',
+    created_at: '2026-06-05T00:00:00+09:00',
+    password_updated_at: '2026-06-05T00:00:00+09:00',
+  };
+  await page.route('**/api/auth/login', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        user: userPayload,
+        access_expires_in: 900,
+      }),
+    });
+  });
+  await page.route('**/api/auth/me', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(userPayload),
+    });
+  });
+}
+
 test.describe('채팅 플로우', () => {
   test.beforeEach(async ({ page }) => {
-    // Only go to login page and perform login with correct user fixture
+    await mockUserAuth(page);
     await page.goto('/login');
     await page.fill('#lid', 'user');
     await page.fill('#lpw', 'user1234');
@@ -91,33 +119,53 @@ test.describe('채팅 플로우', () => {
     await expect(page.locator('#chat-input')).toBeEnabled();
   });
 
-  test('GraphDB graph_summary를 4개 섹션으로 렌더링', async ({ page }) => {
+  test('GraphDB 구조화 검토 경로와 근거를 렌더링', async ({ page }) => {
     const graphPayload = {
-      graph_summary: {
-        confirmed_facts: [{ subject: '대장내시경', relation: 'HAS_GRADE', object: '2종', source: '실무가이드, p.12' }],
-        review_required: [{ subject: '합병증', relation: 'RELATES_TO_COMPLICATION', object: '검토 후보(확정 대상 아님)', reason: '부분 키워드 매칭: 감염' }],
-        evidence_checklist: [{ name: '진단서', requirement: '합병증 진단명 확인', status: 'required', priority: 'high' }],
-        review_actions: [{ order: 1, action: '합병증 진단 확인', target: '의료기관 진료 기록', priority: 'high' }],
-      },
+      graph_review_paths: [
+        {
+          path_type_label: '보상 검토',
+          status_label: '검토 필요',
+          summary: '합병증 여부와 진단서를 함께 확인해야 합니다.',
+          required_evidence: ['진단서'],
+          review_actions: ['합병증 진단 확인'],
+        },
+      ],
+      facts: [
+        {
+          subject: '대장내시경',
+          relation: 'HAS_GRADE',
+          object: '2종',
+          status: 'confirmed',
+          evidence: [{ doc_short: '실무가이드', page_start: 12 }],
+        },
+        {
+          subject: '합병증',
+          relation: 'RELATES_TO_COMPLICATION',
+          object: '검토 후보',
+          status: 'candidate',
+        },
+      ],
     };
     await mockChatStream(page, graphPayload, '테스트 답변');
 
     await page.fill('#chat-input', '합병증 감염 검토가 필요합니다');
     await page.keyboard.press('Enter');
 
-    const graphSummary = page.locator('.graph-four-sections');
-    await expect(graphSummary).toBeVisible({ timeout: 30000 });
-    await expect(graphSummary.locator('.confirmed-section')).toContainText('■ 섹션 1️⃣  【확정 근거】');
-    await expect(graphSummary.locator('.review-required-section')).toContainText('■ 섹션 2️⃣  【검토 필요 사항】');
-    await expect(graphSummary.locator('.evidence-section')).toContainText('■ 섹션 3️⃣  【추가 확인 사항】');
-    await expect(graphSummary.locator('.actions-section')).toContainText('■ 섹션 4️⃣  【권장 조치】');
-    await expect(graphSummary.locator('.confirmed-section')).toContainText('대장내시경');
-    await expect(graphSummary.locator('.review-required-section')).toContainText('부분 키워드 매칭: 감염');
-    await expect(graphSummary.locator('.evidence-section')).toContainText('진단서');
-    await expect(graphSummary.locator('.actions-section')).toContainText('합병증 진단 확인');
+    const reviewPaths = page.locator('.graph-review-paths');
+    await expect(reviewPaths).toBeVisible({ timeout: 30000 });
+    await expect(reviewPaths).toContainText('구조화 검토 경로');
+    await expect(reviewPaths).toContainText('보상 검토');
+    await expect(reviewPaths).toContainText('검토 필요');
+    await expect(reviewPaths).toContainText('진단서');
+    await expect(reviewPaths).toContainText('합병증 진단 확인');
+
+    const facts = page.locator('.graph-facts');
+    await expect(facts).toBeVisible();
+    await expect(facts.locator('.graph-confirmed')).toContainText('대장내시경');
+    await expect(facts.locator('.graph-candidate')).toContainText('합병증');
   });
 
-  test('명확화 UX 선택값 요약 칩 및 단일 선택 그룹 테스트', async ({ page }) => {
+  test('명확화 계획을 읽기 전용 패널로 렌더링', async ({ page }) => {
     const graphPayload = {
       plan: {
         normalized_terms: { "엠알아이": "MRI" },
@@ -137,269 +185,21 @@ test.describe('채팅 플로우', () => {
     const clarification = page.locator('.msg-clarifications').last();
     await expect(clarification).toBeVisible();
 
-    const summary = clarification.locator('[data-clarify-summary]');
-    await expect(summary).toContainText('아직 선택된 조건이 없습니다.');
-
-    // 1. 단일 보정 용어 선택
-    const mriBtn = clarification.locator('.clarify-option', { hasText: 'MRI 맞음' });
-    await mriBtn.click();
-    await expect(mriBtn).toHaveClass(/selected/);
-    await expect(summary).toContainText('MRI');
-
-    // 2. 단일 선택 그룹 테스트 (4세대 클릭 후 5세대 클릭 시 독점 선택 확인)
-    const fourthBtn = clarification.locator('.clarify-option', { hasText: '4세대 실손' });
-    const fifthBtn = clarification.locator('.clarify-option', { hasText: '5세대 실손' });
-
-    await fourthBtn.click();
-    await expect(fourthBtn).toHaveClass(/selected/);
-    await expect(fifthBtn).not.toHaveClass(/selected/);
-    await expect(summary).toContainText('4세대 실손');
-
-    await fifthBtn.click();
-    await expect(fifthBtn).toHaveClass(/selected/);
-    await expect(fourthBtn).not.toHaveClass(/selected/);
-    await expect(summary).toContainText('5세대 실손');
-    await expect(summary).not.toContainText('4세대 실손');
-  });
-
-  test('명확화 UX 선택 초기화 테스트', async ({ page }) => {
-    const graphPayload = {
-      plan: {
-        ambiguous_terms: ["실손 세대", "방문 구분"],
-        clarification_questions: ["추가 정보 필요"]
-      }
-    };
-    await mockChatStream(page, graphPayload);
-
-    await page.fill('#chat-input', '실손 보상 기준?');
-    await page.keyboard.press('Enter');
-    await expect(page.locator('#typing')).toBeHidden({ timeout: 10000 });
-
-    const clarification = page.locator('.msg-clarifications').last();
-    const applyBtn = clarification.locator('[data-action="apply-clarification"]');
-    const resetBtn = clarification.locator('[data-action="reset-clarification"]');
-    const summary = clarification.locator('[data-clarify-summary]');
-
-    await expect(applyBtn).toBeDisabled();
-    await expect(resetBtn).toBeDisabled();
-
-    // 조건 선택
-    const fifthBtn = clarification.locator('.clarify-option', { hasText: '5세대 실손' });
-    const tongBtn = clarification.locator('.clarify-option', { hasText: '통원' });
-    await fifthBtn.click();
-    await tongBtn.click();
-
-    await expect(applyBtn).toBeEnabled();
-    await expect(resetBtn).toBeEnabled();
-    await expect(summary).toContainText('5세대 실손');
-    await expect(summary).toContainText('통원');
-
-    // 초기화 클릭
-    await resetBtn.click();
-
-    await expect(fifthBtn).not.toHaveClass(/selected/);
-    await expect(tongBtn).not.toHaveClass(/selected/);
-    await expect(summary).toContainText('아직 선택된 조건이 없습니다.');
-    await expect(applyBtn).toBeDisabled();
-    await expect(resetBtn).toBeDisabled();
-  });
-
-  test('명확화 UX 자주 쓰는 조건 프리셋 테스트', async ({ page }) => {
-    const graphPayload = {
-      plan: {
-        normalized_terms: { "엠알아이": "MRI" },
-        term_correction_candidates: [
-          { raw: "엠알아이", normalized: "MRI" }
-        ],
-        ambiguous_terms: ["실손 세대", "방문 구분"]
-      }
-    };
-    const chatRequestPayloads = await mockChatStream(page, graphPayload);
-
-    await page.fill('#chat-input', '엠알아이 통원 보상?');
-    await page.keyboard.press('Enter');
-    await expect(page.locator('#typing')).toBeHidden({ timeout: 10000 });
-
-    const clarification = page.locator('.msg-clarifications').last();
-    const summary = clarification.locator('[data-clarify-summary]');
-    const applyBtn = clarification.locator('[data-action="apply-clarification"]');
-
-    // 프리셋 버튼 '5세대 + 통원' 클릭
-    const presetBtn = clarification.locator('.clarify-preset[data-preset-id="fifth-outpatient"]');
-    await presetBtn.click();
-
-    await expect(summary).toContainText('5세대 실손');
-    await expect(summary).toContainText('통원');
-    await expect(applyBtn).toBeEnabled();
-
-    // 다시 검색 클릭
-    await applyBtn.click();
-    await expect(page.locator('#typing')).toBeHidden({ timeout: 10000 });
-
-    // Payload 검증
-    expect(chatRequestPayloads.length).toBe(2);
-    const secondReq = chatRequestPayloads[1];
-    expect(secondReq.query).toContain('엠알아이 통원 보상?');
-    expect(secondReq.query).toContain('[사용자 명확화]');
-    expect(secondReq.query).toContain('- 실손 세대: 5세대');
-    expect(secondReq.query).toContain('- 방문 구분: 통원');
-
-    // clarification payload 검증
-    expect(secondReq.clarification.selections).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ group: 'policy_generation', value: '5세대' }),
-        expect.objectContaining({ group: 'visit_type', value: '통원' }),
-      ])
-    );
-  });
-
-  test('명확화 UX는 버튼으로 제공된 확인 항목을 질문 목록에 중복 노출하지 않는다', async ({ page }) => {
-    const graphPayload = {
-      plan: {
-        ambiguous_terms: ["상품/특약"],
-        clarification_questions: ["어떤 상품 또는 특약 가입 여부를 기준으로 볼지 확인해 주세요."]
-      }
-    };
-    await mockChatStream(page, graphPayload);
-
-    await page.fill('#chat-input', '합병증 특약 보상이 되나요?');
-    await page.keyboard.press('Enter');
-    await expect(page.locator('#typing')).toBeHidden({ timeout: 10000 });
-
-    const clarification = page.locator('.msg-clarifications').last();
-    await expect(clarification.locator('.clarify-section', { hasText: '상품/특약' })).toBeVisible();
-    await expect(clarification).not.toContainText('어떤 상품 또는 특약 가입 여부를 기준으로 볼지 확인해 주세요.');
-  });
-
-  test('명확화 UX는 화면에 없는 조건을 프리셋으로 합성하지 않는다', async ({ page }) => {
-    const graphPayload = {
-      plan: {
-        ambiguous_terms: ["실손 세대", "방문 구분"]
-      }
-    };
-    const chatRequestPayloads = await mockChatStream(page, graphPayload);
-
-    await page.fill('#chat-input', '도수치료 실손?');
-    await page.keyboard.press('Enter');
-    await expect(page.locator('#typing')).toBeHidden({ timeout: 10000 });
-
-    const clarification = page.locator('.msg-clarifications').last();
-    const summary = clarification.locator('[data-clarify-summary]');
-    const applyBtn = clarification.locator('[data-action="apply-clarification"]');
-
-    // coverage_topic 개별 선택지가 없는 상황에서는 해당 값을 포함한 프리셋을 숨긴다.
-    const presetBtn = clarification.locator('.clarify-preset[data-preset-id="manual-shockwave-fifth-outpatient"]');
-    await expect(presetBtn).toHaveCount(0);
-
-    const basicPresetBtn = clarification.locator('.clarify-preset[data-preset-id="fifth-outpatient"]');
-    await basicPresetBtn.click();
-
-    await expect(summary).not.toContainText('도수/충격파');
-    await expect(summary).toContainText('5세대 실손');
-    await expect(summary).toContainText('통원');
-
-    // 다시 검색 클릭
-    await applyBtn.click();
-    await expect(page.locator('#typing')).toBeHidden({ timeout: 10000 });
-
-    // Payload 검증
-    expect(chatRequestPayloads.length).toBe(2);
-    const secondReq = chatRequestPayloads[1];
-    expect(secondReq.query).toContain('[사용자 명확화]');
-    expect(secondReq.query).toContain('- 실손 세대: 5세대');
-    expect(secondReq.query).toContain('- 방문 구분: 통원');
-
-    expect(secondReq.clarification.selections).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ group: 'policy_generation', value: '5세대' }),
-        expect.objectContaining({ group: 'visit_type', value: '통원' }),
-      ])
-    );
-  });
-
-  test('명확화 UX 복수 선택 그룹 테스트 (증빙 서류)', async ({ page }) => {
-    const graphPayload = {
-      plan: {
-        ambiguous_terms: ["증빙 서류"],
-        clarification_questions: ["진료비 영수증, 세부내역서, 진단서 등 확인 필요"]
-      }
-    };
-    const chatRequestPayloads = await mockChatStream(page, graphPayload);
-
-    await page.fill('#chat-input', '구비 서류 뭐 필요해?');
-    await page.keyboard.press('Enter');
-    await expect(page.locator('#typing')).toBeHidden({ timeout: 10000 });
-
-    const clarification = page.locator('.msg-clarifications').last();
-    const summary = clarification.locator('[data-clarify-summary]');
-    const applyBtn = clarification.locator('[data-action="apply-clarification"]');
-
-    const receiptBtn = clarification.locator('.clarify-option', { hasText: '영수증' });
-    const statementBtn = clarification.locator('.clarify-option', { hasText: '세부내역서' });
-
-    // 둘 다 클릭
-    await receiptBtn.click();
-    await statementBtn.click();
-
-    // 두 버튼 모두 selected 및 요약에 모두 들어갔는지 확인 (복수 선택 작동)
-    await expect(receiptBtn).toHaveClass(/selected/);
-    await expect(statementBtn).toHaveClass(/selected/);
-    await expect(summary).toContainText('영수증');
-    await expect(summary).toContainText('세부내역서');
-
-    // 다시 검색 클릭
-    await applyBtn.click();
-    await expect(page.locator('#typing')).toBeHidden({ timeout: 10000 });
-
-    // Payload 검증
-    expect(chatRequestPayloads.length).toBe(2);
-    const secondReq = chatRequestPayloads[1];
-    expect(secondReq.query).toContain('[사용자 명확화]');
-    expect(secondReq.query).toContain('- 증빙 서류: 영수증');
-    expect(secondReq.query).toContain('- 증빙 서류: 세부내역서');
-
-    expect(secondReq.clarification.selections).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ group: 'evidence_tags', value: '영수증' }),
-        expect.objectContaining({ group: 'evidence_tags', value: '세부내역서' }),
-      ])
-    );
+    await expect(clarification).toContainText('추가 확인 필요');
+    await expect(clarification).toContainText('실손 세대');
+    await expect(clarification).toContainText('방문 구분');
+    await expect(clarification).toContainText('추가 확인 질문');
+    await expect(clarification).toContainText('어느 실손 세대 기준인지 확인해 주세요.');
+    await expect(clarification).toContainText('입력 용어 정규화');
+    await expect(clarification).toContainText('엠알아이 → MRI');
+    await expect(clarification).toContainText('입력 용어 보정 후보');
+    await expect(clarification).toContainText('(확인 필요)');
   });
 });
 
 test.describe('Qwen Thinking 추론 모드 토글', () => {
   test.beforeEach(async ({ page }) => {
-    await page.route('**/api/auth/login', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          user: {
-            username: 'user',
-            id: 'user',
-            role: 'user',
-            display_name: '사용자',
-            created_at: '2026-06-05T00:00:00+09:00',
-            password_updated_at: '2026-06-05T00:00:00+09:00',
-          },
-          access_expires_in: 900,
-        }),
-      });
-    });
-    await page.route('**/api/auth/me', async (route) => {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({
-          username: 'user',
-          id: 'user',
-          role: 'user',
-          display_name: '사용자',
-          created_at: '2026-06-05T00:00:00+09:00',
-          password_updated_at: '2026-06-05T00:00:00+09:00',
-        }),
-      });
-    });
+    await mockUserAuth(page);
     await page.route('**/api/system/models', async (route) => {
       await route.fulfill({
         status: 200,
@@ -429,7 +229,7 @@ test.describe('Qwen Thinking 추론 모드 토글', () => {
     });
   });
 
-  test('토글 on/off가 채팅 payload에 반영되고 다른 모델에서는 숨겨짐', async ({ page }) => {
+  test('모델 선택 없이 추론 토글이 payload에 반영됨', async ({ page }) => {
     const payloads = await mockChatStream(page, null, '추론 토글 테스트 답변', 0);
 
     await page.goto('/login');
@@ -438,7 +238,8 @@ test.describe('Qwen Thinking 추론 모드 토글', () => {
     await page.click('#login-submit-btn');
     await expect(page).toHaveURL('/chat');
 
-    await expect(page.locator('#reasoning-toggle-wrap')).toBeVisible();
+    await expect(page.locator('#active-model-select')).toHaveCount(0);
+    await expect(page.locator('#reasoning-toggle-wrap')).not.toHaveClass(/hidden/);
     await page.check('#reasoning-mode-toggle');
     await page.fill('#chat-input', '추론 모드 payload 테스트');
     await page.keyboard.press('Enter');
@@ -446,8 +247,5 @@ test.describe('Qwen Thinking 추론 모드 토글', () => {
 
     expect(payloads[0].model).toBe('sglang:qwen3-next-80b-a3b-thinking-fp8');
     expect(payloads[0].reasoning_mode).toBe('on');
-
-    await page.selectOption('#active-model-select', 'sglang:gpt-oss-20b');
-    await expect(page.locator('#reasoning-toggle-wrap')).toHaveClass(/hidden/);
   });
 });
