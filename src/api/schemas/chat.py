@@ -22,5 +22,6 @@ class ChatRequest(BaseModel):
     adaptive_k: bool | None = None
     filters: dict = Field(default_factory=dict)
     memo: str | None = None
+    policy_generation: Literal["4th", "5th"] | None = None
     index_mode: IndexMode = "v2_only"
     clarification: dict = Field(default_factory=dict)

@@ -6,12 +6,14 @@ import logging
 import time
 
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import config
 from src.api.db import get_db
 from src.api.deps import log_audit_event, require_permission
 from src.api.exceptions import ValidationException
+from src.api.models import ChatMessage, ChatSession
 from src.api.rag_service import get_rag_pipeline
 from src.api.schemas.claim import ClaimCalculationRequest, ClaimCalculationResponse
 from src.auth.users import User
@@ -81,6 +83,11 @@ async def calculate_claim(
         raise ValidationException(detail=str(exc)) from exc
 
     response = ClaimCalculationResponse.from_result(result, warnings)
+    if db is not None and payload.save_to_history:
+        chat_session = await _ensure_claim_session(db, user.username, payload.session_id, _claim_title(items))
+        response.session_id = chat_session.id
+        await _persist_claim_turn(db, chat_session.id, payload, response)
+
     if db is not None:
         await log_audit_event(
             db,
@@ -98,6 +105,76 @@ async def calculate_claim(
             },
         )
     return response
+
+
+async def _ensure_claim_session(
+    db: AsyncSession,
+    username: str,
+    session_id: str | None,
+    title: str,
+) -> ChatSession:
+    if session_id:
+        result = await db.execute(
+            select(ChatSession).where(ChatSession.id == session_id, ChatSession.user_id == username)
+        )
+        chat_session = result.scalar_one_or_none()
+        if chat_session is not None:
+            return chat_session
+
+    chat_session = ChatSession(user_id=username, title=title[:40] or "보험금 계산")
+    db.add(chat_session)
+    await db.commit()
+    await db.refresh(chat_session)
+    return chat_session
+
+
+async def _persist_claim_turn(
+    db: AsyncSession,
+    session_id: str,
+    payload: ClaimCalculationRequest,
+    response: ClaimCalculationResponse,
+) -> None:
+    db.add_all(
+        [
+            ChatMessage(session_id=session_id, role="user", content=_claim_user_text(payload), sources=None),
+            ChatMessage(
+                session_id=session_id,
+                role="assistant",
+                content=_claim_response_text(response),
+                sources=response.applied_basis or None,
+            ),
+        ]
+    )
+    await db.commit()
+
+
+def _claim_title(items: list[ClaimItemInput]) -> str:
+    first = items[0].input_name if items else ""
+    suffix = f" 외 {len(items) - 1}건" if len(items) > 1 else ""
+    return f"보험금 계산: {first}{suffix}"
+
+
+def _claim_user_text(payload: ClaimCalculationRequest) -> str:
+    generation = "5세대" if payload.context.policy_generation == "5th" else "4세대"
+    lines = []
+    for item in payload.items:
+        insured = item.insured_copay_amount or "0"
+        nonpay = item.nonpay_amount or "0"
+        lines.append(f"{item.input_name} 급여본인부담 {insured}원 / 비급여 {nonpay}원 x {item.quantity}")
+    return f"[보험금 계산/{generation}] " + ", ".join(lines)
+
+
+def _claim_response_text(response: ClaimCalculationResponse) -> str:
+    status = "검토 필요" if response.requires_review else "계산 완료"
+    return "\n".join(
+        [
+            f"보험금 계산 결과: {status}",
+            f"- 총 청구금액: {response.claimed_amount}원",
+            f"- 예상 공제금액: {response.deductible}원",
+            f"- 예상 지급금액: {response.payable_amount}원",
+            f"- 메모: {response.notes}",
+        ]
+    )
 
 
 def _select_model(payload: ClaimCalculationRequest) -> str:

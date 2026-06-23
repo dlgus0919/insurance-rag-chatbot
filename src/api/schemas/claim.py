@@ -48,6 +48,8 @@ class ClaimCaseContextRequest(BaseModel):
 class ClaimCalculationRequest(BaseModel):
     """Claim calculation payload."""
 
+    session_id: str | None = None
+    save_to_history: bool = True
     items: list[ClaimItemRequest] = Field(..., min_length=1)
     context: ClaimCaseContextRequest = Field(default_factory=ClaimCaseContextRequest)
     basis_mode: Literal["auto", "manual"] = "auto"
@@ -62,6 +64,7 @@ class ClaimCalculationRequest(BaseModel):
 class ClaimCalculationResponse(BaseModel):
     """JSON-safe calculation result returned to the SPA."""
 
+    session_id: str | None = None
     claimed_amount: str
     payable_amount: str
     deductible: str
@@ -88,8 +91,14 @@ class ClaimCalculationResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
     @classmethod
-    def from_result(cls, result: CalculationResult, warnings: list[str] | None = None) -> "ClaimCalculationResponse":
+    def from_result(
+        cls,
+        result: CalculationResult,
+        warnings: list[str] | None = None,
+        session_id: str | None = None,
+    ) -> "ClaimCalculationResponse":
         return cls(
+            session_id=session_id,
             claimed_amount=result.claimed_amount,
             payable_amount=result.payable_amount,
             deductible=result.deductible,

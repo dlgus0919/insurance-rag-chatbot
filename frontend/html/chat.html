@@ -59,12 +59,6 @@
             </label>
           </div>
           <div class="settings-section">
-            <label class="adaptive-k-toggle" id="adaptive-k-toggle-wrap" title="Reranker 점수 급락 지점을 기준으로 최종 검색 청크 수를 조절합니다.">
-              <input type="checkbox" id="adaptive-k-toggle" checked>
-              <span>Semi-adaptive K</span>
-            </label>
-          </div>
-          <div class="settings-section">
             <div class="settings-section-title">OCR 인덱스</div>
             <div class="settings-radio-group">
               <label class="radio-pill">
@@ -121,10 +115,6 @@
         <span class="model-badge-label">활성 모델</span>
         <span class="model-badge-value" id="active-model-label">확인 중...</span>
       </div>
-      <div class="model-switcher-wrap" id="model-switcher-wrap">
-        <label class="model-switcher-label" for="active-model-select">모델 변경</label>
-        <select class="model-switcher-select" id="active-model-select" aria-label="활성 모델 변경"></select>
-      </div>
       <label class="reasoning-toggle hidden" id="reasoning-toggle-wrap" title="내부 추론 문장은 화면에 표시하지 않습니다.">
         <input type="checkbox" id="reasoning-mode-toggle">
         <span class="reasoning-toggle-text">추론 모드</span>
@@ -147,17 +137,17 @@
       <span class="mode-label">검색 모드</span>
       <button class="mode-tab active" type="button" data-mode="general">일반 질의</button>
       <button class="mode-tab" type="button" data-mode="claim">보험금 계산</button>
+      <div class="mode-claim-generation">
+        <label class="p-label">실손 세대 기준</label>
+        <div class="claim-radio-group">
+          <label><input type="radio" name="claim-policy-generation" value="4th" checked/> 4세대 실손</label>
+          <label><input type="radio" name="claim-policy-generation" value="5th"/> 5세대 실손</label>
+        </div>
+      </div>
     </div>
 
     <div class="sub-panel" id="panel-claim">
       <div class="claim-grid">
-        <div class="p-field claim-generation">
-          <label class="p-label">실손 세대 기준</label>
-          <div class="claim-radio-group">
-            <label><input type="radio" name="claim-policy-generation" value="4th" checked/> 4세대 실손</label>
-            <label><input type="radio" name="claim-policy-generation" value="5th"/> 5세대 실손</label>
-          </div>
-        </div>
         <div class="claim-lines" id="claim-lines">
           <div class="claim-line-row" data-claim-line>
             <div class="p-field">
@@ -170,7 +160,7 @@
             </div>
             <div class="p-field">
               <label class="p-label">급여 본인부담금</label>
-              <input class="p-input claim-insured-copay-amount" type="text" placeholder="예: 23434"/>
+              <input class="p-input claim-insured-copay-amount" type="text" placeholder="예: 0"/>
             </div>
             <div class="p-field">
               <label class="p-label">비급여 금액</label>
@@ -198,28 +188,32 @@
             <button class="btn-sm claim-remove-line" type="button" data-action="remove-claim-line" aria-label="청구 항목 삭제">삭제</button>
           </div>
         </div>
-        <button class="btn-sm claim-add-line" type="button" data-action="add-claim-line">항목 추가</button>
-        <div class="p-field">
-          <label class="p-label">진단코드</label>
-          <input class="p-input" id="claim-diagnosis-code" type="text" placeholder="예: M54.5"/>
+        <div class="claim-context-row">
+          <div class="p-field claim-diagnosis-field">
+            <label class="p-label">진단코드</label>
+            <input class="p-input" id="claim-diagnosis-code" type="text" placeholder="예: M54.5"/>
+          </div>
+          <div class="p-field claim-coverage-field">
+            <label class="p-label">보장 주제</label>
+            <input class="p-input" id="claim-coverage-topic" type="text" placeholder="예: 실손, 3대비급여"/>
+          </div>
+          <div class="p-field claim-visit-field">
+            <label class="p-label">방문 구분</label>
+            <select class="p-input" id="claim-visit-type">
+              <option value="">미지정</option>
+              <option value="outpatient">통원</option>
+              <option value="hospitalization">입원</option>
+            </select>
+          </div>
+          <div class="p-field claim-note">
+            <label class="p-label">상황 메모</label>
+            <input class="p-input" id="claim-note" type="text" placeholder="예: 통원 1회, 진료비 영수증 및 세부내역서 기준"/>
+          </div>
+          <div class="claim-actions">
+            <button class="btn-sm claim-add-line" type="button" data-action="add-claim-line">항목 추가</button>
+            <button class="btn-sm claim-submit" type="button" data-action="send-claim">계산</button>
+          </div>
         </div>
-        <div class="p-field">
-          <label class="p-label">보장 주제</label>
-          <input class="p-input" id="claim-coverage-topic" type="text" placeholder="예: 실손, 3대비급여"/>
-        </div>
-        <div class="p-field">
-          <label class="p-label">방문 구분</label>
-          <select class="p-input" id="claim-visit-type">
-            <option value="">미지정</option>
-            <option value="outpatient">통원</option>
-            <option value="hospitalization">입원</option>
-          </select>
-        </div>
-        <div class="p-field claim-note">
-          <label class="p-label">상황 메모</label>
-          <textarea class="p-input" id="claim-note" rows="2" placeholder="예: 통원 1회, 진료비 영수증 및 세부내역서 기준"></textarea>
-        </div>
-        <button class="btn-sm" type="button" data-action="send-claim">계산</button>
       </div>
     </div>
 

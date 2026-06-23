@@ -24,7 +24,6 @@ export async function initChatPage({ currentUser, onGoAdmin, onLogout } = {}) {
 
   applyUserToChatPage();
   applySelectedModelLabel();
-  await setupModelSwitcher();
   renderWelcome();
   showFreshChatNoticeIfNeeded();
   setupChatMenuHandlers({ onGoAdmin, onLogout });
@@ -206,24 +205,9 @@ function setupSettingsHandlers() {
         autoParamToggle.checked ? 'on' : 'off'
       );
       syncAutoParamControls();
-      syncAdaptiveKControls();
     });
   }
   syncAutoParamControls();
-
-  const adaptiveKToggle = document.getElementById('adaptive-k-toggle');
-  if (adaptiveKToggle && !adaptiveKToggle.dataset.adaptiveKBound) {
-    adaptiveKToggle.dataset.adaptiveKBound = 'true';
-    adaptiveKToggle.checked = isAdaptiveKEnabled();
-    adaptiveKToggle.addEventListener('change', () => {
-      localStorage.setItem(
-        STORAGE_KEYS.ADAPTIVE_K,
-        adaptiveKToggle.checked ? 'on' : 'off'
-      );
-      syncAdaptiveKControls();
-    });
-  }
-  syncAdaptiveKControls();
 
   const page = document.getElementById('page-chat');
   if (page && !page.dataset.exportCloseBound) {
@@ -350,62 +334,6 @@ function applySelectedModelLabel() {
   if (!label) return;
   label.textContent = formatSelectedModelLabel(getSelectedModel());
   updateReasoningToggleVisibility();
-}
-
-async function setupModelSwitcher() {
-  const select = document.getElementById('active-model-select');
-  const wrap = document.getElementById('model-switcher-wrap');
-  if (!select || !wrap) return;
-
-  select.disabled = true;
-  select.innerHTML = '<option value="">모델 확인 중...</option>';
-
-  try {
-    const response = await apiFetch('/system/models');
-    const payload = await response.json();
-    const localModels = Array.isArray(payload.providers?.local) ? payload.providers.local : [];
-
-    if (!localModels.length) {
-      wrap.classList.add('hidden');
-      return;
-    }
-
-    const currentModel = getSelectedModel();
-    const defaultModel = payload.defaults?.local || localModels[0]?.id || '';
-    const resolvedModel = localModels.some((model) => model.id === currentModel)
-      ? currentModel
-      : defaultModel;
-
-    select.innerHTML = localModels.map((model) => `
-      <option value="${escapeHTML(model.id)}">${escapeHTML(model.label || formatSelectedModelLabel(model.id))}</option>
-    `).join('');
-
-    if (resolvedModel && resolvedModel !== currentModel) {
-      localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, resolvedModel);
-      localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE, 'default');
-    }
-
-    select.value = resolvedModel;
-    select.disabled = localModels.length <= 1;
-    applySelectedModelLabel();
-
-    if (!select.dataset.phase3Bound) {
-      select.dataset.phase3Bound = 'true';
-      select.addEventListener('change', () => {
-        const nextModel = select.value;
-        if (!nextModel) return;
-        localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, nextModel);
-        localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE, 'explicit');
-        applySelectedModelLabel();
-        updateReasoningToggleVisibility();
-        toast(`활성 모델을 ${formatSelectedModelLabel(nextModel)}로 변경했습니다.`, 'success');
-      });
-    }
-  } catch (error) {
-    console.warn('Failed to load model switcher options:', error);
-    select.innerHTML = '<option value="">모델 목록 로드 실패</option>';
-    select.disabled = true;
-  }
 }
 
 function getLogoSrc() {
@@ -541,7 +469,7 @@ function appendMsg(role, text, sources, track = true, uiPayload = null) {
   const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   const isUser = role === 'user';
   const graphResult = role === 'bot' ? (uiPayload?.graphResult || null) : null;
-  const messageText = role === 'bot' ? sanitizeAssistantAnswer(text, graphResult) : String(text || '');
+  const messageText = role === 'bot' ? stripAnswerEmoji(sanitizeAssistantAnswer(text, graphResult)) : String(text || '');
   const sourceHtml = renderSourcesHtml(sources);
   const warnings = role === 'bot' ? (uiPayload?.warnings || []) : [];
   const legacyStructuredNotice = role === 'bot' ? Boolean(uiPayload?.legacyStructuredNotice) : false;
@@ -621,6 +549,8 @@ async function sendClaim(options = {}) {
     appendMsg('user', `[보험금 계산/${policyGeneration === '5th' ? '5세대' : '4세대'}] ${itemSummary}`);
   }
   await calculateClaim({
+    session_id: currentSession,
+    save_to_history: !suppressUserMessage,
     items,
     context: {
       visit_type: visitType,
@@ -686,6 +616,7 @@ function resetClaimForm() {
   firstRow.querySelectorAll('select').forEach((select) => {
     select.value = '';
   });
+  syncClaimLineLabels();
 
   const generation = document.querySelector('input[name="claim-policy-generation"][value="4th"]');
   if (generation instanceof HTMLInputElement) generation.checked = true;
@@ -725,6 +656,7 @@ function addClaimLine() {
     select.value = '';
   });
   lines.appendChild(next);
+  syncClaimLineLabels();
 }
 
 function removeClaimLine(button) {
@@ -740,6 +672,13 @@ function removeClaimLine(button) {
     return;
   }
   button.closest('[data-claim-line]')?.remove();
+  syncClaimLineLabels();
+}
+
+function syncClaimLineLabels() {
+  document.querySelectorAll('[data-claim-line]').forEach((row, index) => {
+    row.classList.toggle('is-extra', index > 0);
+  });
 }
 
 async function calculateClaim(payload) {
@@ -754,7 +693,12 @@ async function calculateClaim(payload) {
     });
     const result = await response.json();
     removeTyping();
+    if (result.session_id) {
+      currentSession = result.session_id;
+      setCurrentSession(currentSession);
+    }
     appendClaimResult(result);
+    if (result.session_id) await loadSessions();
   } catch (error) {
     removeTyping();
     if (error.name !== 'AbortError') appendMsg('bot', '오류: ' + error.message, []);
@@ -789,8 +733,9 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
       top_k: getTopK(),
       temperature: getTemperature(),
       auto_params: isAutoParamsEnabled(),
-      adaptive_k: isAdaptiveKEnabled(),
+      adaptive_k: isAutoParamsEnabled(),
       filters,
+      policy_generation: getPolicyGeneration(),
       index_mode: getIndexMode(),
     };
     if (memo) payload.memo = memo;
@@ -878,12 +823,19 @@ function appendClaimResult(result) {
   });
 }
 
+function claimLineNeedsReview(line) {
+  return line?.requires_review === true
+    || line?.calculation_status === 'partial_human_task'
+    || line?.excluded_from_calculation === true
+    || Number(line?.human_task_amount || 0) > 0;
+}
+
 function renderClaimResultHtml(result) {
   if (result.candidates?.length) {
     return `
       <div class="claim-result">
         <div class="claim-section">
-          <div class="evidence-title">🤔 여러 항목이 발견되었습니다. 가장 정확한 것을 선택해 주세요.</div>
+          <div class="evidence-title">여러 항목이 발견되었습니다. 가장 정확한 것을 선택해 주세요.</div>
           <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;">
             ${result.candidates.slice(0, 6).map((candidate) =>
               `<button type="button" class="tag-chip candidate-btn" style="cursor:pointer;" data-code="${escapeHTML(candidate.code || '')}" data-name="${escapeHTML(candidate.name || '')}">
@@ -895,8 +847,7 @@ function renderClaimResultHtml(result) {
       </div>`;
   }
 
-  const reviewClass = result.requires_review ? 'claim-review' : 'claim-ok';
-  const reviewLabel = result.requires_review ? '검토 필요' : '계산 완료';
+  const noteHtml = result.notes ? `<div class="claim-note-alert">${escapeHTML(result.notes)}</div>` : '';
   const reasons = result.review_reasons?.length
     ? `<div class="claim-section"><div class="evidence-title">검토 사유</div><ul>${result.review_reasons.map((reason) => `<li>${escapeHTML(reason)}</li>`).join('')}</ul></div>`
     : '';
@@ -906,12 +857,13 @@ function renderClaimResultHtml(result) {
   const candidates = ''; // candidates handled above
   const compactBasisItems = compactClaimBasisItems(result.applied_basis, 4);
   const basis = compactBasisItems.length
-    ? `<div class="claim-section"><div class="evidence-title">적용 근거</div><ul>${compactBasisItems.map((basisItem) => {
+    ? `<details class="claim-section claim-basis-details"><summary class="evidence-title">적용 근거 보기</summary><ul>${compactBasisItems.map((basisItem) => {
         const extra = basisItem.extraCount > 0
           ? ` <span class="claim-inline-note">외 ${basisItem.extraCount}건</span>`
           : '';
-        return `<li><strong>${escapeHTML(basisItem.source || '근거')}</strong>${extra}: ${escapeHTML(truncateUiText(basisItem.content || '', 180))}</li>`;
-      }).join('')}</ul></div>`
+        const reviewClass = basisItem.reviewStatus === 'review_required' ? ' class="claim-review-basis"' : '';
+        return `<li${reviewClass}><strong>${escapeHTML(basisItem.source || '근거')}</strong>${extra}: ${escapeHTML(truncateUiText(basisItem.content || '', 180))}</li>`;
+      }).join('')}</ul></details>`
     : '';
   const calculatedLines = (result.line_results || []).filter((line) => line.calculation_status !== 'human_task');
   const humanTaskLines = (result.line_results || []).filter((line) =>
@@ -924,7 +876,8 @@ function renderClaimResultHtml(result) {
         const splitAmount = Number(line.insured_copay_amount || 0) > 0 || Number(line.nonpay_amount || 0) > 0
           ? `급여본인부담 ${formatMoney(line.insured_copay_amount)}원 / 비급여 ${formatMoney(line.nonpay_amount)}원 / `
           : '';
-        return `<li><strong>${escapeHTML(line.input_name || '')}</strong> (${escapeHTML(line.category || '미분류')}): ${splitAmount}청구 ${formatMoney(line.claimed_amount)}원 / 공제 ${formatMoney(line.deductible)}원 / 지급 ${formatMoney(line.payable_amount)}원</li>`;
+        const reviewClass = claimLineNeedsReview(line) ? ' class="claim-review-line"' : '';
+        return `<li${reviewClass}><strong>${escapeHTML(line.input_name || '')}</strong> (${escapeHTML(line.category || '미분류')}): ${splitAmount}청구 ${formatMoney(line.claimed_amount)}원 / 공제 ${formatMoney(line.deductible)}원 / 지급 ${formatMoney(line.payable_amount)}원</li>`;
       }).join('')}</ul></div>`
     : '';
   const humanTaskResults = humanTaskLines.length
@@ -942,14 +895,13 @@ function renderClaimResultHtml(result) {
 
   return `
     <div class="claim-result">
-      <div class="claim-status ${reviewClass}">${reviewLabel}</div>
+      ${noteHtml}
       <div class="claim-note-text">계산 기준: ${result.policy_generation === '5th' ? '5세대 실손 표준약관' : '4세대 실손 기준'}</div>
       <div class="claim-summary-grid">
-        <div><span>총 청구금액</span><strong>${formatMoney(result.claimed_amount)}원</strong></div>
-        <div><span>예상 공제금액</span><strong>${formatMoney(result.deductible)}원</strong></div>
-        <div><span>예상 지급금액</span><strong>${formatMoney(result.payable_amount)}원</strong></div>
+        <div class="claim-summary-claimed"><span>총 청구금액</span><strong>${formatMoney(result.claimed_amount)}원</strong></div>
+        <div class="claim-summary-deductible"><span>예상 공제금액</span><strong>${formatMoney(result.deductible)}원</strong></div>
+        <div class="claim-summary-payable"><span>예상 지급금액</span><strong>${formatMoney(result.payable_amount)}원</strong></div>
       </div>
-      <div class="claim-note-text">${escapeHTML(result.notes || '')}</div>
       ${lineResults}
       ${humanTaskResults}
       ${warnings}
@@ -961,7 +913,7 @@ function renderClaimResultHtml(result) {
 
 function claimResultToText(result) {
   if (result.candidates?.length) {
-    return '🤔 여러 항목이 발견되었습니다. 가장 정확한 것을 선택해 주세요.';
+    return '여러 항목이 발견되었습니다. 가장 정확한 것을 선택해 주세요.';
   }
   const lines = [
     `보험금 계산 결과: ${result.requires_review ? '검토 필요' : '계산 완료'}`,
@@ -1114,6 +1066,10 @@ function stripTrailingSourceCitationLines(text) {
   }
   const cleaned = stripped.join('\n').trim();
   return cleaned || String(text || '').trim();
+}
+
+function stripAnswerEmoji(text) {
+  return String(text || '').replace(/[\p{Extended_Pictographic}\uFE0F\u20E3]/gu, '').replace(/\s{2,}/g, ' ').trim();
 }
 
 function renderAssistantContent(text) {
@@ -1337,7 +1293,7 @@ function filterVisibleSources(sources) {
 function renderSourcesHtml(sources) {
   const visibleSources = filterVisibleSources(sources);
   if (!visibleSources.length) return '';
-  return `<div class="msg-sources">📄 참고: ${visibleSources.map(renderSourceBadgeHtml).join('')}</div>`;
+  return `<div class="msg-sources">참고: ${visibleSources.map(renderSourceBadgeHtml).join('')}</div>`;
 }
 
 function renderSourceBadgeHtml(source) {
@@ -1440,6 +1396,10 @@ function formatSelectedModelLabel(modelId) {
   return raw;
 }
 
+function getPolicyGeneration() {
+  return document.querySelector('input[name="claim-policy-generation"]:checked')?.value || '4th';
+}
+
 function getIndexMode() {
   const mode = document.querySelector('input[name="ocr-index"]:checked')?.value || 'v2_only';
   return mode === 'default' ? 'v2_only' : mode;
@@ -1457,10 +1417,6 @@ function isAutoParamsEnabled() {
   return localStorage.getItem(STORAGE_KEYS.AUTO_RAG_PARAMS) !== 'off';
 }
 
-function isAdaptiveKEnabled() {
-  return localStorage.getItem(STORAGE_KEYS.ADAPTIVE_K) !== 'off';
-}
-
 function syncAutoParamControls() {
   const enabled = isAutoParamsEnabled();
   const toggle = document.getElementById('auto-param-toggle');
@@ -1468,14 +1424,6 @@ function syncAutoParamControls() {
   document.querySelectorAll('.manual-param-control, #manual-param-divider').forEach((element) => {
     element.classList.toggle('hidden', enabled);
   });
-}
-
-function syncAdaptiveKControls() {
-  const enabled = isAdaptiveKEnabled();
-  const toggle = document.getElementById('adaptive-k-toggle');
-  const wrap = document.getElementById('adaptive-k-wrap');
-  if (toggle) toggle.checked = enabled;
-  if (wrap) wrap.classList.toggle('disabled', !isAutoParamsEnabled());
 }
 
 function toggleAdaptiveKSettings(event) {

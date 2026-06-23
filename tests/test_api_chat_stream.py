@@ -128,6 +128,14 @@ def test_chat_default_model_uses_answer_primary_sglang(monkeypatch) -> None:
     assert selected == "sglang:qwen3-next-80b-a3b-instruct-fp8"
 
 
+def test_policy_generation_context_is_added_to_general_prompt() -> None:
+    query = chat._query_with_policy_generation("도수치료 보상돼?", "5th")
+    prompt = chat._prompt_with_policy_generation("본문", "5th")
+
+    assert query.startswith("[선택된 실손 세대 기준: 5세대 실손]")
+    assert "사용자가 선택한 실손 세대는 5세대 실손" in prompt
+
+
 class FakeGraphRetriever:
     def retrieve(self, question):
         return GraphRetrievalResult(

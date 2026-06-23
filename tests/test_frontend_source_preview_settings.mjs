@@ -8,13 +8,13 @@ test('auto parameter toggle is inside the gear settings menu', async () => {
   const html = await readFile(new URL('../frontend/html/chat.html', import.meta.url), 'utf8');
   const menuIndex = html.indexOf('id="adaptive-k-menu"');
   const autoIndex = html.indexOf('id="auto-param-toggle-wrap"');
-  const adaptiveIndex = html.indexOf('id="adaptive-k-toggle-wrap"');
 
   assert.notEqual(menuIndex, -1);
   assert.notEqual(autoIndex, -1);
-  assert.notEqual(adaptiveIndex, -1);
   assert.ok(menuIndex < autoIndex);
-  assert.ok(autoIndex < adaptiveIndex);
+  assert.equal(html.indexOf('id="adaptive-k-toggle-wrap"'), -1);
+  assert.equal(html.includes('Semi-adaptive K'), false);
+  assert.match(html, /검색\/답변 자동 설정/);
 });
 
 test('source badges expose snippet text as a hover preview', () => {
