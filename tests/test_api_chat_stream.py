@@ -111,6 +111,82 @@ class FakePipeline:
         return f"질문: {question}\n근거 수: {len(chunks)}"
 
 
+async def _stream_text(response) -> str:
+    chunks = []
+    async for chunk in response.body_iterator:
+        chunks.append(chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk)
+    return "".join(chunks)
+
+
+def _claim_snapshot_source_for_chat(
+    *,
+    claim_id: str = "claim-1",
+    payable_amount: str = "105000",
+    line_results: list[dict] | None = None,
+    input_items: list[dict] | None = None,
+) -> dict:
+    return {
+        "__kind": "assistant_meta",
+        "claim_snapshot": {
+            "schema_version": 1,
+            "claim_id": claim_id,
+            "input": {
+                "items": input_items
+                or [
+                    {
+                        "line_id": "line-1",
+                        "input_name": "도수치료",
+                        "claimed_amount": "150000",
+                        "insured_copay_amount": "0",
+                        "nonpay_amount": "150000",
+                        "quantity": "1",
+                        "user_category_hint": "3대비급여",
+                    },
+                    {
+                        "line_id": "line-2",
+                        "input_name": "비타민D 주사",
+                        "claimed_amount": "48000",
+                        "insured_copay_amount": "0",
+                        "nonpay_amount": "48000",
+                        "quantity": "1",
+                        "user_category_hint": "",
+                    },
+                ],
+                "context": {"policy_generation": "4th", "visit_type": "outpatient", "coverage_topic": "실손"},
+            },
+            "result": {
+                "payable_amount": payable_amount,
+                "deductible": "45000",
+                "line_results": line_results
+                or [
+                    {
+                        "line_id": "line-1",
+                        "input_name": "도수치료",
+                        "category": "3대비급여",
+                        "claimed_amount": "150000",
+                        "deductible": "45000",
+                        "payable_amount": "105000",
+                        "calculation_status": "calculated",
+                        "human_task_amount": "0",
+                    },
+                    {
+                        "line_id": "line-2",
+                        "input_name": "비타민D 주사",
+                        "category": "미분류 비급여",
+                        "claimed_amount": "48000",
+                        "deductible": "0",
+                        "payable_amount": "0",
+                        "calculation_status": "human_task",
+                        "human_task_amount": "48000",
+                        "review_reasons": ["급여/비급여 구분 확인 필요"],
+                    },
+                ],
+                "review_reasons": ["급여/비급여 구분 확인 필요"],
+            },
+        },
+    }
+
+
 def test_document_filter_options_include_configured_documents() -> None:
     docs = _document_filter_options()
     doc_shorts = [doc["doc_short"] for doc in docs]
@@ -862,3 +938,357 @@ def test_rag_diagnostics_include_clarification_and_normalized_terms() -> None:
     assert payload['ambiguous_terms'] == ['실손 세대']
     assert payload['clarification_questions'] == ['어느 실손 세대 기준인지 확인해 주세요.']
     assert payload['graph_review_path_count'] == 1
+
+
+@pytest.mark.anyio
+async def test_chat_stream_asks_clarification_for_unspecified_covered_recalculation(db_session, monkeypatch) -> None:
+    def fail_pipeline(*_args, **_kwargs):
+        raise AssertionError("clarification path must not call RAG")
+
+    monkeypatch.setattr(chat, "get_rag_pipeline", fail_pipeline)
+    created = await sessions.create_session(SessionCreateRequest(title="보험금 계산"), _user(), db_session)
+    db_session.add(
+        ChatMessage(
+            session_id=created.id,
+            role="assistant",
+            content="보험금 계산 결과",
+            sources=[_claim_snapshot_source_for_chat()],
+        )
+    )
+    await db_session.commit()
+
+    response = await chat.chat_stream(
+        ChatRequest(query="비타민D 주사를 보상한다면 얼마인가요?", session_id=created.id, model="gemma3:4b"),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert "급여 본인부담/비급여/3대비급여" in stream
+    assert "event: done" in stream
+    assert messages[-2].role == "user"
+    assert messages[-1].role == "assistant"
+
+
+@pytest.mark.anyio
+async def test_chat_stream_asks_clarification_when_multiple_claim_snapshots_are_unclear(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(
+        chat,
+        "get_rag_pipeline",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no RAG")),
+    )
+    created = await sessions.create_session(SessionCreateRequest(title="여러 계산"), _user(), db_session)
+    db_session.add_all(
+        [
+            ChatMessage(
+                session_id=created.id,
+                role="assistant",
+                content="첫 계산",
+                sources=[_claim_snapshot_source_for_chat(claim_id="claim-1")],
+            ),
+            ChatMessage(
+                session_id=created.id,
+                role="assistant",
+                content="둘째 계산",
+                sources=[_claim_snapshot_source_for_chat(claim_id="claim-2")],
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    response = await chat.chat_stream(
+        ChatRequest(query="비타민D 주사를 비급여로 보상한다면?", session_id=created.id, model="gemma3:4b"),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert "여러 건" in stream
+    assert "최근 계산" in stream
+    assert messages[-2].content == "비타민D 주사를 비급여로 보상한다면?"
+    assert messages[-1].role == "assistant"
+
+
+@pytest.mark.anyio
+async def test_chat_stream_asks_clarification_when_target_line_is_ambiguous(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(
+        chat,
+        "get_rag_pipeline",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no RAG")),
+    )
+    created = await sessions.create_session(SessionCreateRequest(title="항목 모호"), _user(), db_session)
+    db_session.add(
+        ChatMessage(
+            session_id=created.id,
+            role="assistant",
+            content="보험금 계산 결과",
+            sources=[
+                _claim_snapshot_source_for_chat(
+                    line_results=[
+                        {
+                            "line_id": "line-1",
+                            "input_name": "비타민D 주사",
+                            "category": "미분류 비급여",
+                            "claimed_amount": "48000",
+                        },
+                        {
+                            "line_id": "line-2",
+                            "input_name": "비타민D 검사",
+                            "category": "미분류 비급여",
+                            "claimed_amount": "20000",
+                        },
+                    ]
+                )
+            ],
+        )
+    )
+    await db_session.commit()
+
+    response = await chat.chat_stream(
+        ChatRequest(query="비타민D를 비급여로 보상한다면?", session_id=created.id, model="gemma3:4b"),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert "여러 항목" in stream
+    assert "비타민D 주사" in stream
+    assert "비타민D 검사" in stream
+    assert messages[-2].role == "user"
+    assert messages[-1].role == "assistant"
+
+
+@pytest.mark.anyio
+async def test_chat_stream_runs_recalculation_when_category_and_target_are_clear(db_session, monkeypatch) -> None:
+    captured = {}
+
+    class FakeClaimPipeline:
+        pass
+
+    def fake_pipeline(model, top_k, index_mode="v2_only"):
+        captured["pipeline"] = {"model": model, "top_k": top_k, "index_mode": index_mode}
+        return FakeClaimPipeline()
+
+    def fake_run_claim_calculation(**kwargs):
+        captured["items"] = kwargs["items"]
+        captured["context"] = kwargs["context"]
+        from src.claim_calculation.models import CalculationResult
+
+        return CalculationResult(
+            claimed_amount="198000",
+            payable_amount="143400",
+            deductible="54600",
+            formula_intent="thread_recalculation",
+            executed_code="",
+            applied_basis=[{"source": "테스트 근거", "content": "재계산 근거"}],
+            requires_review=False,
+            review_reasons=[],
+            notes="재계산 완료",
+            candidates=[],
+            policy_generation="4th",
+            line_results=[
+                {
+                    "line_id": "line-1",
+                    "input_name": "도수치료",
+                    "category": "3대비급여",
+                    "claimed_amount": "150000",
+                    "deductible": "45000",
+                    "payable_amount": "105000",
+                    "calculation_status": "calculated",
+                    "human_task_amount": "0",
+                },
+                {
+                    "line_id": "line-2",
+                    "input_name": "비타민D 주사",
+                    "category": "비급여",
+                    "claimed_amount": "48000",
+                    "deductible": "9600",
+                    "payable_amount": "38400",
+                    "calculation_status": "calculated",
+                    "human_task_amount": "0",
+                },
+            ],
+            calculation_status="auto_calculated",
+        )
+
+    monkeypatch.setattr(chat, "get_rag_pipeline", fake_pipeline)
+    monkeypatch.setattr(chat, "run_claim_calculation", fake_run_claim_calculation)
+    created = await sessions.create_session(SessionCreateRequest(title="재계산"), _user(), db_session)
+    db_session.add(
+        ChatMessage(
+            session_id=created.id,
+            role="assistant",
+            content="보험금 계산 결과",
+            sources=[_claim_snapshot_source_for_chat()],
+        )
+    )
+    await db_session.commit()
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="비타민D 주사를 비급여로 보상한다면 다시 계산해 주세요",
+            session_id=created.id,
+            model="gemma3:4b",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert captured["pipeline"]["top_k"] == chat.config.CLAIM_RAG_TOP_K
+    assert captured["items"][1].input_name == "비타민D 주사"
+    assert captured["items"][1].nonpay_amount == "48000"
+    assert captured["items"][1].user_category_hint == "비급여"
+    assert "예상 지급금액: 143400원" in stream
+    assert messages[-1].role == "assistant"
+    assert messages[-1].sources[-1]["__kind"] == "assistant_meta"
+    assert messages[-1].sources[-1]["claim_snapshot"]["result"]["payable_amount"] == "143400"
+    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
+    audit_entry = audit_result.scalar_one()
+    assert audit_entry.detail["resolved_route"] == "claim_follow_up"
+    assert audit_entry.detail["claim_follow_up_action"] == "as_nonpay"
+    assert audit_entry.detail["claim_follow_up_status"] == "calculated"
+    assert audit_entry.detail["claim_follow_up_item_count"] == 2
+    assert audit_entry.detail["claim_follow_up_requires_review"] is False
+
+
+@pytest.mark.anyio
+async def test_chat_stream_recalculation_falls_back_when_rag_pipeline_fails(db_session, monkeypatch) -> None:
+    captured = {}
+
+    def fail_pipeline(*_args, **_kwargs):
+        raise RuntimeError("rag down")
+
+    def fake_run_claim_calculation(**kwargs):
+        captured["pipeline"] = kwargs["rag_pipeline"]
+        from src.claim_calculation.models import CalculationResult
+
+        return CalculationResult(
+            claimed_amount="198000",
+            payable_amount="143400",
+            deductible="54600",
+            formula_intent="thread_recalculation",
+            executed_code="",
+            applied_basis=[],
+            requires_review=False,
+            review_reasons=[],
+            notes="구조화 계산만 수행",
+            candidates=[],
+            policy_generation="4th",
+            line_results=[
+                {
+                    "line_id": "line-1",
+                    "input_name": "도수치료",
+                    "category": "3대비급여",
+                    "claimed_amount": "150000",
+                    "deductible": "45000",
+                    "payable_amount": "105000",
+                    "calculation_status": "calculated",
+                    "human_task_amount": "0",
+                },
+                {
+                    "line_id": "line-2",
+                    "input_name": "비타민D 주사",
+                    "category": "비급여",
+                    "claimed_amount": "48000",
+                    "deductible": "9600",
+                    "payable_amount": "38400",
+                    "calculation_status": "calculated",
+                    "human_task_amount": "0",
+                },
+            ],
+            calculation_status="auto_calculated",
+        )
+
+    monkeypatch.setattr(chat, "get_rag_pipeline", fail_pipeline)
+    monkeypatch.setattr(chat, "run_claim_calculation", fake_run_claim_calculation)
+    created = await sessions.create_session(SessionCreateRequest(title="재계산 fallback"), _user(), db_session)
+    db_session.add(
+        ChatMessage(
+            session_id=created.id,
+            role="assistant",
+            content="보험금 계산 결과",
+            sources=[_claim_snapshot_source_for_chat()],
+        )
+    )
+    await db_session.commit()
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="비타민D 주사를 비급여로 보상한다면 다시 계산해 주세요",
+            session_id=created.id,
+            model="gemma3:4b",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert captured["pipeline"] is None
+    assert "event: error" not in stream
+    assert "예상 지급금액: 143400원" in stream
+    assert messages[-1].sources[-1]["claim_snapshot"]["result"]["payable_amount"] == "143400"
+
+
+@pytest.mark.anyio
+async def test_chat_stream_not_covered_follow_up_persists_conditional_snapshot(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(
+        chat,
+        "get_rag_pipeline",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("no RAG")),
+    )
+    created = await sessions.create_session(SessionCreateRequest(title="보상 제외 가정"), _user(), db_session)
+    db_session.add(
+        ChatMessage(
+            session_id=created.id,
+            role="assistant",
+            content="보험금 계산 결과",
+            sources=[_claim_snapshot_source_for_chat()],
+        )
+    )
+    await db_session.commit()
+
+    response = await chat.chat_stream(
+        ChatRequest(query="도수치료를 보상하지 않는다면 얼마인가요?", session_id=created.id, model="gemma3:4b"),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+    snapshot = messages[-1].sources[-1]["claim_snapshot"]
+
+    assert "예상 지급금액은 0원" in stream
+    assert snapshot["follow_up"]["kind"] == "conditional_not_covered"
+    assert snapshot["result"]["payable_amount"] == "0"
+    assert snapshot["result"]["calculation_status"] == "conditional_follow_up"
+    assert snapshot["result"]["line_results"][0]["payable_amount"] == "0"
+    assert snapshot["result"]["line_results"][0]["calculation_status"] == "conditional_not_covered"

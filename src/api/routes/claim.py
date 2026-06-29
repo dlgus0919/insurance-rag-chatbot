@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import datetime, timezone
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select
@@ -15,7 +17,7 @@ from src.api.deps import log_audit_event, require_permission
 from src.api.exceptions import ValidationException
 from src.api.models import ChatMessage, ChatSession
 from src.api.rag_service import get_rag_pipeline
-from src.api.schemas.claim import ClaimCalculationRequest, ClaimCalculationResponse
+from src.api.schemas.claim import ClaimCalculationRequest, ClaimCalculationResponse, ClaimItemRequest
 from src.auth.users import User
 from src.claim_calculation.models import ClaimCaseContext, ClaimItemInput
 from src.claim_calculation.pipeline import run_claim_calculation
@@ -141,7 +143,7 @@ async def _persist_claim_turn(
                 session_id=session_id,
                 role="assistant",
                 content=_claim_response_text(response),
-                sources=response.applied_basis or None,
+                sources=list(response.applied_basis or []) + [_claim_snapshot_source(payload, response)],
             ),
         ]
     )
@@ -166,15 +168,163 @@ def _claim_user_text(payload: ClaimCalculationRequest) -> str:
 
 def _claim_response_text(response: ClaimCalculationResponse) -> str:
     status = "검토 필요" if response.requires_review else "계산 완료"
-    return "\n".join(
-        [
-            f"보험금 계산 결과: {status}",
-            f"- 총 청구금액: {response.claimed_amount}원",
-            f"- 예상 공제금액: {response.deductible}원",
-            f"- 예상 지급금액: {response.payable_amount}원",
-            f"- 메모: {response.notes}",
-        ]
-    )
+    lines = [
+        f"보험금 계산 결과: {status}",
+        f"- 총 청구금액: {response.claimed_amount}원",
+        f"- 예상 공제금액: {response.deductible}원",
+        f"- 예상 지급금액: {response.payable_amount}원",
+        f"- 산정 상태: {response.calculation_status}",
+        f"- 보험 세대: {response.policy_generation}",
+        f"- 메모: {response.notes}",
+        "",
+        "항목별 계산",
+    ]
+
+    if response.line_results:
+        for idx, line in enumerate(response.line_results, start=1):
+            lines.append(
+                f"{idx}. {line.get('input_name', '항목명 없음')} - "
+                f"분류: {line.get('category', '미분류')}, "
+                f"청구금액: {line.get('claimed_amount', '0')}원, "
+                f"공제금액: {line.get('deductible', '0')}원, "
+                f"예상 지급금액: {line.get('payable_amount', '0')}원, "
+                f"상태: {line.get('calculation_status', 'unknown')}"
+            )
+            if line.get("rule_summary"):
+                lines.append(f"   - 산식/규칙: {line['rule_summary']}")
+            if line.get("review_reasons"):
+                lines.append(f"   - 확인 사유: {'; '.join(line['review_reasons'])}")
+    else:
+        lines.append("- 항목별 계산 결과가 없습니다.")
+
+    review_lines = [
+        line
+        for line in response.line_results
+        if line.get("requires_review")
+        or line.get("calculation_status") in {"human_task", "partial_human_task"}
+        or line.get("review_reasons")
+    ]
+    lines.extend(["", "추가 확인 필요 항목"])
+    if review_lines:
+        for line in review_lines:
+            reasons = "; ".join(line.get("review_reasons") or ["확인 사유 미기재"])
+            lines.append(
+                f"- {line.get('input_name', '항목명 없음')} "
+                f"({line.get('category', '미분류')}, {line.get('calculation_status', 'unknown')}): {reasons}"
+            )
+    elif response.review_reasons:
+        for reason in response.review_reasons:
+            lines.append(f"- {reason}")
+    else:
+        lines.append("- 없음")
+
+    lines.extend(["", "검토 사유"])
+    if response.review_reasons:
+        lines.extend(f"- {reason}" for reason in response.review_reasons)
+    else:
+        lines.append("- 없음")
+
+    lines.extend(["", "적용 근거 요약"])
+    if response.applied_basis:
+        for basis in response.applied_basis:
+            source = basis.get("source") or basis.get("title") or "근거"
+            content = basis.get("content") or basis.get("summary") or ""
+            lines.append(f"- {source}: {content}" if content else f"- {source}")
+    else:
+        lines.append("- 적용 근거 없음")
+
+    return "\n".join(lines)
+
+
+def _claim_snapshot_source(payload: ClaimCalculationRequest, response: ClaimCalculationResponse) -> dict:
+    return {
+        "__kind": "assistant_meta",
+        "claim_snapshot": {
+            "schema_version": 1,
+            "claim_id": str(uuid4()),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "input": {
+                "items": [_claim_snapshot_item(item) for item in payload.items],
+                "context": _claim_snapshot_context(payload.context),
+            },
+            "result": {
+                "claimed_amount": response.claimed_amount,
+                "deductible": response.deductible,
+                "payable_amount": response.payable_amount,
+                "policy_generation": response.policy_generation,
+                "calculation_status": response.calculation_status,
+                "line_results": [_claim_snapshot_line(line) for line in response.line_results],
+                "review_reasons": list(response.review_reasons or []),
+                "applied_basis": [_claim_basis_reference(basis) for basis in response.applied_basis],
+                "notes": response.notes,
+                "requires_review": response.requires_review,
+            },
+        },
+    }
+
+
+def _claim_snapshot_item(item: ClaimItemRequest) -> dict:
+    return {
+        "line_id": item.line_id,
+        "input_name": item.input_name,
+        "input_code": item.input_code,
+        "claimed_amount": item.claimed_amount,
+        "insured_copay_amount": item.insured_copay_amount,
+        "nonpay_amount": item.nonpay_amount,
+        "quantity": item.quantity,
+        "user_category_hint": item.user_category_hint,
+    }
+
+
+def _claim_snapshot_context(context) -> dict:
+    return {
+        "treatment_date": context.treatment_date,
+        "visit_type": context.visit_type,
+        "coverage_topic": context.coverage_topic,
+        "diagnosis_code": context.diagnosis_code,
+        "diagnosis_name": context.diagnosis_name,
+        "accident_type": context.accident_type,
+        "policy_generation": context.policy_generation,
+        "facility_type": context.facility_type,
+        "facility_grade": context.facility_grade,
+        "complication_asserted": context.complication_asserted,
+        "same_disease_claimed": context.same_disease_claimed,
+        "same_treatment_purpose_claimed": context.same_treatment_purpose_claimed,
+        "recurrent_or_continuing_treatment": context.recurrent_or_continuing_treatment,
+        "newly_found_disease_claimed": context.newly_found_disease_claimed,
+        "treatment_purpose": context.treatment_purpose,
+        "evidence_tags": list(context.evidence_tags or []),
+    }
+
+
+def _claim_snapshot_line(line: dict) -> dict:
+    allowed = {
+        "line_id",
+        "input_name",
+        "input_code",
+        "category",
+        "claimed_amount",
+        "insured_copay_amount",
+        "nonpay_amount",
+        "deductible",
+        "payable_amount",
+        "policy_generation",
+        "rule_summary",
+        "requires_review",
+        "review_reasons",
+        "calculation_status",
+        "excluded_from_calculation",
+        "human_task_amount",
+    }
+    return {key: value for key, value in line.items() if key in allowed}
+
+
+def _claim_basis_reference(basis: dict) -> dict:
+    return {
+        key: basis[key]
+        for key in ("source", "title", "filename", "doc_short", "page", "page_end", "chunk_id", "review_status")
+        if basis.get(key) not in {None, ""}
+    }
 
 
 def _select_model(payload: ClaimCalculationRequest) -> str:

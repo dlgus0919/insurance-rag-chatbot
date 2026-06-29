@@ -156,7 +156,7 @@ function setupChatDelegatedHandlers() {
       }
 
       // 자동 재계산 트리거
-      await sendClaim({ suppressUserMessage: true });
+      await sendClaim({ suppressUserMessage: true, saveToHistory: true });
       return;
     }
 
@@ -473,6 +473,8 @@ function appendMsg(role, text, sources, track = true, uiPayload = null) {
   const sourceHtml = renderSourcesHtml(sources);
   const warnings = role === 'bot' ? (uiPayload?.warnings || []) : [];
   const legacyStructuredNotice = role === 'bot' ? Boolean(uiPayload?.legacyStructuredNotice) : false;
+  const claimSnapshot = role === 'bot' ? (uiPayload?.claimSnapshot || null) : null;
+  const claimSnapshotHtml = claimSnapshot?.result ? renderClaimResultHtml(claimSnapshot.result) : '';
   const botExtras = role === 'bot'
     ? renderClarificationHtml(graphResult)
       + renderWarningHtml(warnings)
@@ -480,12 +482,13 @@ function appendMsg(role, text, sources, track = true, uiPayload = null) {
       + renderGraphReviewPathsHtml(graphResult)
       + renderGraphFactsHtml(graphResult)
     : '';
+  const bubbleContent = claimSnapshotHtml || `${renderAssistantContent(messageText)}${botExtras}${sourceHtml}`;
   const row = document.createElement('div');
   row.className = `msg-row ${role}`;
   const avatar = isUser
     ? `<div class="msg-av usr">${me ? me.name[0] : 'U'}</div>`
     : `<div class="msg-av bot"><img src="${getBotLogoSrc()}" alt="AI"></div>`;
-  row.innerHTML = `${avatar}<div><div class="msg-bubble">${renderAssistantContent(messageText)}${botExtras}${sourceHtml}</div><div class="msg-meta">${time}</div></div>`;
+  row.innerHTML = `${avatar}<div><div class="msg-bubble">${bubbleContent}</div><div class="msg-meta">${time}</div></div>`;
   container.appendChild(row);
   container.scrollTop = container.scrollHeight;
   if (track) msgs.push({ role, text: messageText, time, sources: sources || [], graphResult, warnings });
@@ -528,7 +531,7 @@ async function sendMsg() {
 }
 
 async function sendClaim(options = {}) {
-  const { suppressUserMessage = false } = options;
+  const { suppressUserMessage = false, saveToHistory = true } = options;
   const items = collectClaimItems();
   if (!items.length) {
     toast('청구 항목을 1개 이상 입력하세요.');
@@ -550,7 +553,7 @@ async function sendClaim(options = {}) {
   }
   await calculateClaim({
     session_id: currentSession,
-    save_to_history: !suppressUserMessage,
+    save_to_history: saveToHistory,
     items,
     context: {
       visit_type: visitType,
@@ -1316,6 +1319,7 @@ function extractAssistantUiPayload(sources) {
   return {
     graphResult: meta.graph_result || null,
     warnings: Array.isArray(meta.warnings) ? meta.warnings : [],
+    claimSnapshot: meta.claim_snapshot || null,
   };
 }
 

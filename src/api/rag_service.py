@@ -58,6 +58,13 @@ _EMBEDDED_REVIEW_HEADING_PATTERN = re.compile(r"^\s*【[^】]+】\s*$")
 _EMBEDDED_REVIEW_BULLET_PATTERN = re.compile(r"^\s*(?:[-*•]\s+|☐\s*|→\s*\d+\.\s*|→\s*)")
 _SOURCE_CITATION_LINE_PATTERN = re.compile(r"^\s*\[출처:\s*.+\]\s*$")
 _TRAILING_SOURCE_NOTE_PATTERN = re.compile(r"^\s*\(참고:\s*.+\)\s*$")
+_CLAIM_CONTEXT_RECENT_SNAPSHOT_LIMIT = 3
+_CLAIM_CONTEXT_FIELD_MAX_CHARS = 120
+_CLAIM_CONTEXT_PROMPT_MARKER_PATTERN = re.compile(
+    r"\[(?:SYSTEM|USER|ASSISTANT|최근 대화 참고|이전 대화 요약본|이 스레드의 보험금 계산 내역)\]",
+    re.IGNORECASE,
+)
+_CLAIM_CONTEXT_ROLE_PREFIX_PATTERN = re.compile(r"\b(?:system|assistant|user)\s*:", re.IGNORECASE)
 
 _GRAPH_STRUCTURED_CUE_KEYS = (
     "diagnosis_codes",
@@ -336,17 +343,164 @@ def _format_table_row(row: dict, row_type: str) -> str:
     return "\n".join(lines)
 
 
+def _extract_claim_snapshots(messages: list[ChatMessage]) -> list[dict]:
+    snapshots: list[dict] = []
+    for message in messages:
+        if message.role != "assistant":
+            continue
+        for source in message.sources or []:
+            if not isinstance(source, dict):
+                continue
+            snapshot = source.get("claim_snapshot")
+            if source.get("__kind") == "assistant_meta" and isinstance(snapshot, dict):
+                snapshots.append(snapshot)
+    return snapshots
+
+
+def _sanitize_claim_context_field(value: Any, max_chars: int = _CLAIM_CONTEXT_FIELD_MAX_CHARS) -> str:
+    text = re.sub(r"[\x00-\x1f\x7f]+", " ", str(value or ""))
+    text = _CLAIM_CONTEXT_PROMPT_MARKER_PATTERN.sub(" ", text)
+    text = _CLAIM_CONTEXT_ROLE_PREFIX_PATTERN.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if max_chars > 3 and len(text) > max_chars:
+        return text[: max_chars - 3].rstrip() + "..."
+    if max_chars >= 0:
+        return text[:max_chars]
+    return text
+
+
+def _normalize_review_reasons(value: Any) -> list[str]:
+    if isinstance(value, str):
+        reason = _sanitize_claim_context_field(value)
+        return [reason] if reason else []
+    if isinstance(value, (list, tuple, set)):
+        reasons = []
+        for item in value:
+            if item is None:
+                continue
+            reason = _sanitize_claim_context_field(item)
+            if reason:
+                reasons.append(reason)
+        return reasons
+    return []
+
+
+def _has_human_task_amount(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    normalized = text.replace(",", "").replace("원", "").strip()
+    return normalized not in {"0", "0.0", "0.00"}
+
+
+def _claim_snapshot_lines(snapshot: dict, index: int) -> list[str]:
+    result = snapshot.get("result") or {}
+    if not isinstance(result, dict):
+        return []
+
+    lines = [
+        f"계산 {index}:",
+        f"- 예상 지급금액: {_sanitize_claim_context_field(result.get('payable_amount', '0'), 60)}원",
+        f"- 예상 공제금액: {_sanitize_claim_context_field(result.get('deductible', '0'), 60)}원",
+    ]
+
+    human_task_lines = []
+    for line in result.get("line_results") or []:
+        if not isinstance(line, dict):
+            continue
+        status = line.get("calculation_status")
+        if status in {"human_task", "partial_human_task"} or _has_human_task_amount(
+            line.get("human_task_amount")
+        ):
+            human_task_lines.append(line)
+    if human_task_lines:
+        lines.append("- 추가 확인 필요 항목:")
+        for line in human_task_lines:
+            item_name = _sanitize_claim_context_field(line.get("input_name") or "항목명 없음")
+            category = _sanitize_claim_context_field(line.get("category") or "미분류")
+            amount = _sanitize_claim_context_field(
+                line.get("human_task_amount") or line.get("claimed_amount") or "0",
+                60,
+            )
+            reasons = "; ".join(_normalize_review_reasons(line.get("review_reasons")))
+            suffix = f" / 확인 사유: {reasons}" if reasons else ""
+            lines.append(f"  - {item_name} ({category}): {amount}원{suffix}")
+
+    for reason in _normalize_review_reasons(result.get("review_reasons")):
+        lines.append(f"- 검토 사유: {reason}")
+    return lines
+
+
+def _join_claim_snapshot_blocks(blocks: list[list[str]], has_omitted_snapshots: bool) -> str:
+    lines = ["[이 스레드의 보험금 계산 내역]"]
+    if has_omitted_snapshots:
+        lines.append("...")
+    for block in blocks:
+        lines.extend(block)
+    return "\n".join(lines)
+
+
+def _truncate_claim_context(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 0:
+        return ""
+    ellipsis = "..."
+    if max_chars <= len(ellipsis):
+        return ellipsis[:max_chars]
+    return text[: max_chars - len(ellipsis)].rstrip() + ellipsis
+
+
+def build_claim_snapshot_context(messages: list[ChatMessage], max_chars: int = 4000) -> str:
+    snapshots = _extract_claim_snapshots(messages)
+    if not snapshots:
+        return ""
+
+    start = max(0, len(snapshots) - _CLAIM_CONTEXT_RECENT_SNAPSHOT_LIMIT)
+    blocks = [
+        _claim_snapshot_lines(snapshot, index)
+        for index, snapshot in enumerate(snapshots[start:], start=start + 1)
+    ]
+    blocks = [block for block in blocks if block]
+    if not blocks:
+        return ""
+
+    omitted_before_recent = start > 0
+    text = _join_claim_snapshot_blocks(blocks, omitted_before_recent)
+    if len(text) <= max_chars:
+        return text
+
+    kept_blocks: list[list[str]] = []
+    for block in reversed(blocks):
+        candidate_blocks = [block] + kept_blocks
+        has_omitted = omitted_before_recent or len(candidate_blocks) < len(blocks)
+        candidate = _join_claim_snapshot_blocks(candidate_blocks, has_omitted)
+        if len(candidate) <= max_chars:
+            kept_blocks = candidate_blocks
+    if kept_blocks:
+        has_omitted = omitted_before_recent or len(kept_blocks) < len(blocks)
+        return _join_claim_snapshot_blocks(kept_blocks, has_omitted)
+
+    latest_only = _join_claim_snapshot_blocks([blocks[-1]], True)
+    return _truncate_claim_context(latest_only, max_chars)
+
+
 def build_history_context(messages: list[ChatMessage]) -> str:
     """Build compact chat history without replacing the current RAG prompt."""
 
     if not messages:
         return ""
+    parts = []
+    claim_context = build_claim_snapshot_context(messages)
+    if claim_context:
+        parts.append(claim_context)
     recent = messages[-4:]
     lines = ["[최근 대화 참고]"]
     for message in recent:
         content = " ".join(message.content.split())
         lines.append(f"{message.role}: {content[:260]}")
-    return "\n".join(lines)
+    parts.append("\n".join(lines))
+    return "\n\n".join(parts)
 
 
 def graph_review_status_label(status: str) -> str:
@@ -792,6 +946,7 @@ def finalize_answer_for_question(
 
 __all__ = [
     "SYSTEM_PROMPT",
+    "build_claim_snapshot_context",
     "build_contextual_prompt",
     "chunk_to_source",
     "chunks_to_sources",

@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import inspect
 import json
 import logging
 import time
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
@@ -27,11 +31,24 @@ from src.api.rag_service import (
     prepare_retrieved_context,
     resolve_effective_index_mode,
 )
+from src.api.routes.claim import _claim_response_text, _claim_snapshot_source
 from src.api.schemas.chat import ChatRequest
+from src.api.schemas.claim import ClaimCalculationRequest, ClaimCalculationResponse, ClaimItemRequest
 from src.auth.users import User
 from src.rag.auto_params import TOPK_STRATEGY_RULE, AutoRagParams, resolve_auto_rag_params
 from src.rag.pipeline import DebugInfo
 from src.rag.query_router import resolve_query_route
+from src.claim_calculation.models import ClaimCaseContext, ClaimItemInput
+from src.claim_calculation.pipeline import run_claim_calculation
+from src.claim_calculation.thread_recalculation import (
+    build_recalculation_payload,
+    detect_recalculation_intent,
+    find_target_lines,
+    line_payable_amount,
+    money_text,
+    select_claim_snapshot,
+    snapshot_payable_amount,
+)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -42,6 +59,16 @@ MODEL_ALIAS = {
     "gpt-oss": "sglang:gpt-oss-20b",
     "qwen3": "sglang:qwen3-30b-a3b-instruct-2507-fp8",
 }
+
+
+@dataclass
+class _ClaimFollowUpResult:
+    answer: str
+    sources: list[dict] = field(default_factory=list)
+    action: str = ""
+    status: str = ""
+    item_count: int | None = None
+    requires_review: bool | None = None
 
 
 @router.get("/documents")
@@ -77,6 +104,218 @@ def _document_filter_options() -> list[dict[str, str]]:
     return list(seen.values())
 
 
+async def _handle_claim_follow_up(
+    *,
+    chat_session_id: str,
+    query: str,
+    history: list[ChatMessage],
+    selected_model: str,
+    index_mode: str,
+) -> _ClaimFollowUpResult | None:
+    intent = detect_recalculation_intent(query)
+    if intent is None:
+        return None
+
+    snapshots = _claim_snapshots_from_history(history)
+    snapshot, clarification = select_claim_snapshot(snapshots, query)
+    if snapshot is None:
+        return _ClaimFollowUpResult(clarification, action=intent.action, status="clarification")
+    if intent.needs_clarification:
+        return _ClaimFollowUpResult(
+            "어떤 기준으로 보상할지 명확하지 않습니다. 급여 본인부담/비급여/3대비급여 중 하나를 포함해 다시 질문해 주세요. "
+            "예: '비타민D 주사를 비급여로 보상한다면 다시 계산해 주세요.'",
+            action=intent.action,
+            status="clarification",
+        )
+
+    matches = find_target_lines(snapshot, intent.target_text)
+    if not matches:
+        return _ClaimFollowUpResult(
+            _target_not_found_answer(snapshot, intent.target_text),
+            action=intent.action,
+            status="clarification",
+        )
+    if len(matches) > 1:
+        return _ClaimFollowUpResult(
+            _ambiguous_target_answer(matches),
+            action=intent.action,
+            status="clarification",
+        )
+
+    target_line = matches[0]
+    if intent.action == "not_covered":
+        answer, source = _not_covered_answer_and_source(snapshot, target_line)
+        return _ClaimFollowUpResult(
+            answer,
+            [source],
+            action=intent.action,
+            status="conditional_not_covered",
+            item_count=len(((snapshot.get("result") or {}).get("line_results") or [])),
+            requires_review=True,
+        )
+
+    payload_data = build_recalculation_payload(snapshot, intent, target_line)
+    payload = ClaimCalculationRequest(
+        session_id=chat_session_id,
+        save_to_history=False,
+        items=[ClaimItemRequest(**item) for item in payload_data["items"]],
+        context=payload_data.get("context") or {},
+        model=selected_model,
+        provider=_provider_from_model_id(selected_model),
+        index_mode=index_mode if index_mode in {"v2_only", "v1_v2_combined"} else "v2_only",
+    )
+    warnings: list[str] = []
+    try:
+        pipeline = _get_pipeline(selected_model, config.CLAIM_RAG_TOP_K, payload.index_mode)
+    except Exception as exc:
+        pipeline = None
+        warnings.append("RAG 근거 초기화에 실패하여 구조화 계산만 수행했습니다.")
+        logger.warning("Claim follow-up RAG initialization failed: %s", exc)
+    result = run_claim_calculation(
+        rag_pipeline=pipeline,
+        items=[
+            ClaimItemInput(
+                line_id=item.line_id or f"line-{idx + 1}",
+                input_name=item.input_name,
+                input_code=item.input_code,
+                claimed_amount=item.claimed_amount,
+                insured_copay_amount=item.insured_copay_amount,
+                nonpay_amount=item.nonpay_amount,
+                quantity=item.quantity,
+                user_category_hint=item.user_category_hint,
+                extra_info=item.extra_info,
+            )
+            for idx, item in enumerate(payload.items)
+        ],
+        context=ClaimCaseContext(**payload.context.model_dump()),
+        basis_mode=payload.basis_mode,
+        selected_basis_docs=payload.selected_basis_docs,
+        use_fake_planner=payload.use_fake_planner,
+        model_id=selected_model.split(":", 1)[1] if ":" in selected_model else selected_model,
+        provider=payload.provider or _provider_from_model_id(selected_model),
+    )
+    response = ClaimCalculationResponse.from_result(result, warnings)
+    sources = list(response.applied_basis or []) + [_claim_snapshot_source(payload, response)]
+    return _ClaimFollowUpResult(
+        _claim_response_text(response),
+        sources,
+        action=intent.action,
+        status="calculated",
+        item_count=len(payload.items),
+        requires_review=response.requires_review,
+    )
+
+
+def _claim_snapshots_from_history(history: list[ChatMessage]) -> list[dict]:
+    snapshots: list[dict] = []
+    for message in history:
+        if message.role != "assistant":
+            continue
+        for source in message.sources or []:
+            if isinstance(source, dict) and source.get("__kind") == "assistant_meta":
+                snapshot = source.get("claim_snapshot")
+                if isinstance(snapshot, dict):
+                    snapshots.append(snapshot)
+    return snapshots
+
+
+def _target_not_found_answer(snapshot: dict, target_text: str) -> str:
+    names = _snapshot_line_names(snapshot)
+    suffix = f" 현재 계산에 저장된 항목은 {', '.join(names[:8])}입니다." if names else ""
+    return f"'{target_text}'에 해당하는 계산 항목을 찾지 못했습니다. 항목명을 계산 결과의 항목명과 같게 적어 다시 질문해 주세요.{suffix}"
+
+
+def _ambiguous_target_answer(matches: list[dict]) -> str:
+    names = [str(line.get("input_name") or "항목명 없음") for line in matches[:8]]
+    return "요청한 항목명이 여러 항목과 맞습니다. 다음 중 하나의 항목명을 그대로 적어 다시 질문해 주세요: " + ", ".join(names)
+
+
+def _not_covered_answer_and_source(snapshot: dict, target_line: dict) -> tuple[str, dict]:
+    previous = snapshot_payable_amount(snapshot)
+    removed = line_payable_amount(target_line)
+    updated = previous - removed
+    if updated < 0:
+        updated = type(previous)("0")
+    target_name = str(target_line.get("input_name") or "해당 항목")
+    if removed == 0:
+        answer = (
+            f"{target_name}은 기존 계산에서 예상 지급금액 0원으로 반영되어 있었습니다. "
+            f"따라서 보상하지 않는다고 보아도 기존 예상 지급금액 {money_text(previous)}원은 변하지 않습니다."
+        )
+    else:
+        answer = (
+            f"{target_name}을 보상하지 않는다고 보면 기존 예상 지급금액 {money_text(previous)}원에서 "
+            f"해당 항목 지급액 {money_text(removed)}원을 제외해 예상 지급금액은 {money_text(updated)}원입니다."
+        )
+    return answer, _claim_follow_up_snapshot_source(snapshot, target_line, updated, answer)
+
+
+def _claim_follow_up_snapshot_source(
+    snapshot: dict,
+    target_line: dict,
+    updated_payable,
+    answer: str,
+) -> dict:
+    updated_snapshot = deepcopy(snapshot)
+    updated_snapshot["claim_id"] = str(uuid4())
+    updated_snapshot["created_at"] = datetime.now(timezone.utc).isoformat()
+    updated_snapshot["follow_up"] = {
+        "kind": "conditional_not_covered",
+        "target_line_id": target_line.get("line_id"),
+        "target_name": target_line.get("input_name"),
+        "answer": answer,
+    }
+
+    result = updated_snapshot.setdefault("result", {})
+    result["payable_amount"] = str(updated_payable)
+    result["calculation_status"] = "conditional_follow_up"
+    result["requires_review"] = True
+    review_reasons = list(result.get("review_reasons") or [])
+    target_name = str(target_line.get("input_name") or "해당 항목")
+    review_reasons.append(f"후속 질의에서 '{target_name}' 항목을 보상하지 않는 조건으로 가정했습니다.")
+    result["review_reasons"] = list(dict.fromkeys(review_reasons))
+
+    for line in result.get("line_results") or []:
+        if not isinstance(line, dict):
+            continue
+        if _same_snapshot_line(line, target_line):
+            line["payable_amount"] = "0"
+            line["calculation_status"] = "conditional_not_covered"
+            line["excluded_from_calculation"] = True
+            line["requires_review"] = True
+            reasons = list(line.get("review_reasons") or [])
+            reasons.append("후속 질의에서 보상하지 않는 조건으로 가정했습니다.")
+            line["review_reasons"] = list(dict.fromkeys(reasons))
+            break
+
+    return {"__kind": "assistant_meta", "claim_snapshot": updated_snapshot}
+
+
+def _same_snapshot_line(line: dict, target_line: dict) -> bool:
+    line_id = line.get("line_id")
+    target_id = target_line.get("line_id")
+    if line_id and target_id:
+        return line_id == target_id
+    return line.get("input_name") == target_line.get("input_name")
+
+
+def _snapshot_line_names(snapshot: dict) -> list[str]:
+    result = snapshot.get("result") or {}
+    names = []
+    for line in result.get("line_results") or []:
+        if isinstance(line, dict) and line.get("input_name"):
+            names.append(str(line["input_name"]))
+    return list(dict.fromkeys(names))
+
+
+def _provider_from_model_id(model: str) -> str:
+    if ":" in model:
+        provider = model.split(":", 1)[0]
+        if provider in {"openai", "local", "vllm", "sglang"}:
+            return provider
+    return "openai" if model.startswith("gpt-") else "vllm"
+
+
 @router.post("/stream")
 @limiter.limit("20/minute")
 async def chat_stream(
@@ -108,6 +347,49 @@ async def chat_stream(
         started = time.perf_counter()
         try:
             yield _sse("status", "searching")
+            claim_follow_up = await _handle_claim_follow_up(
+                chat_session_id=chat_session.id,
+                query=chat_request.query,
+                history=history,
+                selected_model=selected_model,
+                index_mode=effective_index_mode,
+            )
+            if claim_follow_up is not None:
+                yield _sse("sources", claim_follow_up.sources)
+                yield _sse("final", {"answer": claim_follow_up.answer})
+                yield _sse("done", {"session_id": chat_session.id, "answer": claim_follow_up.answer})
+                await _persist_turn(
+                    db,
+                    chat_session.id,
+                    chat_request.query,
+                    claim_follow_up.answer,
+                    claim_follow_up.sources,
+                )
+                await log_audit_event(
+                    db,
+                    "CHAT_QUERY",
+                    user_id=user.username,
+                    ip_address=_client_ip(request),
+                    detail={
+                        "model": selected_model,
+                        "mode": chat_request.mode,
+                        "resolved_route": "claim_follow_up",
+                        "top_k": chat_request.top_k,
+                        "temperature": chat_request.temperature,
+                        "index_mode": requested_index_mode,
+                        "effective_index_mode": effective_index_mode,
+                        "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
+                        "session_id": chat_session.id,
+                        "source_count": len(claim_follow_up.sources),
+                        "claim_follow_up_action": claim_follow_up.action,
+                        "claim_follow_up_status": claim_follow_up.status,
+                        "claim_follow_up_item_count": claim_follow_up.item_count,
+                        "claim_follow_up_requires_review": claim_follow_up.requires_review,
+                        "query_preview": chat_request.query.strip()[:200],
+                        "request_id": getattr(getattr(request, "state", None), "request_id", None),
+                    },
+                )
+                return
             system_prompt = SYSTEM_PROMPT
             resolved_mode = chat_request.mode
             effective_filters = dict(chat_request.filters or {})

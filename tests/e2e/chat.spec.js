@@ -195,6 +195,162 @@ test.describe('채팅 플로우', () => {
     await expect(clarification).toContainText('입력 용어 보정 후보');
     await expect(clarification).toContainText('(확인 필요)');
   });
+
+  test('보험금 계산 스냅샷이 있는 내역을 계산 결과 카드로 복원함', async ({ page }) => {
+    await page.route('**/api/sessions', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 'claim-session',
+            title: '보험금 계산: 도수치료',
+            created_at: '2026-06-25T00:00:00Z',
+            message_count: 2,
+          },
+        ]),
+      });
+    });
+    await page.route('**/api/sessions/claim-session/messages', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify([
+          {
+            id: 1,
+            session_id: 'claim-session',
+            role: 'user',
+            content: '[보험금 계산/4세대] 도수치료, 미분류 비급여',
+            sources: [],
+            created_at: '2026-06-25T00:00:00Z',
+          },
+          {
+            id: 2,
+            session_id: 'claim-session',
+            role: 'assistant',
+            content: '보험금 계산 결과: 검토 필요',
+            sources: [
+              {
+                __kind: 'assistant_meta',
+                claim_snapshot: {
+                  schema_version: 1,
+                  claim_id: 'claim-test',
+                  input: { items: [], context: {} },
+                  result: {
+                    claimed_amount: '300000',
+                    deductible: '45000',
+                    payable_amount: '105000',
+                    policy_generation: '4th',
+                    calculation_status: 'estimated_review_required',
+                    requires_review: true,
+                    notes: '검토 필요',
+                    review_reasons: ['급여/비급여 구분 확인 필요'],
+                    applied_basis: [{ source: '약관', content: '근거' }],
+                    line_results: [
+                      {
+                        input_name: '도수치료',
+                        category: '3대비급여',
+                        claimed_amount: '150000',
+                        deductible: '45000',
+                        payable_amount: '105000',
+                        calculation_status: 'calculated',
+                        human_task_amount: '0',
+                      },
+                      {
+                        input_name: '미분류 비급여',
+                        category: '미분류 비급여',
+                        claimed_amount: '150000',
+                        deductible: '0',
+                        payable_amount: '0',
+                        calculation_status: 'human_task',
+                        human_task_amount: '150000',
+                        review_reasons: ['급여/비급여 구분 확인 필요'],
+                      },
+                    ],
+                  },
+                },
+              },
+            ],
+            created_at: '2026-06-25T00:00:00Z',
+          },
+        ]),
+      });
+    });
+
+    await page.reload();
+    await expect(page.locator('[data-session-id="claim-session"]')).toBeVisible();
+    await page.click('[data-session-id="claim-session"]');
+
+    const claimResult = page.locator('.claim-result');
+    await expect(claimResult).toBeVisible();
+    await expect(claimResult).toContainText('항목별 계산');
+    await expect(claimResult).toContainText('Human Task 분류');
+    await expect(claimResult).toContainText('미분류 비급여');
+  });
+
+  test('보험금 계산 후보 선택 재계산도 히스토리에 저장함', async ({ page }) => {
+    const claimPayloads = [];
+
+    await page.route('**/api/sessions', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+    await page.route('**/api/claim/calculate', async (route) => {
+      const payload = route.request().postDataJSON();
+      claimPayloads.push(payload);
+      const isCandidateSelection = claimPayloads.length > 1;
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          session_id: 'claim-candidate-session',
+          claimed_amount: '150000',
+          deductible: isCandidateSelection ? '45000' : '0',
+          payable_amount: isCandidateSelection ? '105000' : '0',
+          formula_intent: isCandidateSelection ? 'deterministic' : 'candidate',
+          executed_code: '',
+          applied_basis: [],
+          requires_review: !isCandidateSelection,
+          review_reasons: isCandidateSelection ? [] : ['후보 선택 필요'],
+          notes: isCandidateSelection ? '계산 완료' : '후보 선택 필요',
+          candidates: isCandidateSelection ? [] : [{ code: 'MX122', name: '도수치료' }],
+          policy_generation: '4th',
+          line_results: isCandidateSelection
+            ? [
+                {
+                  input_name: '도수치료',
+                  category: '3대비급여',
+                  claimed_amount: '150000',
+                  deductible: '45000',
+                  payable_amount: '105000',
+                  calculation_status: 'calculated',
+                  human_task_amount: '0',
+                },
+              ]
+            : [],
+          calculation_status: isCandidateSelection ? 'auto_calculated' : 'candidate',
+        }),
+      });
+    });
+
+    await page.click('[data-mode="claim"]');
+    await page.fill('.claim-item-name', '도수치료 후보');
+    await page.fill('.claim-nonpay-amount', '150000');
+    await page.click('[data-action="send-claim"]');
+    await expect(page.locator('.candidate-btn')).toBeVisible();
+    await page.click('.candidate-btn');
+
+    await expect.poll(() => claimPayloads.length).toBe(2);
+    expect(claimPayloads[0].save_to_history).toBe(true);
+    expect(claimPayloads[1].save_to_history).toBe(true);
+  });
 });
 
 test.describe('Qwen Thinking 추론 모드 토글', () => {
