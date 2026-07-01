@@ -332,8 +332,8 @@ function renderUserRow(user) {
     : isLastActiveAdmin
       ? '마지막 활성 관리자 계정은 비활성화 또는 삭제할 수 없습니다.'
       : '';
-  const roleClass = user.role === 'admin' ? 'admin' : user.role === 'viewer' ? 'viewer' : 'user';
-  const roleLabel = user.role === 'admin' ? '관리자' : user.role === 'viewer' ? '열람자' : '사용자';
+  const roleClass = user.role === 'admin' ? 'admin' : 'user';
+  const roleLabel = user.role === 'admin' ? '관리자' : '사용자';
   const statusButtonText = user.status === 'active' ? '비활성화' : '활성화';
   const nextStatus = user.status === 'active' ? 'inactive' : 'active';
   const statusButton = lockReason
@@ -398,7 +398,7 @@ function validateCreateUserPayload(payload) {
   if (!payload.password || payload.password.length < 8) {
     return '임시 비밀번호는 8자 이상으로 입력해 주세요.';
   }
-  if (!['admin', 'user', 'viewer'].includes(payload.role)) {
+  if (!['admin', 'user'].includes(payload.role)) {
     return '역할을 선택해 주세요.';
   }
   return '';

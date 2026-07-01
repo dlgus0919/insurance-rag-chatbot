@@ -86,21 +86,19 @@ async def test_admin_user_search_filter(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.anyio
-async def test_admin_user_create_viewer_role(tmp_path, monkeypatch) -> None:
+async def test_admin_user_rejects_viewer_role(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("USERS_JSON_PATH", str(tmp_path / "users.json"))
 
-    created = await admin.create_admin_user(
-        AdminUserCreateRequest(
-            user_id="viewer01",
-            username="열람자",
-            password="password123",
-            role="viewer",
-        ),
-        _admin(),
-    )
-
-    assert created.role == "viewer"
-    assert users.get_user("viewer01").role == users.ROLE_VIEWER
+    with pytest.raises(ValidationException):
+        await admin.create_admin_user(
+            AdminUserCreateRequest.model_construct(
+                user_id="viewer01",
+                username="열람자",
+                password="password123",
+                role="viewer",
+            ),
+            _admin(),
+        )
 
 
 @pytest.mark.anyio

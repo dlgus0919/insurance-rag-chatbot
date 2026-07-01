@@ -33,7 +33,6 @@ export const API_CONFIG = {
     ADMIN_RAG_DIAGNOSTICS: '/admin/rag-diagnostics/latest',
     ADMIN_GRAPH_VECTOR_SYNC: '/admin/graph-vector-sync',
     ADMIN_KNOWLEDGE_INTAKE_JOBS: '/admin/knowledge/intake/jobs',
-    ADMIN_KNOWLEDGE_INTAKE_AUDIT_BASE: '/admin/knowledge/intake/jobs',
     ADMIN_KNOWLEDGE_APPLY_APPROVED: '/admin/knowledge/apply-approved',
     ADMIN_ONTOLOGY_CANDIDATES: '/admin/knowledge/ontology-candidates',
     ADMIN_RULE_CANDIDATES: '/admin/knowledge/rule-candidates',
@@ -47,7 +46,6 @@ export const API_CONFIG = {
 export const ROLES = {
   ADMIN: 'admin',
   USER: 'user',
-  VIEWER: 'viewer',
 };
 
 // ===== 로컬스토리지 키 =====

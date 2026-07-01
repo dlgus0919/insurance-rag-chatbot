@@ -1,7 +1,10 @@
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 from starlette.responses import Response
 
+from src.api.exceptions import PermissionException
 from src.api.main import create_app
 from src.api.routes import auth, system
 from src.auth import users
@@ -32,6 +35,21 @@ async def test_auth_cookie_flow(tmp_path, monkeypatch) -> None:
     logout_response = Response()
     logged_out = await auth.logout(logout_response, None, user=None, db=None)
     assert logged_out == {"status": "ok"}
+
+
+@pytest.mark.anyio
+async def test_current_user_rejects_removed_viewer_role(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("USERS_JSON_PATH", str(tmp_path / "users.json"))
+    monkeypatch.setenv("API_JWT_SECRET", "test-secret")
+    users.add_user("viewer01", "password123", users.ROLE_EMPLOYEE, "열람자")
+    path = tmp_path / "users.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["users"][0]["role"] = "viewer"
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+    pair = auth.security.issue_token_pair("viewer01", "viewer")
+
+    with pytest.raises(PermissionException):
+        await auth.current_user(pair.access_token)
 
 
 @pytest.mark.anyio

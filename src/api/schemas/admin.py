@@ -7,7 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-RoleName = Literal["admin", "user", "viewer"]
+RoleName = Literal["admin", "user"]
 UserStatus = Literal["active", "inactive", "locked"]
 
 

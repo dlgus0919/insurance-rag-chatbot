@@ -60,19 +60,6 @@ ROLE_PERMISSIONS = {
         "admin.knowledge.read": False,
         "admin.knowledge.manage": False,
     },
-    "viewer": {
-        "chat.stream": False,
-        "sessions.read": True,
-        "sessions.delete": False,
-        "sessions.export": True,
-        "admin.read": False,
-        "admin.logs": False,
-        "admin.stats": False,
-        "admin.users.manage": False,
-        "admin.audit": False,
-        "admin.knowledge.read": False,
-        "admin.knowledge.manage": False,
-    },
 }
 
 

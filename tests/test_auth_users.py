@@ -50,6 +50,18 @@ def test_reset_password(tmp_path, monkeypatch) -> None:
         users.reset_password("missing", "newpass123")
 
 
+def test_authenticate_rejects_removed_viewer_role(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("USERS_JSON_PATH", str(tmp_path / "users.json"))
+    users.add_user("viewer01", "password123", users.ROLE_EMPLOYEE, "열람자")
+    path = tmp_path / "users.json"
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    raw["users"][0]["role"] = "viewer"
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    assert users.get_user("viewer01").role == "viewer"
+    assert users.authenticate("viewer01", "password123") is None
+
+
 def test_list_users_returns_empty_when_file_missing(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("USERS_JSON_PATH", str(tmp_path / "missing.json"))
 

@@ -2,7 +2,7 @@ import pytest
 
 from src.api.deps import require_admin, require_permission
 from src.api.exceptions import AdminOnlyException, PermissionException
-from src.auth.users import ROLE_ADMIN, ROLE_EMPLOYEE, ROLE_VIEWER, User
+from src.auth.users import ROLE_ADMIN, ROLE_EMPLOYEE, VALID_ROLES, User
 
 
 def _user(role: str) -> User:
@@ -50,17 +50,5 @@ async def test_employee_has_session_export_permission() -> None:
 
 
 @pytest.mark.anyio
-async def test_viewer_can_read_and_export_but_not_chat_or_delete() -> None:
-    read_dependency = require_permission("sessions.read")
-    export_dependency = require_permission("sessions.export")
-    chat_dependency = require_permission("chat.stream")
-    delete_dependency = require_permission("sessions.delete")
-
-    assert await read_dependency(_user(ROLE_VIEWER))
-    assert await export_dependency(_user(ROLE_VIEWER))
-
-    with pytest.raises(PermissionException):
-        await chat_dependency(_user(ROLE_VIEWER))
-
-    with pytest.raises(PermissionException):
-        await delete_dependency(_user(ROLE_VIEWER))
+def test_viewer_role_is_not_available() -> None:
+    assert "viewer" not in VALID_ROLES

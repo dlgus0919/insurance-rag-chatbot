@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api import security
 from src.api.exceptions import AdminOnlyException, AuthException, PermissionException, TokenInvalidException
 from src.api.models import AuditLog
-from src.auth.users import ROLE_ADMIN, User, get_user
+from src.auth.users import ROLE_ADMIN, VALID_ROLES, User, get_user
 
 
 async def current_user(request: Request = None, access_token: str | None = Cookie(default=None)) -> User:
@@ -33,6 +33,8 @@ async def current_user(request: Request = None, access_token: str | None = Cooki
         raise AuthException(message="사용자를 찾을 수 없습니다.", code="AUTH_FAILED")
     if getattr(user, "status", "active") != "active":
         raise PermissionException(message="비활성화된 사용자입니다.", detail=f"status={user.status}")
+    if user.role not in VALID_ROLES:
+        raise PermissionException(message="지원하지 않는 사용자 역할입니다.", detail=f"role={user.role}")
     if request is not None:
         request.state.user = user
     return user

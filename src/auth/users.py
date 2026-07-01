@@ -53,8 +53,7 @@ USERNAME_RE = re.compile(r"^[a-zA-Z0-9_]{3,32}$")
 PASSWORD_MIN_LEN = 8
 ROLE_EMPLOYEE = "employee"
 ROLE_ADMIN = "admin"
-ROLE_VIEWER = "viewer"
-VALID_ROLES = {ROLE_EMPLOYEE, ROLE_ADMIN, ROLE_VIEWER}
+VALID_ROLES = {ROLE_EMPLOYEE, ROLE_ADMIN}
 VALID_STATUSES = {"active", "inactive", "locked"}
 
 
@@ -276,6 +275,8 @@ def authenticate(username: str, password: str) -> User | None:
     if user is None:
         return None
     if user.status != "active":
+        return None
+    if user.role not in VALID_ROLES:
         return None
     if pbkdf2_sha256.verify(password, user.password_hash):
         return user

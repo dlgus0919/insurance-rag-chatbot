@@ -55,7 +55,6 @@
   .rbadge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;}
   .rbadge.admin{background:var(--navy);color:#fff;}
   .rbadge.user{background:var(--primary-light);color:var(--primary);}
-  .rbadge.viewer{background:#ecfeff;color:#0e7490;}
   .act-btns{display:flex;gap:5px;}
   .act-btn{padding:3px 9px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;border:1.5px solid var(--border);background:#fff;color:var(--navy);font-family:var(--font);transition:all 0.18s;}
   .act-btn:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-light);}
@@ -79,10 +78,6 @@
   .knowledge-grid{display:grid;gap:14px;}
   .knowledge-upload{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:16px 18px 0;}
   .knowledge-help{margin:10px 18px 16px;color:var(--gray);font-size:12px;line-height:1.5;}
-  .knowledge-audit-detail{display:grid;gap:8px;padding:14px 18px;color:var(--gray);font-size:13px;}
-  .audit-summary{border:1px solid var(--border);border-radius:8px;padding:10px;background:var(--soft-bg);}
-  .audit-summary p{margin:4px 0;}
-  .audit-events{margin:0;padding-left:18px;}
   .knowledge-review-panel{padding:14px 18px;font-size:12px;color:var(--gray);}
   .kb-status{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:700;background:#eef4ff;color:var(--primary);}
   .kb-status.blocked_scanned_pdf,.kb-status.blocked_unsupported,.kb-status.failed{background:#fff2f0;color:#c2410c;}
