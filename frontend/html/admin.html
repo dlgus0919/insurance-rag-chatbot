@@ -197,8 +197,22 @@
             <div class="data-card-hd"><h3>문서 처리 상태</h3><span class="cnt-badge" id="knowledge-job-count">0건</span></div>
             <table>
               <thead><tr><th>파일</th><th>상태</th><th>메시지</th><th>관리</th></tr></thead>
-              <tbody id="knowledge-job-body"></tbody>
+              <tbody id="knowledge-job-body">
+                <tr>
+                  <td colspan="3">등록된 문서 처리 작업이 없습니다.</td>
+                  <td><button class="act-btn" type="button" data-admin-action="load-knowledge-audit" data-job-id="" disabled>상세</button></td>
+                </tr>
+              </tbody>
             </table>
+          </section>
+
+          <section class="data-card knowledge-audit-card">
+            <div class="data-card-hd">
+              <h3>문서 처리 감사 로그</h3>
+            </div>
+            <div id="knowledge-audit-detail" class="knowledge-audit-detail">
+              문서 처리 작업의 상세 버튼을 누르면 현재 단계와 다음 조치가 표시됩니다.
+            </div>
           </section>
 
           <section class="data-card">

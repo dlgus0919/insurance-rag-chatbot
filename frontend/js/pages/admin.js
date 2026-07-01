@@ -12,6 +12,7 @@ import {
   fetchKnowledgeIntakeJobs,
   createKnowledgeIntakeJob,
   runKnowledgeIntakeJob,
+  fetchKnowledgeIntakeAudit,
   fetchOntologyCandidates,
   decideOntologyCandidate,
   fetchRuleCandidates,
@@ -38,6 +39,7 @@ export {
   fetchKnowledgeIntakeJobs,
   createKnowledgeIntakeJob,
   runKnowledgeIntakeJob,
+  fetchKnowledgeIntakeAudit,
   fetchOntologyCandidates,
   decideOntologyCandidate,
   fetchRuleCandidates,
@@ -495,7 +497,10 @@ function renderKnowledgeJobRow(job) {
       <td><span class="kb-status ${escapeHTML(job.status || '')}">${escapeHTML(formatKnowledgeStatus(job.status))}</span></td>
       <td>${escapeHTML(job.message || '')}</td>
       <td>
-        <button class="act-btn" type="button" data-admin-action="run-knowledge-intake" data-job-id="${escapeHTML(job.job_id || '')}">처리</button>
+        <div class="act-btns">
+          <button class="act-btn" type="button" data-admin-action="run-knowledge-intake" data-job-id="${escapeHTML(job.job_id || '')}">처리</button>
+          <button class="act-btn" type="button" data-admin-action="load-knowledge-audit" data-job-id="${escapeHTML(job.job_id || '')}">상세</button>
+        </div>
       </td>
     </tr>
   `;
@@ -528,6 +533,54 @@ async function runKnowledgeIntake(jobId) {
     await loadKnowledgeDashboard();
   } catch (error) {
     toast(error.message || '문서 처리에 실패했습니다.', 'error');
+  }
+}
+
+export function formatBlockReason(reason) {
+  const labels = {
+    scanned_pdf_text_layer_missing: 'PDF에 텍스트 레이어가 없거나 부족합니다.',
+    ocr_file_unsupported: '이미지 또는 스캔 문서는 현재 자동 OCR 대상이 아닙니다.',
+    unsupported_file_type: '지원하지 않는 파일 형식입니다.',
+    candidate_extraction_failed: '검토 후보 생성 중 오류가 발생했습니다.',
+  };
+  return labels[reason] || (reason ? `알 수 없는 차단 사유: ${reason}` : '-');
+}
+
+export function renderAuditDetail(events) {
+  if (!events.length) return '<p class="knowledge-help">기록된 감사 로그가 없습니다.</p>';
+  const latest = events[events.length - 1];
+  const blocked = [...events].reverse().find((event) => event.block_reason || event.event_type === 'failed');
+  const blockedReason = blocked?.block_reason
+    ? formatBlockReason(blocked.block_reason)
+    : blocked?.event_type === 'failed'
+      ? blocked.message || '-'
+      : '-';
+  const nextAction = blocked?.next_action
+    || (blocked?.event_type === 'failed'
+      ? '감사 이력과 서버 로그를 확인한 뒤 문서 처리를 다시 실행하세요.'
+      : '추가 조치가 필요하지 않습니다.');
+  return `
+    <div class="audit-summary">
+      <p><strong>현재 단계:</strong> ${escapeHTML(formatKnowledgeStatus(latest.to_status))}</p>
+      <p><strong>막힌 이유:</strong> ${escapeHTML(blockedReason)}</p>
+      <p><strong>다음 조치:</strong> ${escapeHTML(nextAction)}</p>
+    </div>
+    <ul class="audit-events">
+      ${events.map((event) => `<li>${escapeHTML(event.message || formatKnowledgeStatus(event.to_status))}</li>`).join('')}
+    </ul>
+  `;
+}
+
+async function loadKnowledgeAudit(jobId) {
+  if (!jobId) return;
+  const container = document.getElementById('knowledge-audit-detail');
+  if (!container) return;
+  container.textContent = '감사 로그를 불러오는 중입니다...';
+  try {
+    const data = normalizeListResponse(await fetchKnowledgeIntakeAudit(jobId));
+    container.innerHTML = renderAuditDetail(data.items);
+  } catch (error) {
+    container.textContent = error.message || '감사 로그를 불러오지 못했습니다.';
   }
 }
 
@@ -671,6 +724,8 @@ function setupAdminActionHandlers() {
       await uploadKnowledgeDocument();
     } else if (action === 'run-knowledge-intake') {
       await runKnowledgeIntake(actionTarget.dataset.jobId);
+    } else if (action === 'load-knowledge-audit') {
+      await loadKnowledgeAudit(actionTarget.dataset.jobId);
     } else if (action === 'decide-ontology-candidate') {
       await decideKnowledgeCandidate('ontology', actionTarget.dataset.candidateId, actionTarget.dataset.decision);
     } else if (action === 'decide-rule-candidate') {

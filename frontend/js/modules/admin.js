@@ -143,6 +143,10 @@ export function runKnowledgeIntakeJob(jobId) {
   });
 }
 
+export function fetchKnowledgeIntakeAudit(jobId) {
+  return fetchAPI(`${API_CONFIG.ENDPOINTS.ADMIN_KNOWLEDGE_INTAKE_AUDIT_BASE}/${encodeURIComponent(jobId)}/audit`);
+}
+
 export function fetchOntologyCandidates() {
   return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_ONTOLOGY_CANDIDATES);
 }
