@@ -58,6 +58,8 @@ test('audit detail escapes failed event message HTML', async () => {
   assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>alert/);
   assert.equal(formatBlockReason('x'), '알 수 없는 차단 사유: x');
+  assert.equal(formatBlockReason('source_file_missing'), '업로드 원본 파일을 찾을 수 없습니다.');
+  assert.equal(formatBlockReason('excel_staging_not_ready'), 'Excel 문서 구조화 staging이 아직 연결되지 않았습니다.');
 });
 
 test('admin module exports candidate review helpers', async () => {

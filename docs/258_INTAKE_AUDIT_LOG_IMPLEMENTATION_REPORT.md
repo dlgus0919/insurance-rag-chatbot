@@ -21,6 +21,7 @@
 - 새 intake job이 생성되면 `created` audit event가 기록된다.
 - job 상태가 바뀌면 `updated`, `blocked`, `failed`, `completed` 성격의 audit event가 append-only 방식으로 기록된다.
 - 스캔 PDF처럼 현재 자동 처리하지 않는 입력은 후보 추출로 넘어가지 않고, 차단 이유와 다음 조치를 남긴다.
+- 원본 파일 누락, Excel staging 미연결, 미지원 파일 형식도 차단/실패 이유와 다음 조치를 남긴다.
 - 후보 추출 실패는 job 상태를 `failed`로 만들고, 예외 타입과 메시지를 audit detail에 남긴다.
 - 관리자 페이지의 지식 확장 영역에서 각 job의 `상세` 버튼을 누르면 현재 단계, 이유, 다음 조치, 세부 정보를 볼 수 있다.
 
@@ -49,6 +50,5 @@
 ## Remaining Risks
 
 - 전체 audit log 검색, 기간 필터, 다운로드 기능은 아직 없다.
-- Excel staging 연결 전에는 Excel 입력의 세부 처리 실패도 audit log 중심으로만 확인된다.
+- Excel staging 연결 전에는 Excel 입력이 `excel_staging_not_ready`로 차단되며, 실제 Excel 구조화 후보 생성은 후속 작업이다.
 - audit detail은 job별 로컬 JSONL을 읽는 구조라 대량 job 환경에서는 별도 집계 인덱스가 필요할 수 있다. 현재 범위에서는 과잉 구현을 피하기 위해 추가하지 않았다.
-

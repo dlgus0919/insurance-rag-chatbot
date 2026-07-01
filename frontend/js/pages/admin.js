@@ -542,6 +542,8 @@ export function formatBlockReason(reason) {
     ocr_file_unsupported: '이미지 또는 스캔 문서는 현재 자동 OCR 대상이 아닙니다.',
     unsupported_file_type: '지원하지 않는 파일 형식입니다.',
     candidate_extraction_failed: '검토 후보 생성 중 오류가 발생했습니다.',
+    source_file_missing: '업로드 원본 파일을 찾을 수 없습니다.',
+    excel_staging_not_ready: 'Excel 문서 구조화 staging이 아직 연결되지 않았습니다.',
   };
   return labels[reason] || (reason ? `알 수 없는 차단 사유: ${reason}` : '-');
 }

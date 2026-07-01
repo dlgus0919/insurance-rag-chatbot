@@ -86,6 +86,49 @@ def test_runner_logs_candidate_extraction_failure(tmp_path: Path, monkeypatch: p
     assert events[-1]["details"]["error_type"] == "RuntimeError"
 
 
+def test_runner_fails_pdf_with_missing_source_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = IntakeJobStore(tmp_path)
+    job = store.create_job(original_filename="missing.pdf", uploaded_by="admin", document_kind="pdf")
+    monkeypatch.setattr(
+        "src.ingest.intake_runner.evaluate_pdf_text_layer",
+        lambda _path: pytest.fail("missing source_path must fail before text-layer evaluation"),
+    )
+
+    result = run_intake_job_once(store, job.job_id)
+
+    assert result.status == IntakeJobStatus.FAILED
+    events = store.load_audit_events(job.job_id)
+    assert events[-1]["block_reason"] == "source_file_missing"
+    assert "다시 업로드" in events[-1]["next_action"]
+
+
+def test_runner_logs_excel_staging_not_ready(tmp_path: Path) -> None:
+    store = IntakeJobStore(tmp_path)
+    job = store.create_job(original_filename="rules.xlsx", uploaded_by="admin", document_kind="excel")
+
+    result = run_intake_job_once(store, job.job_id)
+
+    assert result.status == IntakeJobStatus.FAILED
+    events = store.load_audit_events(job.job_id)
+    assert events[-1]["block_reason"] == "excel_staging_not_ready"
+    assert "Excel staging" in events[-1]["next_action"]
+
+
+def test_runner_logs_unsupported_kind_reason(tmp_path: Path) -> None:
+    store = IntakeJobStore(tmp_path)
+    job = store.create_job(original_filename="notes.txt", uploaded_by="admin", document_kind="unsupported")
+
+    result = run_intake_job_once(store, job.job_id)
+
+    assert result.status == IntakeJobStatus.BLOCKED_UNSUPPORTED
+    events = store.load_audit_events(job.job_id)
+    assert events[-1]["block_reason"] == "unsupported_file_type"
+    assert "디지털 PDF" in events[-1]["next_action"]
+
+
 def test_runner_writes_staging_chunks_and_candidate_outputs_for_digital_pdf(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

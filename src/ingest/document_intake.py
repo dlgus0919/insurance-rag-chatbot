@@ -20,6 +20,8 @@ class IntakeBlockReason(StrEnum):
     SCANNED_PDF_TEXT_LAYER_MISSING = "scanned_pdf_text_layer_missing"
     OCR_FILE_UNSUPPORTED = "ocr_file_unsupported"
     CANDIDATE_EXTRACTION_FAILED = "candidate_extraction_failed"
+    SOURCE_FILE_MISSING = "source_file_missing"
+    EXCEL_STAGING_NOT_READY = "excel_staging_not_ready"
     UNSUPPORTED_FILE_TYPE = "unsupported_file_type"
 
 

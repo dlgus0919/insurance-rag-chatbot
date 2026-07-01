@@ -38,18 +38,37 @@ def run_intake_job_once(store: IntakeJobStore, job_id: str) -> IntakeJob:
             job.job_id,
             status=IntakeJobStatus.FAILED,
             message="Excel 문서 intake는 아직 구조화 staging 연결 전입니다. PDF 디지털 문서부터 처리해 주세요.",
+            block_reason=IntakeBlockReason.EXCEL_STAGING_NOT_READY.value,
+            next_action="현재 단계에서는 텍스트 레이어가 포함된 디지털 PDF를 업로드하거나 Excel staging 연결 작업을 먼저 완료하세요.",
         )
     return store.update_job(
         job.job_id,
         status=IntakeJobStatus.BLOCKED_UNSUPPORTED,
         message="지원하지 않는 문서 형식입니다.",
+        block_reason=IntakeBlockReason.UNSUPPORTED_FILE_TYPE.value,
+        next_action="디지털 PDF 또는 구조화 가능한 Excel 파일을 업로드하세요.",
     )
 
 
 def _run_pdf_job(store: IntakeJobStore, job: IntakeJob) -> IntakeJob:
-    source_path = Path(job.source_path or "")
+    if not job.source_path:
+        return store.update_job(
+            job.job_id,
+            status=IntakeJobStatus.FAILED,
+            message="업로드 원본 파일 경로가 기록되어 있지 않습니다.",
+            block_reason=IntakeBlockReason.SOURCE_FILE_MISSING.value,
+            next_action="문서를 다시 업로드한 뒤 intake job을 새로 실행하세요.",
+        )
+    source_path = Path(job.source_path)
     if not source_path.exists():
-        return store.update_job(job.job_id, status=IntakeJobStatus.FAILED, message="업로드 원본 파일을 찾을 수 없습니다.")
+        return store.update_job(
+            job.job_id,
+            status=IntakeJobStatus.FAILED,
+            message="업로드 원본 파일을 찾을 수 없습니다.",
+            block_reason=IntakeBlockReason.SOURCE_FILE_MISSING.value,
+            next_action="문서를 다시 업로드한 뒤 intake job을 새로 실행하세요.",
+            details={"source_path": str(source_path)},
+        )
 
     store.update_job(job.job_id, status=IntakeJobStatus.DETECTING_DOCUMENT_TYPE, message="PDF 텍스트 레이어를 검사합니다.")
     report = evaluate_pdf_text_layer(source_path)
