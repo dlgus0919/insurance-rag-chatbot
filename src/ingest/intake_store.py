@@ -30,6 +30,20 @@ def utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds")
 
 
+def _event_type(status: IntakeJobStatus) -> str:
+    if status in {IntakeJobStatus.BLOCKED_SCANNED_PDF, IntakeJobStatus.BLOCKED_UNSUPPORTED}:
+        return "blocked"
+    if status == IntakeJobStatus.FAILED:
+        return "failed"
+    if status in {
+        IntakeJobStatus.APPLYING_APPROVED,
+        IntakeJobStatus.REBUILDING_ACTIVE,
+        IntakeJobStatus.COMPLETED,
+    }:
+        return "applied"
+    return "status_changed"
+
+
 @dataclass
 class IntakeJob:
     job_id: str
@@ -75,6 +89,13 @@ class IntakeJobStore:
             updated_at=now,
         )
         self._write(job)
+        self.append_audit_event(
+            job.job_id,
+            actor=uploaded_by,
+            from_status=None,
+            to_status=job.status,
+            message=job.message,
+        )
         return job
 
     def load_job(self, job_id: str) -> IntakeJob:
@@ -97,11 +118,15 @@ class IntakeJobStore:
         *,
         status: IntakeJobStatus,
         message: str,
+        actor: str = "system",
+        block_reason: str | None = None,
+        next_action: str | None = None,
         details: dict[str, Any] | None = None,
         source_path: str | None = None,
         staging_chunks_path: str | None = None,
     ) -> IntakeJob:
         job = self.load_job(job_id)
+        previous_status = job.status
         job.status = status
         job.message = message
         job.updated_at = utc_now_iso()
@@ -112,12 +137,62 @@ class IntakeJobStore:
         if staging_chunks_path is not None:
             job.staging_chunks_path = staging_chunks_path
         self._write(job)
+        self.append_audit_event(
+            job.job_id,
+            actor=actor,
+            from_status=previous_status,
+            to_status=status,
+            message=message,
+            block_reason=block_reason,
+            next_action=next_action,
+            details=details,
+        )
         return job
 
     def job_dir(self, job_id: str) -> Path:
         if "/" in job_id or "\\" in job_id or ".." in job_id:
             raise ValueError("invalid intake job id")
         return self.root / job_id
+
+    def append_audit_event(
+        self,
+        job_id: str,
+        *,
+        actor: str,
+        from_status: IntakeJobStatus | None,
+        to_status: IntakeJobStatus,
+        message: str,
+        block_reason: str | None = None,
+        next_action: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        event = {
+            "event_id": uuid.uuid4().hex,
+            "job_id": job_id,
+            "timestamp": utc_now_iso(),
+            "actor": actor,
+            "from_status": from_status.value if from_status is not None else None,
+            "to_status": to_status.value,
+            "event_type": _event_type(to_status),
+            "message": message,
+            "block_reason": block_reason,
+            "next_action": next_action,
+            "details": details or {},
+        }
+        path = self._audit_path(job_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as file:
+            file.write(json.dumps(event, ensure_ascii=False) + "\n")
+        return event
+
+    def load_audit_events(self, job_id: str) -> list[dict[str, Any]]:
+        path = self._audit_path(job_id)
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line]
+
+    def _audit_path(self, job_id: str) -> Path:
+        return self.job_dir(job_id) / "audit_log.jsonl"
 
     def _job_path(self, job_id: str) -> Path:
         return self.job_dir(job_id) / "job.json"
