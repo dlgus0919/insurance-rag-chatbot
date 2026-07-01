@@ -8,7 +8,7 @@ from typing import Any
 
 from scripts.extract_claim_rule_candidates import extract_candidates_from_text, iter_policy_chunks
 from src.claim_calculation.rule_candidates import write_jsonl
-from src.ingest.document_intake import evaluate_pdf_text_layer
+from src.ingest.document_intake import IntakeBlockReason, evaluate_pdf_text_layer
 from src.ingest.intake_store import IntakeJob, IntakeJobStatus, IntakeJobStore
 from src.ontology.candidate_extractor import (
     extract_reinforcement_candidates,
@@ -28,6 +28,8 @@ def run_intake_job_once(store: IntakeJobStore, job_id: str) -> IntakeJob:
             job_id,
             status=IntakeJobStatus.BLOCKED_UNSUPPORTED,
             message="이미지 또는 스캔 문서는 OCR 자동화 대상이 아니므로 후보 추출을 진행하지 않습니다.",
+            block_reason=IntakeBlockReason.OCR_FILE_UNSUPPORTED.value,
+            next_action="텍스트 레이어가 포함된 디지털 PDF 또는 구조화 가능한 Excel 파일을 업로드하세요.",
         )
     if job.document_kind == "pdf":
         return _run_pdf_job(store, job)
@@ -56,13 +58,25 @@ def _run_pdf_job(store: IntakeJobStore, job: IntakeJob) -> IntakeJob:
             job.job_id,
             status=IntakeJobStatus.BLOCKED_SCANNED_PDF,
             message=report.user_message,
+            block_reason=report.block_reason.value if report.block_reason else None,
+            next_action="텍스트 레이어가 포함된 디지털 PDF를 업로드하세요.",
             details={"pdf_text_layer": report.as_dict()},
         )
 
     store.update_job(job.job_id, status=IntakeJobStatus.BUILDING_STAGING_CHUNKS, message="디지털 PDF staging chunk를 생성합니다.")
     chunks_path = _write_pdf_staging_chunks(store.job_dir(job.job_id), source_path, job.job_id)
     store.update_job(job.job_id, status=IntakeJobStatus.EXTRACTING_CANDIDATES, message="검토 후보를 생성합니다.")
-    candidate_details = _write_candidate_outputs(store.job_dir(job.job_id), chunks_path, job.job_id)
+    try:
+        candidate_details = _write_candidate_outputs(store.job_dir(job.job_id), chunks_path, job.job_id)
+    except Exception as exc:
+        return store.update_job(
+            job.job_id,
+            status=IntakeJobStatus.FAILED,
+            message="검토 후보 생성 중 오류가 발생했습니다.",
+            block_reason=IntakeBlockReason.CANDIDATE_EXTRACTION_FAILED.value,
+            next_action="문서 staging 결과와 후보 추출 로그를 확인한 뒤 다시 실행하세요.",
+            details={"error_type": type(exc).__name__, "error_message": str(exc)},
+        )
     return store.update_job(
         job.job_id,
         status=IntakeJobStatus.WAITING_REVIEW,

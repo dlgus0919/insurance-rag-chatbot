@@ -19,6 +19,7 @@ class DocumentKind(StrEnum):
 class IntakeBlockReason(StrEnum):
     SCANNED_PDF_TEXT_LAYER_MISSING = "scanned_pdf_text_layer_missing"
     OCR_FILE_UNSUPPORTED = "ocr_file_unsupported"
+    CANDIDATE_EXTRACTION_FAILED = "candidate_extraction_failed"
     UNSUPPORTED_FILE_TYPE = "unsupported_file_type"
 
 
