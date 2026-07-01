@@ -26,6 +26,25 @@ class IntakeJobListResponse(BaseModel):
     items: list[IntakeJobResponse]
 
 
+class IntakeAuditEventResponse(BaseModel):
+    event_id: str
+    job_id: str
+    timestamp: str
+    actor: str
+    from_status: str | None = None
+    to_status: str
+    event_type: str
+    message: str
+    block_reason: str | None = None
+    next_action: str | None = None
+    details: dict = Field(default_factory=dict)
+
+
+class IntakeAuditListResponse(BaseModel):
+    total: int
+    items: list[IntakeAuditEventResponse]
+
+
 class CandidateDecisionRequest(BaseModel):
     decision: Literal["approve", "hold", "reject"]
     reason: str = Field(..., min_length=1, max_length=1000)

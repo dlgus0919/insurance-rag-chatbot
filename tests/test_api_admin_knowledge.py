@@ -42,6 +42,25 @@ async def test_list_intake_jobs_returns_runtime_jobs(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.anyio
+async def test_list_intake_job_audit_returns_events(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = IntakeJobStore(tmp_path)
+    job = store.create_job(original_filename="scan.pdf", uploaded_by="admin", document_kind="pdf")
+    store.update_job(
+        job.job_id,
+        status=IntakeJobStatus.BLOCKED_SCANNED_PDF,
+        message="텍스트 레이어가 없습니다.",
+        block_reason="scanned_pdf_text_layer_missing",
+        next_action="텍스트 레이어가 포함된 디지털 PDF를 업로드하세요.",
+    )
+    monkeypatch.setattr(knowledge, "get_intake_store", lambda: store)
+
+    payload = await knowledge.list_intake_job_audit(job.job_id, _admin_user())
+
+    assert payload["total"] == 2
+    assert payload["items"][-1]["block_reason"] == "scanned_pdf_text_layer_missing"
+
+
+@pytest.mark.anyio
 async def test_run_intake_job_blocks_scanned_pdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = IntakeJobStore(tmp_path)
     job = store.create_job(original_filename="scan.pdf", uploaded_by="admin", document_kind="pdf")

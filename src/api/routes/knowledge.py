@@ -14,6 +14,7 @@ from src.api.exceptions import ValidationException
 from src.api.schemas.knowledge import (
     CandidateDecisionRequest,
     CandidateListResponse,
+    IntakeAuditListResponse,
     IntakeJobListResponse,
     IntakeJobResponse,
 )
@@ -47,6 +48,15 @@ async def list_intake_jobs(
 ) -> dict:
     jobs = get_intake_store().list_jobs()
     return {"total": len(jobs), "items": [_job_response(job) for job in jobs]}
+
+
+@router.get("/intake/jobs/{job_id}/audit", response_model=IntakeAuditListResponse)
+async def list_intake_job_audit(
+    job_id: str,
+    _: User = Depends(require_permission("admin.knowledge.read")),
+) -> dict:
+    events = get_intake_store().load_audit_events(job_id)
+    return {"total": len(events), "items": events}
 
 
 @router.post("/intake/jobs", response_model=IntakeJobResponse, status_code=status.HTTP_201_CREATED)
