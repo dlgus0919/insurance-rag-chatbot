@@ -31,6 +31,8 @@ ROLE_PERMISSIONS = {
         "admin.stats": True,
         "admin.users.manage": True,
         "admin.audit": True,
+        "admin.knowledge.read": True,
+        "admin.knowledge.manage": True,
     },
     "employee": {
         "chat.stream": True,
@@ -42,6 +44,8 @@ ROLE_PERMISSIONS = {
         "admin.stats": False,
         "admin.users.manage": False,
         "admin.audit": False,
+        "admin.knowledge.read": False,
+        "admin.knowledge.manage": False,
     },
     "user": {
         "chat.stream": True,
@@ -53,6 +57,8 @@ ROLE_PERMISSIONS = {
         "admin.stats": False,
         "admin.users.manage": False,
         "admin.audit": False,
+        "admin.knowledge.read": False,
+        "admin.knowledge.manage": False,
     },
     "viewer": {
         "chat.stream": False,
@@ -64,6 +70,8 @@ ROLE_PERMISSIONS = {
         "admin.stats": False,
         "admin.users.manage": False,
         "admin.audit": False,
+        "admin.knowledge.read": False,
+        "admin.knowledge.manage": False,
     },
 }
 

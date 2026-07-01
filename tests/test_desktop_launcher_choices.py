@@ -72,6 +72,12 @@ def test_launcher_primary_dialog_height_fits_default_choices() -> None:
     assert "window_height < 460" in source
 
 
+def test_desktop_launcher_marks_review_gui_as_admin_page_fallback() -> None:
+    source = LAUNCHER.read_text(encoding="utf-8")
+
+    assert "관리자 페이지 우선" in source
+
+
 def test_launcher_model_choices_show_available_models(tmp_path: Path) -> None:
     result = subprocess.run(
         ["bash", str(LAUNCHER), "--model-choices"],

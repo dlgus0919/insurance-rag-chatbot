@@ -5,10 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-
-EXCEL_SUFFIXES = {".xlsx", ".xls", ".csv"}
-IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"}
-PDF_SUFFIXES = {".pdf"}
+from src.ingest.document_intake import EXCEL_SUFFIXES, IMAGE_SUFFIXES, PDF_SUFFIXES
 
 
 @dataclass(frozen=True)
@@ -45,22 +42,21 @@ def plan_file_intake(path: str | Path) -> IntakePlan:
             "pdf",
             [
                 "detect_pdf_text_layer",
-                "choose_digital_or_scanned_pipeline",
+                "block_if_scanned_pdf",
+                "choose_digital_pdf_pipeline",
                 "stage_source_documents",
                 "ontology_candidates_pending",
+                "claim_rule_candidates_pending",
                 "wait_for_practitioner_approval",
             ],
         )
     if suffix in IMAGE_SUFFIXES:
-        return _supported_plan(
-            source_path,
-            "image",
-            [
-                "run_scanned_document_ocr",
-                "stage_source_documents",
-                "ontology_candidates_pending",
-                "wait_for_practitioner_approval",
-            ],
+        return IntakePlan(
+            path=str(source_path),
+            file_type="ocr_unsupported",
+            steps=["block_ocr_required"],
+            mutates_indexes=False,
+            requires_practitioner_approval=False,
         )
     return IntakePlan(
         path=str(source_path),

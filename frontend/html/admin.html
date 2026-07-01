@@ -26,6 +26,10 @@
         <svg fill="none" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8" stroke="currentColor" stroke-width="1.5"/><path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         검색 진단
       </div>
+      <div class="nav-item" data-admin-sub="knowledge">
+        <svg fill="none" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        지식 확장
+      </div>
     </nav>
     <div class="sidebar-bottom">
       <button id="go-chat-btn" class="admin-back-btn" type="button" data-admin-action="back">
@@ -175,6 +179,35 @@
               <tr><td>LLM 답변 생성</td><td style="font-size:11px;">gpt-5.2 / 입력 412 토큰 / 출력 287 토큰</td><td>11.2s</td><td><span class="ok">✓ 완료</span></td></tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <div class="a-sub" id="sub-knowledge">
+        <div class="knowledge-grid">
+          <section class="data-card">
+            <div class="data-card-hd"><h3>문서 추가</h3><span class="cnt-badge">관리자 전용</span></div>
+            <div class="knowledge-upload">
+              <input id="knowledge-file-input" class="fi" type="file" accept=".pdf,.xlsx,.xls,.csv"/>
+              <button class="topbar-btn pri" type="button" data-admin-action="upload-knowledge-document">업로드</button>
+            </div>
+            <p class="knowledge-help">디지털 PDF와 Excel만 후보 추출을 진행합니다. 스캔 PDF는 텍스트 레이어 검사 후 후보 추출 전에 차단됩니다.</p>
+          </section>
+
+          <section class="data-card">
+            <div class="data-card-hd"><h3>문서 처리 상태</h3><span class="cnt-badge" id="knowledge-job-count">0건</span></div>
+            <table>
+              <thead><tr><th>파일</th><th>상태</th><th>메시지</th><th>관리</th></tr></thead>
+              <tbody id="knowledge-job-body"></tbody>
+            </table>
+          </section>
+
+          <section class="data-card">
+            <div class="data-card-hd">
+              <h3>후보 검토</h3>
+              <button class="topbar-btn pri" type="button" data-admin-action="apply-approved-knowledge">승인 항목 반영</button>
+            </div>
+            <div id="knowledge-review-summary" class="knowledge-review-panel">문서 처리 완료 후 온톨로지/rule 후보가 표시됩니다.</div>
+          </section>
         </div>
       </div>
     </div>

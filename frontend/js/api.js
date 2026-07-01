@@ -4,7 +4,8 @@ import { getToken } from './storage.js';
 // ===== 기본 Fetch 함수 =====
 export async function fetchAPI(endpoint, options = {}) {
   const url = `${API_CONFIG.BASE_URL}${endpoint}`;
-  const defaultHeaders = { 'Content-Type': 'application/json' };
+  const isFormData = typeof FormData !== 'undefined' && options.body instanceof FormData;
+  const defaultHeaders = isFormData ? {} : { 'Content-Type': 'application/json' };
   const token = getToken();
 
   if (token) {

@@ -76,6 +76,20 @@
   .cs{color:#7dd3fc;} .ck{color:#a5f3fc;}
   .rag-info{background:var(--primary-light);border-radius:8px;padding:13px 15px;font-size:13px;color:var(--primary);font-weight:500;margin-bottom:14px;}
   .rag-note{font-size:12px;color:var(--gray);margin-top:6px;}
+  .knowledge-grid{display:grid;gap:14px;}
+  .knowledge-upload{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:16px 18px 0;}
+  .knowledge-help{margin:10px 18px 16px;color:var(--gray);font-size:12px;line-height:1.5;}
+  .knowledge-review-panel{padding:14px 18px;font-size:12px;color:var(--gray);}
+  .kb-status{display:inline-flex;align-items:center;border-radius:999px;padding:3px 8px;font-size:11px;font-weight:700;background:#eef4ff;color:var(--primary);}
+  .kb-status.blocked_scanned_pdf,.kb-status.blocked_unsupported,.kb-status.failed{background:#fff2f0;color:#c2410c;}
+  .kb-status.waiting_review,.kb-status.completed{background:#edfdf3;color:#047857;}
+  .candidate-columns{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;}
+  .candidate-columns h4{margin:0 0 8px;font-size:13px;color:var(--navy);}
+  .candidate-card{border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;background:#fff;}
+  .candidate-title{font-weight:800;font-size:13px;color:var(--navy);}
+  .candidate-meta{margin-top:4px;color:var(--gray);font-size:11px;overflow-wrap:anywhere;}
+  .candidate-card pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto;background:#f8fafc;padding:8px;border-radius:6px;font-size:11px;line-height:1.55;color:var(--near-black);}
+  .candidate-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;}
   .chart-card{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:18px;margin-top:14px;box-shadow:0 1px 4px rgba(0,70,255,0.06);}
   .chart-ttl{font-size:13px;font-weight:700;color:var(--navy);margin-bottom:14px;}
   .bar-area{display:flex;align-items:flex-end;gap:12px;height:110px;padding:0 6px;}

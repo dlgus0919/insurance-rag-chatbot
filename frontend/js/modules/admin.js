@@ -124,6 +124,57 @@ export function fetchGraphVectorSync(options = {}) {
   }));
 }
 
+export function fetchKnowledgeIntakeJobs() {
+  return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_KNOWLEDGE_INTAKE_JOBS);
+}
+
+export function createKnowledgeIntakeJob(file) {
+  const formData = new FormData();
+  formData.append('file', file);
+  return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_KNOWLEDGE_INTAKE_JOBS, {
+    method: 'POST',
+    body: formData,
+  });
+}
+
+export function runKnowledgeIntakeJob(jobId) {
+  return fetchAPI(`${API_CONFIG.ENDPOINTS.ADMIN_KNOWLEDGE_INTAKE_JOBS}/${encodeURIComponent(jobId)}/run`, {
+    method: 'POST',
+  });
+}
+
+export function fetchOntologyCandidates() {
+  return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_ONTOLOGY_CANDIDATES);
+}
+
+export function decideOntologyCandidate(candidateId, decision, reason, holdReasonCodes = []) {
+  return fetchAPI(`${API_CONFIG.ENDPOINTS.ADMIN_ONTOLOGY_CANDIDATES}/${encodeURIComponent(candidateId)}/decision`, {
+    method: 'POST',
+    body: JSON.stringify({
+      decision,
+      reason,
+      hold_reason_codes: holdReasonCodes,
+    }),
+  });
+}
+
+export function fetchRuleCandidates() {
+  return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_RULE_CANDIDATES);
+}
+
+export function decideRuleCandidate(candidateId, decision, reason) {
+  return fetchAPI(`${API_CONFIG.ENDPOINTS.ADMIN_RULE_CANDIDATES}/${encodeURIComponent(candidateId)}/decision`, {
+    method: 'POST',
+    body: JSON.stringify({ decision, reason }),
+  });
+}
+
+export function applyApprovedKnowledge() {
+  return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_KNOWLEDGE_APPLY_APPROVED, {
+    method: 'POST',
+  });
+}
+
 export function normalizeListResponse(response) {
   if (Array.isArray(response)) {
     return {

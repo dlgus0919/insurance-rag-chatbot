@@ -385,13 +385,13 @@ choose_action() {
   candidate_count="$(rule_candidate_pending_count)"
 
   if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
-    rows+=("FALSE" "ontology|review|${ontology_pending_count:-0}" "온톨로지 승인 검토" "승인 대기 ${ontology_pending_count:-0}건")
+    rows+=("FALSE" "ontology|review|${ontology_pending_count:-0}" "온톨로지 승인 검토" "관리자 페이지 우선, 실행기 fallback · 승인 대기 ${ontology_pending_count:-0}건")
   fi
   if [[ -x "$RULE_CANDIDATE_REVIEW_GUI" ]]; then
-    rows+=("FALSE" "rules|candidate|${candidate_count:-0}" "액티브 룰 신규 후보" "검토 대기 ${candidate_count:-0}건")
+    rows+=("FALSE" "rules|candidate|${candidate_count:-0}" "액티브 룰 신규 후보" "관리자 페이지 우선, 실행기 fallback · 검토 대기 ${candidate_count:-0}건")
   fi
   if [[ -x "$RULE_REVIEW_GUI" ]]; then
-    rows+=("FALSE" "rules|review|active" "액티브 룰 검토" "승인된 계산 룰 값 수정")
+    rows+=("FALSE" "rules|review|active" "액티브 룰 검토" "관리자 페이지 우선, 실행기 fallback · 승인된 계산 룰 값 수정")
   fi
 
   if [[ -n "$sglang_model" || -n "$vllm_model" || -n "$ollama_model" ]]; then

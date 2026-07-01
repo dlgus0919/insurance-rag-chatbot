@@ -9,6 +9,14 @@ import {
   fetchSystemSummary,
   fetchLatestRagDiagnostics,
   fetchGraphVectorSync,
+  fetchKnowledgeIntakeJobs,
+  createKnowledgeIntakeJob,
+  runKnowledgeIntakeJob,
+  fetchOntologyCandidates,
+  decideOntologyCandidate,
+  fetchRuleCandidates,
+  decideRuleCandidate,
+  applyApprovedKnowledge,
   normalizeListResponse,
 } from '../modules/admin.js?v=20260531_graph_sync';
 import { fetchCurrentUser, getCurrentUser } from '../modules/auth.js';
@@ -27,6 +35,14 @@ export {
   fetchSystemSummary,
   fetchLatestRagDiagnostics,
   fetchGraphVectorSync,
+  fetchKnowledgeIntakeJobs,
+  createKnowledgeIntakeJob,
+  runKnowledgeIntakeJob,
+  fetchOntologyCandidates,
+  decideOntologyCandidate,
+  fetchRuleCandidates,
+  decideRuleCandidate,
+  applyApprovedKnowledge,
   normalizeListResponse,
 };
 
@@ -453,6 +469,158 @@ export async function deleteUserAccount(userId) {
   ).show();
 }
 
+async function loadKnowledgeDashboard() {
+  const tbody = document.getElementById('knowledge-job-body');
+  const badge = document.getElementById('knowledge-job-count');
+  if (tbody) {
+    setTableLoading(tbody, 4);
+    try {
+      const data = normalizeListResponse(await fetchKnowledgeIntakeJobs());
+      if (badge) badge.textContent = `${data.total}건`;
+      tbody.innerHTML = data.items.length
+        ? data.items.map(renderKnowledgeJobRow).join('')
+        : '<tr><td colspan="4">등록된 문서 처리 작업이 없습니다.</td></tr>';
+    } catch (error) {
+      tbody.innerHTML = `<tr><td colspan="4">${escapeHTML(error.message || '문서 처리 상태를 불러오지 못했습니다.')}</td></tr>`;
+    }
+  }
+
+  await loadKnowledgeCandidates();
+}
+
+function renderKnowledgeJobRow(job) {
+  return `
+    <tr>
+      <td>${escapeHTML(job.original_filename || '-')}</td>
+      <td><span class="kb-status ${escapeHTML(job.status || '')}">${escapeHTML(formatKnowledgeStatus(job.status))}</span></td>
+      <td>${escapeHTML(job.message || '')}</td>
+      <td>
+        <button class="act-btn" type="button" data-admin-action="run-knowledge-intake" data-job-id="${escapeHTML(job.job_id || '')}">처리</button>
+      </td>
+    </tr>
+  `;
+}
+
+async function uploadKnowledgeDocument() {
+  const input = document.getElementById('knowledge-file-input');
+  const file = input?.files?.[0];
+  if (!file) {
+    toast('추가할 문서를 선택하세요.', 'warn');
+    return;
+  }
+
+  try {
+    const job = await createKnowledgeIntakeJob(file);
+    toast(`${job.original_filename || file.name} 업로드가 등록되었습니다.`, 'success');
+    if (input) input.value = '';
+    await loadKnowledgeDashboard();
+  } catch (error) {
+    toast(error.message || '문서 업로드에 실패했습니다.', 'error');
+  }
+}
+
+async function runKnowledgeIntake(jobId) {
+  if (!jobId) return;
+  try {
+    const job = await runKnowledgeIntakeJob(jobId);
+    const type = String(job.status || '').startsWith('blocked') ? 'warn' : 'success';
+    toast(job.message || '문서 처리가 완료되었습니다.', type);
+    await loadKnowledgeDashboard();
+  } catch (error) {
+    toast(error.message || '문서 처리에 실패했습니다.', 'error');
+  }
+}
+
+async function loadKnowledgeCandidates() {
+  const container = document.getElementById('knowledge-review-summary');
+  if (!container) return;
+  try {
+    const [ontology, rules] = await Promise.all([
+      fetchOntologyCandidates().catch(() => ({ items: [] })),
+      fetchRuleCandidates().catch(() => ({ items: [] })),
+    ]);
+    const ontologyItems = normalizeListResponse(ontology).items;
+    const ruleItems = normalizeListResponse(rules).items;
+    container.innerHTML = `
+      <div class="candidate-columns">
+        <section>
+          <h4>온톨로지 후보 ${ontologyItems.length}건</h4>
+          ${renderCandidateList(ontologyItems, 'ontology')}
+        </section>
+        <section>
+          <h4>계산 룰 후보 ${ruleItems.length}건</h4>
+          ${renderCandidateList(ruleItems, 'rule')}
+        </section>
+      </div>
+    `;
+  } catch (error) {
+    container.textContent = error.message || '후보 목록을 불러오지 못했습니다.';
+  }
+}
+
+function renderCandidateList(items, kind) {
+  if (!items.length) return '<p class="knowledge-help">검토할 후보가 없습니다.</p>';
+  return items.slice(0, 100).map((item) => {
+    const title = item.canonical_name || item.proposed_rule?.description || item.proposed_rule?.rule_id || item.candidate_id || '-';
+    const evidence = item.evidence_text || item.description || item.source_evidence?.[0]?.text || item.proposed_rule?.source_clause || '';
+    const candidateId = item.candidate_id || '';
+    const actions = kind === 'ontology'
+      ? `
+        <button class="act-btn" type="button" data-admin-action="decide-ontology-candidate" data-candidate-id="${escapeHTML(candidateId)}" data-decision="approve">승인</button>
+        <button class="act-btn" type="button" data-admin-action="decide-ontology-candidate" data-candidate-id="${escapeHTML(candidateId)}" data-decision="hold">보류</button>
+        <button class="act-btn del" type="button" data-admin-action="decide-ontology-candidate" data-candidate-id="${escapeHTML(candidateId)}" data-decision="reject">거절</button>
+      `
+      : `
+        <button class="act-btn" type="button" data-admin-action="decide-rule-candidate" data-candidate-id="${escapeHTML(candidateId)}" data-decision="approve">승인</button>
+        <button class="act-btn del" type="button" data-admin-action="decide-rule-candidate" data-candidate-id="${escapeHTML(candidateId)}" data-decision="reject">거절</button>
+      `;
+    return `
+      <article class="candidate-card">
+        <div class="candidate-title">${escapeHTML(title)}</div>
+        <div class="candidate-meta">${escapeHTML(item.status || '-')} · ${escapeHTML(candidateId || '-')}</div>
+        <pre>${escapeHTML(String(evidence).slice(0, 900))}</pre>
+        <div class="candidate-actions">${actions}</div>
+      </article>
+    `;
+  }).join('');
+}
+
+async function decideKnowledgeCandidate(kind, candidateId, decision) {
+  if (!candidateId || !decision) return;
+  const reason = window.prompt('실무자 판단 사유를 입력하세요.')?.trim();
+  if (reason === undefined) return;
+  const finalReason = reason || '관리자 UI에서 처리';
+  try {
+    if (kind === 'ontology') {
+      const holdCodes = decision === 'hold' ? ['needs_more_evidence'] : [];
+      await decideOntologyCandidate(candidateId, decision, finalReason, holdCodes);
+    } else {
+      await decideRuleCandidate(candidateId, decision, finalReason);
+    }
+    toast('후보 처리 결과를 저장했습니다.', 'success');
+    await loadKnowledgeDashboard();
+  } catch (error) {
+    toast(error.message || '후보 처리에 실패했습니다.', 'error');
+  }
+}
+
+async function applyApprovedKnowledgeFromAdmin() {
+  createConfirmModal(
+    '승인 항목 반영',
+    '승인된 온톨로지와 계산 룰 후보를 active 자산에 반영하고 GraphDB를 재빌드합니다. 계속하시겠습니까?',
+    async () => {
+      try {
+        await applyApprovedKnowledge();
+        toast('승인된 지식 항목을 active DB에 반영했습니다.', 'success');
+        await loadKnowledgeDashboard();
+      } catch (error) {
+        toast(error.message || '승인 항목 반영에 실패했습니다.', 'error');
+      }
+    },
+    null
+  ).show();
+}
+
 function setupAdminTabs() {
   document.querySelectorAll('.nav-item').forEach((tab) => {
     if (tab.dataset.phase2Bound) return;
@@ -499,6 +667,16 @@ function setupAdminActionHandlers() {
       await setUserStatus(actionTarget.dataset.userId, actionTarget.dataset.userStatus);
     } else if (action === 'delete-user') {
       await deleteUserAccount(actionTarget.dataset.userId);
+    } else if (action === 'upload-knowledge-document') {
+      await uploadKnowledgeDocument();
+    } else if (action === 'run-knowledge-intake') {
+      await runKnowledgeIntake(actionTarget.dataset.jobId);
+    } else if (action === 'decide-ontology-candidate') {
+      await decideKnowledgeCandidate('ontology', actionTarget.dataset.candidateId, actionTarget.dataset.decision);
+    } else if (action === 'decide-rule-candidate') {
+      await decideKnowledgeCandidate('rule', actionTarget.dataset.candidateId, actionTarget.dataset.decision);
+    } else if (action === 'apply-approved-knowledge') {
+      await applyApprovedKnowledgeFromAdmin();
     } else if (action === 'close-reset-password') {
       closeModal('modal-reset');
     } else if (action === 'confirm-reset-password') {
@@ -546,13 +724,14 @@ async function showSub(sub, element) {
   element?.classList.add('active');
 
   const title = document.getElementById('admin-ttl');
-  const subTitles = { logs: '로그 조회', stats: '통계', users: '사용자 관리', system: '시스템 상태', rag: 'RAG 검색 진단' };
+  const subTitles = { logs: '로그 조회', stats: '통계', users: '사용자 관리', system: '시스템 상태', rag: 'RAG 검색 진단', knowledge: '지식 확장' };
   if (title) title.textContent = subTitles[sub];
   if (sub === 'logs') await loadAdminLogs();
   if (sub === 'stats') await loadAdminStats();
   if (sub === 'users') await loadAdminUsers();
   if (sub === 'system') await loadSystemSummary();
   if (sub === 'rag') await loadRagDiagnostics();
+  if (sub === 'knowledge') await loadKnowledgeDashboard();
 }
 
 function openResetModal(userId) {
@@ -660,4 +839,22 @@ function formatDateTime(value) {
   if (!value) return '-';
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString('ko-KR');
+}
+
+function formatKnowledgeStatus(status) {
+  const labels = {
+    uploaded: '업로드됨',
+    detecting_document_type: '문서 판독',
+    blocked_scanned_pdf: '스캔 PDF 차단',
+    blocked_unsupported: '지원 불가',
+    staging_source: '원본 저장',
+    building_staging_chunks: '문서 구조화',
+    extracting_candidates: '후보 생성',
+    waiting_review: '검토 대기',
+    applying_approved: '반영 중',
+    rebuilding_active: '재빌드 중',
+    completed: '완료',
+    failed: '실패',
+  };
+  return labels[status] || status || '-';
 }
