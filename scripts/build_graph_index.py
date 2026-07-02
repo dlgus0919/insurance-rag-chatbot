@@ -24,6 +24,12 @@ def main() -> None:
         help="Optional canonical manifest path. Used first for v2_only/v1_v2_combined when present.",
     )
     parser.add_argument(
+        "--active-source-chunks",
+        type=str,
+        default="data/intake/active_sources/chunks.jsonl",
+        help="Optional active intake source chunks overlay.",
+    )
+    parser.add_argument(
         "--standard-code-db",
         type=str,
         default="data/index/relational/standard_codes.sqlite",
@@ -95,6 +101,7 @@ def main() -> None:
         manifest_path=args.manifest,
         low_confidence_report_path=args.low_confidence_report,
         canonical_manifest_path=args.canonical_manifest,
+        active_source_chunks_path=args.active_source_chunks,
         source_mode=args.source_mode,
         rebuild=args.rebuild,
         skip_standard_codes=args.skip_standard_codes,

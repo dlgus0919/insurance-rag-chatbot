@@ -14,7 +14,8 @@ import re
 from src.graph.store import GraphStore
 from src.graph.schema import Edge, EdgeType, Evidence, Node, NodeType
 from src.graph.normalizer import normalize_name, normalize_code
-from src.parser.chunker import save_chunks
+from src.ingest.source_promotion import ACTIVE_SOURCE_CHUNKS_PATH, load_active_source_chunks
+from src.parser.chunker import Chunk, load_chunks, save_chunks
 from src.graph.extractors import (
     SurgeryGradeExtractor,
     PolicyAppendixExtractor,
@@ -98,9 +99,11 @@ def build_graph(
     skip_policy_appendix: bool = False,
     skip_hira_codes: bool = False,
     rule_links_path: str | Path | None = None,
+    active_source_chunks_path: str | Path | None = ACTIVE_SOURCE_CHUNKS_PATH,
 ) -> None:
     chunks_path = Path(chunks_path)
     canonical_manifest_path = Path(canonical_manifest_path) if canonical_manifest_path else None
+    active_source_chunks_path = Path(active_source_chunks_path) if active_source_chunks_path else None
     standard_db_path = Path(standard_db_path)
     output_db_path = Path(output_db_path)
     manifest_path = Path(manifest_path)
@@ -124,6 +127,14 @@ def build_graph(
     if canonical_manifest_path and canonical_manifest_path.exists() and source_mode in {"v2_only", "v1_v2_combined"}:
         rows = load_canonical_manifest(canonical_manifest_path)
         chunks = iter_chunks_for_index_mode(rows, source_mode)
+        chunks = _merge_active_source_chunks(chunks, active_source_chunks_path)
+        temp_chunk_file = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8")
+        temp_chunk_file.close()
+        resolved_chunks_path = Path(temp_chunk_file.name)
+        save_chunks(chunks, resolved_chunks_path)
+    elif active_source_chunks_path and active_source_chunks_path.exists():
+        chunks = load_chunks(chunks_path)
+        chunks = _merge_active_source_chunks(chunks, active_source_chunks_path)
         temp_chunk_file = tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False, encoding="utf-8")
         temp_chunk_file.close()
         resolved_chunks_path = Path(temp_chunk_file.name)
@@ -193,6 +204,7 @@ def build_graph(
         "source_mode": source_mode,
         "chunks_path": str(resolved_chunks_path),
         "canonical_manifest_path": str(canonical_manifest_path) if canonical_manifest_path else "",
+        "active_source_chunks_path": str(active_source_chunks_path) if active_source_chunks_path else "",
         "standard_code_db": str(standard_db_path),
         "rule_links_path": str(rule_links_path) if rule_links_path else "",
         "node_count": store.query("SELECT COUNT(*) as count FROM graph_nodes")[0]["count"],
@@ -213,6 +225,12 @@ def build_graph(
         with contextlib.suppress(FileNotFoundError):
             Path(temp_chunk_file.name).unlink()
     print("[INFO] GraphDB build finished successfully.")
+
+
+def _merge_active_source_chunks(chunks: list[Chunk], active_source_chunks_path: Path | None) -> list[Chunk]:
+    if not active_source_chunks_path or not active_source_chunks_path.exists():
+        return list(chunks)
+    return list(chunks) + load_active_source_chunks(active_source_chunks_path)
 
 
 def _ingest_rule_links(store: GraphStore, rule_links_path: Path | None) -> None:

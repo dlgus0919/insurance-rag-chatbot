@@ -29,6 +29,15 @@ test('admin module exports intake audit helper', async () => {
   assert.equal(typeof module.fetchKnowledgeIntakeAudit, 'function');
 });
 
+test('admin config defines knowledge intake audit endpoint base', async () => {
+  const { API_CONFIG } = await import('../frontend/js/config.js');
+
+  assert.equal(
+    API_CONFIG.ENDPOINTS.ADMIN_KNOWLEDGE_INTAKE_AUDIT_BASE,
+    '/admin/knowledge/intake/jobs'
+  );
+});
+
 test('audit detail renders failed event fallback reason and next action', async () => {
   const { renderAuditDetail } = await import('../frontend/js/pages/admin.js');
 
@@ -73,4 +82,14 @@ test('admin module exports candidate review helpers', async () => {
 test('knowledge section has apply approved button', async () => {
   const html = await readFile(new URL('../frontend/html/admin.html', import.meta.url), 'utf8');
   assert.match(html, /data-admin-action="apply-approved-knowledge"/);
+});
+
+test('admin apply approved copy mentions search index promotion', async () => {
+  const js = await readFile(new URL('../frontend/js/pages/admin.js', import.meta.url), 'utf8');
+
+  assert.match(js, /문서 원문 검색 인덱스\(BM25\/Chroma\)/);
+  assert.match(js, /문서 원문 검색 인덱스를 active DB에 반영/);
+  assert.match(js, /status !== 'completed'/);
+  assert.match(js, /index_rebuilt/);
+  assert.match(js, /graph_rebuilt/);
 });

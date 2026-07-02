@@ -662,11 +662,15 @@ async function decideKnowledgeCandidate(kind, candidateId, decision) {
 async function applyApprovedKnowledgeFromAdmin() {
   createConfirmModal(
     '승인 항목 반영',
-    '승인된 온톨로지와 계산 룰 후보를 active 자산에 반영하고 GraphDB를 재빌드합니다. 계속하시겠습니까?',
+    '승인된 온톨로지와 계산 룰 후보를 active 자산에 반영하고, 문서 원문 검색 인덱스(BM25/Chroma)와 GraphDB를 재빌드합니다. 계속하시겠습니까?',
     async () => {
       try {
-        await applyApprovedKnowledge();
-        toast('승인된 지식 항목을 active DB에 반영했습니다.', 'success');
+        const result = await applyApprovedKnowledge();
+        if (result?.status !== 'completed' || !result?.index_rebuilt || !result?.graph_rebuilt) {
+          const detail = result?.sources?.[0]?.error || result?.rules?.error || '승인 항목 반영이 완료되지 않았습니다.';
+          throw new Error(detail);
+        }
+        toast('승인된 지식 항목과 문서 원문 검색 인덱스를 active DB에 반영했습니다.', 'success');
         await loadKnowledgeDashboard();
       } catch (error) {
         toast(error.message || '승인 항목 반영에 실패했습니다.', 'error');

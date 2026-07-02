@@ -33,6 +33,7 @@ export const API_CONFIG = {
     ADMIN_RAG_DIAGNOSTICS: '/admin/rag-diagnostics/latest',
     ADMIN_GRAPH_VECTOR_SYNC: '/admin/graph-vector-sync',
     ADMIN_KNOWLEDGE_INTAKE_JOBS: '/admin/knowledge/intake/jobs',
+    ADMIN_KNOWLEDGE_INTAKE_AUDIT_BASE: '/admin/knowledge/intake/jobs',
     ADMIN_KNOWLEDGE_APPLY_APPROVED: '/admin/knowledge/apply-approved',
     ADMIN_ONTOLOGY_CANDIDATES: '/admin/knowledge/ontology-candidates',
     ADMIN_RULE_CANDIDATES: '/admin/knowledge/rule-candidates',
@@ -68,7 +69,7 @@ export const SESSION_KEYS = {
 // ===== 애플리케이션 상수 =====
 export const APP_CONFIG = {
   APP_NAME: '신한EZ손해보험 보상지원 AI 챗봇',
-  VERSION: '1.0.7',
+  VERSION: '1.0.8',
   POLLING_INTERVAL: 5000,
   MESSAGE_BATCH_SIZE: 50,
   SESSION_TIMEOUT: 30 * 60 * 1000,

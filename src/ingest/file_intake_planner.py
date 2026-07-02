@@ -26,15 +26,12 @@ def plan_file_intake(path: str | Path) -> IntakePlan:
     source_path = Path(path)
     suffix = source_path.suffix.lower()
     if suffix in EXCEL_SUFFIXES:
-        return _supported_plan(
-            source_path,
-            "excel",
-            [
-                "extract_rows",
-                "stage_source_documents",
-                "ontology_candidates_pending",
-                "wait_for_practitioner_approval",
-            ],
+        return IntakePlan(
+            path=str(source_path),
+            file_type="excel",
+            steps=["excel_staging_not_ready"],
+            mutates_indexes=False,
+            requires_practitioner_approval=False,
         )
     if suffix in PDF_SUFFIXES:
         return _supported_plan(

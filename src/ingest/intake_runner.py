@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from scripts.extract_claim_rule_candidates import extract_candidates_from_text, iter_policy_chunks
-from src.claim_calculation.rule_candidates import write_jsonl
+from src import config
+from src.claim_calculation.rule_candidates import load_jsonl, write_jsonl
 from src.ingest.document_intake import IntakeBlockReason, evaluate_pdf_text_layer
 from src.ingest.intake_store import IntakeJob, IntakeJobStatus, IntakeJobStore
 from src.ontology.candidate_extractor import (
@@ -16,9 +17,12 @@ from src.ontology.candidate_extractor import (
     load_processed_chunks,
 )
 from src.ontology.policy import load_candidate_extraction_policy, load_review_policy
-from src.ontology.registry import BASE_ONTOLOGY_MANIFEST
-from src.ontology.review_store import utc_now_iso
+from src.ontology.registry import ACTIVE_ONTOLOGY_MANIFEST, BASE_ONTOLOGY_MANIFEST
+from src.ontology.review_store import OntologyCandidate, OntologyReviewStore, utc_now_iso
 from src.parser.pdf_parser import parse_pdf
+
+GLOBAL_ONTOLOGY_CANDIDATES_PATH = config.ROOT_DIR / "data" / "ontology" / "review" / "candidates.jsonl"
+GLOBAL_RULE_CANDIDATES_PATH = config.ROOT_DIR / "data" / "rules" / "review" / "candidates.jsonl"
 
 
 def run_intake_job_once(store: IntakeJobStore, job_id: str) -> IntakeJob:
@@ -87,6 +91,7 @@ def _run_pdf_job(store: IntakeJobStore, job: IntakeJob) -> IntakeJob:
     store.update_job(job.job_id, status=IntakeJobStatus.EXTRACTING_CANDIDATES, message="검토 후보를 생성합니다.")
     try:
         candidate_details = _write_candidate_outputs(store.job_dir(job.job_id), chunks_path, job.job_id)
+        candidate_details.update(_publish_candidate_outputs(job, chunks_path, candidate_details))
     except Exception as exc:
         return store.update_job(
             job.job_id,
@@ -147,7 +152,7 @@ def _write_candidate_outputs(job_dir: Path, chunks_path: Path, job_id: str) -> d
 
     concept_policy = load_candidate_extraction_policy(None)
     review_policy = load_review_policy(None)
-    concepts = load_manifest_concepts(str(BASE_ONTOLOGY_MANIFEST))
+    concepts = load_manifest_concepts(str(_candidate_extraction_manifest()))
     chunks = load_processed_chunks([chunks_path], limit=2000)
     ontology_result = extract_reinforcement_candidates(
         concepts=concepts,
@@ -175,3 +180,84 @@ def _write_candidate_outputs(job_dir: Path, chunks_path: Path, job_id: str) -> d
         "rule_candidate_count": len(rule_candidates),
         "ontology_warnings": ontology_result.warnings,
     }
+
+
+def _candidate_extraction_manifest() -> Path:
+    if ACTIVE_ONTOLOGY_MANIFEST.exists():
+        return ACTIVE_ONTOLOGY_MANIFEST
+    return BASE_ONTOLOGY_MANIFEST
+
+
+def _publish_candidate_outputs(job: IntakeJob, staging_chunks_path: Path, candidate_details: dict[str, Any]) -> dict[str, Any]:
+    ontology_result = _publish_ontology_candidates(
+        job,
+        staging_chunks_path,
+        Path(str(candidate_details["ontology_candidates_path"])),
+    )
+    rule_result = _publish_rule_candidates(
+        job,
+        staging_chunks_path,
+        Path(str(candidate_details["rule_candidates_path"])),
+    )
+    return {
+        "published_ontology_candidate_count": ontology_result["published"],
+        "skipped_ontology_candidate_count": ontology_result["skipped"],
+        "published_rule_candidate_count": rule_result["published"],
+        "skipped_rule_candidate_count": rule_result["skipped"],
+        "global_ontology_candidates_path": str(GLOBAL_ONTOLOGY_CANDIDATES_PATH),
+        "global_rule_candidates_path": str(GLOBAL_RULE_CANDIDATES_PATH),
+    }
+
+
+def _publish_ontology_candidates(job: IntakeJob, staging_chunks_path: Path, path: Path) -> dict[str, int]:
+    store = OntologyReviewStore(candidates_path=GLOBAL_ONTOLOGY_CANDIDATES_PATH)
+    existing_ids = {candidate.candidate_id for candidate in store.load_candidates()}
+    published = 0
+    skipped = 0
+    for row in _read_jsonl_dicts(path):
+        candidate = OntologyCandidate.from_dict(row)
+        if candidate.candidate_id in existing_ids:
+            skipped += 1
+            continue
+        candidate.properties = dict(candidate.properties)
+        candidate.properties.setdefault("intake_job_id", job.job_id)
+        candidate.properties.setdefault("source_filename", job.original_filename)
+        candidate.properties.setdefault("staging_chunks_path", str(staging_chunks_path))
+        store.add_candidate(candidate)
+        existing_ids.add(candidate.candidate_id)
+        published += 1
+    return {"published": published, "skipped": skipped}
+
+
+def _publish_rule_candidates(job: IntakeJob, staging_chunks_path: Path, path: Path) -> dict[str, int]:
+    existing = load_jsonl(GLOBAL_RULE_CANDIDATES_PATH)
+    existing_ids = {str(row.get("candidate_id")) for row in existing if row.get("candidate_id")}
+    new_rows = []
+    skipped = 0
+    for row in _read_jsonl_dicts(path):
+        candidate_id = str(row.get("candidate_id") or "")
+        if candidate_id in existing_ids:
+            skipped += 1
+            continue
+        payload = dict(row)
+        payload.setdefault("intake_job_id", job.job_id)
+        payload.setdefault("source_filename", job.original_filename)
+        payload.setdefault("staging_chunks_path", str(staging_chunks_path))
+        new_rows.append(payload)
+        existing_ids.add(candidate_id)
+    if new_rows:
+        write_jsonl(GLOBAL_RULE_CANDIDATES_PATH, [*existing, *new_rows])
+    return {"published": len(new_rows), "skipped": skipped}
+
+
+def _read_jsonl_dicts(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        value = json.loads(line)
+        if isinstance(value, dict):
+            rows.append(value)
+    return rows
