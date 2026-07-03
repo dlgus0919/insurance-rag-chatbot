@@ -118,7 +118,7 @@ export function fetchLatestRagDiagnostics() {
 
 export function fetchGraphVectorSync(options = {}) {
   return fetchAPI(buildEndpoint(API_CONFIG.ENDPOINTS.ADMIN_GRAPH_VECTOR_SYNC, {
-    index_mode: options.indexMode || options.index_mode || 'default',
+    index_mode: options.indexMode || options.index_mode || 'v2_only',
     limit: options.limit || 300,
     seed: options.seed,
   }));

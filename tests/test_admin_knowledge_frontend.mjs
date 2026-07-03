@@ -16,6 +16,15 @@ test('admin module exports knowledge intake API helpers', async () => {
   assert.equal(typeof module.runKnowledgeIntakeJob, 'function');
 });
 
+test('rag graph sync uses active or corrected OCR index', async () => {
+  const pageJs = await readFile(new URL('../frontend/js/pages/admin.js', import.meta.url), 'utf8');
+  const moduleJs = await readFile(new URL('../frontend/js/modules/admin.js', import.meta.url), 'utf8');
+
+  assert.match(pageJs, /effective_index_mode \|\| data\?\.index_mode \|\| 'v2_only'/);
+  assert.doesNotMatch(pageJs, /indexMode: 'default'/);
+  assert.match(moduleJs, /options\.indexMode \|\| options\.index_mode \|\| 'v2_only'/);
+});
+
 test('admin page exposes intake audit panel', async () => {
   const html = await readFile(new URL('../frontend/html/admin.html', import.meta.url), 'utf8');
 

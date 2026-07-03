@@ -192,13 +192,12 @@ async function loadSystemSummary() {
 async function loadRagDiagnostics() {
   const container = document.getElementById('sub-rag');
   if (!container) return;
-  const [data, graphSync] = await Promise.all([
-    fetchLatestRagDiagnostics(),
-    fetchGraphVectorSync({ indexMode: 'default', limit: 300 }).catch((error) => ({
-      available: false,
-      message: error.message || 'GraphDB 근거 정합성 진단을 불러오지 못했습니다.',
-    })),
-  ]);
+  const data = await fetchLatestRagDiagnostics();
+  const graphIndexMode = data?.effective_index_mode || data?.index_mode || 'v2_only';
+  const graphSync = await fetchGraphVectorSync({ indexMode: graphIndexMode, limit: 300 }).catch((error) => ({
+    available: false,
+    message: error.message || 'GraphDB 근거 정합성 진단을 불러오지 못했습니다.',
+  }));
   const intro = `
     <div class="rag-info">최근 일반 질의의 실제 검색 단계 요약입니다.</div>
     <div class="rag-note">(퀵 코드·약관 정형 모드는 진단 데이터를 수집하지 않습니다.)</div>

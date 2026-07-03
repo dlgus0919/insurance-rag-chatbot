@@ -31,7 +31,12 @@ from src.auth import users as user_store
 from src.auth.users import User
 from src.graph.vector_sync import build_report, check_evidence_sync, load_evidence_rows
 from src.llm.factory import is_ollama_allowed, list_available_models
-from src.retrieval.index_mode import INDEX_MODES, resolve_index_paths
+from src.retrieval.index_mode import (
+    INDEX_MODES,
+    USER_FACING_DEFAULT_ALIASES,
+    USER_FACING_DEFAULT_INDEX_MODE,
+    resolve_index_paths,
+)
 from src.retrieval.vector_store import VectorStore
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -523,8 +528,12 @@ async def graph_vector_sync(
 ) -> dict:
     """Return a sampled GraphDB evidence to VectorStore sync diagnostic."""
 
-    normalized_mode = (index_mode or "default").strip().lower()
-    if normalized_mode not in INDEX_MODES:
+    requested_mode = (index_mode or "default").strip().lower()
+    if requested_mode in USER_FACING_DEFAULT_ALIASES:
+        normalized_mode = USER_FACING_DEFAULT_INDEX_MODE
+    elif requested_mode in INDEX_MODES:
+        normalized_mode = requested_mode
+    else:
         raise ValidationException(f"지원하지 않는 인덱스 모드입니다: {index_mode}")
 
     graph_path = config.GRAPH_INDEX_PATH

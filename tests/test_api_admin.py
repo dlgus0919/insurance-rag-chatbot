@@ -225,13 +225,20 @@ async def test_graph_vector_sync_returns_sampled_summary(tmp_path, monkeypatch) 
             self.collection = FakeCollection()
 
     monkeypatch.setattr(admin.config, "GRAPH_INDEX_PATH", graph_path)
-    monkeypatch.setattr(admin, "resolve_index_paths", lambda _mode: (tmp_path / "bm25.pkl", chroma_dir))
+    captured = {}
+
+    def fake_resolve_index_paths(mode):
+        captured["index_mode"] = mode
+        return tmp_path / "bm25.pkl", chroma_dir
+
+    monkeypatch.setattr(admin, "resolve_index_paths", fake_resolve_index_paths)
     monkeypatch.setattr(admin, "VectorStore", FakeVectorStore)
 
     payload = await admin.graph_vector_sync("default", 10, 20260531, _admin_user())
 
     assert payload["available"] is True
-    assert payload["index_mode"] == "default"
+    assert payload["index_mode"] == "v2_only"
+    assert captured["index_mode"] == "v2_only"
     assert payload["sampled_evidence_rows"] == 4
     assert payload["summary"]["status_counts"]["direct_hit"] == 1
     assert payload["summary"]["status_counts"]["source_chunk_hit"] == 1
