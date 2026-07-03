@@ -79,6 +79,44 @@ test('admin module exports candidate review helpers', async () => {
   assert.equal(typeof module.decideRuleCandidate, 'function');
 });
 
+test('ontology candidate cards expose practitioner review context', async () => {
+  const { renderCandidateList } = await import('../frontend/js/pages/admin.js');
+
+  const html = renderCandidateList([
+    {
+      candidate_id: 'dev.cov.rider.123',
+      status: 'pending',
+      canonical_name: '특약',
+      concept_id: 'cov.rider',
+      candidate_aliases: ['운전자한정특약', '<script>alert("x")</script>'],
+      properties: {
+        display: {
+          summary: '특약 표현을 같은 보험 업무 개념으로 묶어 검색 보강에 사용합니다.',
+          example_questions: ['특약에 해당하면 보험금을 받을 수 있나요?'],
+          approval_prompt: '위 표현들을 같은 보험 업무 개념으로 묶어도 될까요?',
+        },
+      },
+      source_evidence: [
+        {
+          doc_short: '상담사례집',
+          page: '3',
+          excerpt: '운전자한정특약에 가입되어 있다면 보상 여부를 확인합니다.',
+        },
+      ],
+    },
+  ], 'ontology');
+
+  assert.match(html, /승인 대상 표현/);
+  assert.match(html, /운전자한정특약/);
+  assert.match(html, /특약 표현을 같은 보험 업무 개념으로 묶어 검색 보강에 사용합니다\./);
+  assert.match(html, /특약에 해당하면 보험금을 받을 수 있나요\?/);
+  assert.match(html, /위 표현들을 같은 보험 업무 개념으로 묶어도 될까요\?/);
+  assert.match(html, /상담사례집 · 3쪽/);
+  assert.match(html, /운전자한정특약에 가입되어 있다면 보상 여부를 확인합니다\./);
+  assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>alert/);
+});
+
 test('knowledge section has apply approved button', async () => {
   const html = await readFile(new URL('../frontend/html/admin.html', import.meta.url), 'utf8');
   assert.match(html, /data-admin-action="apply-approved-knowledge"/);

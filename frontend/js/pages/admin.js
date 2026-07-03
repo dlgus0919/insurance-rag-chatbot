@@ -613,11 +613,13 @@ async function loadKnowledgeCandidates() {
   }
 }
 
-function renderCandidateList(items, kind) {
+export function renderCandidateList(items, kind) {
   if (!items.length) return '<p class="knowledge-help">검토할 후보가 없습니다.</p>';
   return items.slice(0, 100).map((item) => {
     const title = item.canonical_name || item.proposed_rule?.description || item.proposed_rule?.rule_id || item.candidate_id || '-';
-    const evidence = item.evidence_text || item.description || item.source_evidence?.[0]?.text || item.proposed_rule?.source_clause || '';
+    const reviewContext = kind === 'ontology'
+      ? renderOntologyCandidateContext(item)
+      : renderRuleCandidateContext(item);
     const candidateId = item.candidate_id || '';
     const actions = kind === 'ontology'
       ? `
@@ -633,11 +635,103 @@ function renderCandidateList(items, kind) {
       <article class="candidate-card">
         <div class="candidate-title">${escapeHTML(title)}</div>
         <div class="candidate-meta">${escapeHTML(item.status || '-')} · ${escapeHTML(candidateId || '-')}</div>
-        <pre>${escapeHTML(String(evidence).slice(0, 900))}</pre>
+        ${reviewContext}
         <div class="candidate-actions">${actions}</div>
       </article>
     `;
   }).join('');
+}
+
+function renderOntologyCandidateContext(item) {
+  const display = item.properties?.display && typeof item.properties.display === 'object'
+    ? item.properties.display
+    : {};
+  const aliases = Array.isArray(item.candidate_aliases) ? item.candidate_aliases : [];
+  const questions = Array.isArray(display.example_questions) ? display.example_questions : [];
+  const similar = Array.isArray(display.similar_expressions) ? display.similar_expressions : [];
+  const evidence = firstEvidence(item);
+  const summary = display.summary || item.description || '후보 설명이 없습니다. 원문 근거와 승인 대상 표현을 기준으로 검토하세요.';
+  const approvalPrompt = display.approval_prompt || '위 표현들을 같은 보험 업무 개념으로 묶어도 될까요?';
+  const qualityNotes = ontologyQualityNotes(item);
+
+  return `
+    <div class="candidate-section">
+      <div class="candidate-section-label">승인 대상 표현</div>
+      ${renderInlineList(aliases, 'candidate-chip', '표시할 후보 alias가 없습니다.')}
+    </div>
+    <div class="candidate-section">
+      <div class="candidate-section-label">설명</div>
+      <p class="candidate-text">${escapeHTML(summary)}</p>
+    </div>
+    <div class="candidate-section">
+      <div class="candidate-section-label">실무자 판단 기준</div>
+      <ul class="candidate-guide">
+        <li>승인: 승인 대상 표현이 후보 개념과 같은 보험 업무 개념을 가리키고, 원문 근거의 사용 맥락도 맞을 때 선택합니다.</li>
+        <li>보류: 표현은 쓸 만하지만 근거, 대상 concept, 문장 조각 여부를 추가 확인해야 할 때 선택합니다.</li>
+        <li>거절: 표현이 너무 넓거나 후보 개념과 연결이 잘못됐거나 단순 문장 조각일 때 선택합니다.</li>
+      </ul>
+    </div>
+    ${qualityNotes ? `
+      <div class="candidate-section candidate-warning">
+        <div class="candidate-section-label">품질 경고</div>
+        <p class="candidate-text">${escapeHTML(qualityNotes)}</p>
+      </div>
+    ` : ''}
+    ${similar.length ? `
+      <div class="candidate-section">
+        <div class="candidate-section-label">참고 유사 표현</div>
+        ${renderInlineList(similar, 'candidate-chip muted-chip', '')}
+      </div>
+    ` : ''}
+    ${questions.length ? `
+      <div class="candidate-section">
+        <div class="candidate-section-label">예시 질문</div>
+        <ul class="candidate-guide">${questions.slice(0, 3).map((question) => `<li>${escapeHTML(question)}</li>`).join('')}</ul>
+      </div>
+    ` : ''}
+    <div class="candidate-section">
+      <div class="candidate-section-label">원문 근거</div>
+      <div class="candidate-evidence-source">${escapeHTML(evidence.sourceLabel)}</div>
+      <pre>${escapeHTML(evidence.excerpt)}</pre>
+    </div>
+    <div class="candidate-prompt">${escapeHTML(approvalPrompt)}</div>
+  `;
+}
+
+function renderRuleCandidateContext(item) {
+  const evidence = item.evidence_text || item.description || item.proposed_rule?.source_clause || '';
+  return `<pre>${escapeHTML(String(evidence || '-').slice(0, 900))}</pre>`;
+}
+
+function firstEvidence(item) {
+  const evidence = Array.isArray(item.source_evidence) && item.source_evidence.length
+    ? item.source_evidence[0]
+    : {};
+  const doc = evidence.doc_short || evidence.doc_name || evidence.source || '원문';
+  const page = evidence.page ? ` · ${evidence.page}쪽` : '';
+  const excerpt = item.evidence_text || evidence.excerpt || evidence.text || item.description || '-';
+  return {
+    sourceLabel: `${doc}${page}`,
+    excerpt: String(excerpt).slice(0, 900),
+  };
+}
+
+function renderInlineList(items, className, emptyText) {
+  const values = items.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 8);
+  if (!values.length) return emptyText ? `<p class="candidate-text muted">${escapeHTML(emptyText)}</p>` : '';
+  return `<div class="candidate-chip-row">${values.map((item) => `<span class="${className}">${escapeHTML(item)}</span>`).join('')}</div>`;
+}
+
+function ontologyQualityNotes(item) {
+  const notes = [];
+  const codexReview = item.properties?.codex_dev_review;
+  const reason = codexReview?.reason || item.reason;
+  const removedAliases = item.properties?.quality_repair?.removed_candidate_aliases;
+  if (reason) notes.push(reason);
+  if (Array.isArray(removedAliases) && removedAliases.length) {
+    notes.push(`이전 정제에서 제외된 표현: ${removedAliases.slice(0, 3).join(', ')}`);
+  }
+  return notes.join(' / ');
 }
 
 async function decideKnowledgeCandidate(kind, candidateId, decision) {

@@ -93,6 +93,16 @@
   .candidate-card{border:1px solid var(--border);border-radius:8px;padding:12px;margin-top:10px;background:#fff;}
   .candidate-title{font-weight:800;font-size:13px;color:var(--navy);}
   .candidate-meta{margin-top:4px;color:var(--gray);font-size:11px;overflow-wrap:anywhere;}
+  .candidate-section{margin-top:10px;}
+  .candidate-section-label{font-size:11px;font-weight:800;color:var(--navy);margin-bottom:5px;}
+  .candidate-text{font-size:11px;line-height:1.55;color:var(--near-black);margin:0;overflow-wrap:anywhere;}
+  .candidate-chip-row{display:flex;flex-wrap:wrap;gap:5px;}
+  .candidate-chip{display:inline-flex;max-width:100%;border-radius:999px;background:#eef4ff;color:var(--primary);padding:3px 8px;font-size:11px;font-weight:700;line-height:1.35;overflow-wrap:anywhere;}
+  .candidate-chip.muted-chip{background:#f1f5f9;color:var(--gray);}
+  .candidate-guide{margin:0;padding-left:17px;font-size:11px;line-height:1.55;color:var(--near-black);}
+  .candidate-warning{border-left:3px solid #f59e0b;background:#fffbeb;padding:8px 9px;border-radius:6px;}
+  .candidate-evidence-source{font-size:10px;color:var(--gray);margin-bottom:4px;font-weight:700;}
+  .candidate-prompt{margin-top:10px;padding:8px 9px;border-radius:6px;background:#f8fafc;color:var(--navy);font-size:11px;font-weight:800;line-height:1.5;}
   .candidate-card pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto;background:#f8fafc;padding:8px;border-radius:6px;font-size:11px;line-height:1.55;color:var(--near-black);}
   .candidate-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;}
   .chart-card{background:var(--white);border:1px solid var(--border);border-radius:12px;padding:18px;margin-top:14px;box-shadow:0 1px 4px rgba(0,70,255,0.06);}
