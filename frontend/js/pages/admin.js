@@ -615,7 +615,9 @@ async function loadKnowledgeCandidates() {
 export function renderCandidateList(items, kind) {
   if (!items.length) return '<p class="knowledge-help">검토할 후보가 없습니다.</p>';
   return items.slice(0, 100).map((item) => {
-    const title = item.canonical_name || item.proposed_rule?.description || item.proposed_rule?.rule_id || item.candidate_id || '-';
+    const title = kind === 'rule'
+      ? ruleCandidateTitle(item)
+      : item.canonical_name || item.proposed_rule?.description || item.proposed_rule?.rule_id || item.candidate_id || '-';
     const reviewContext = kind === 'ontology'
       ? renderOntologyCandidateContext(item)
       : renderRuleCandidateContext(item);
@@ -697,9 +699,70 @@ function renderOntologyCandidateContext(item) {
   `;
 }
 
+const RULE_GENERATION_LABELS = { '1th': '1세대', '2th': '2세대', '3th': '3세대', '4th': '4세대', '5th': '5세대' };
+const RULE_CATEGORY_LABELS = { benefit: '급여', nonpay: '비급여', unknown: '급여/비급여 미확정' };
+const RULE_VISIT_LABELS = { hospitalization: '입원', outpatient: '통원', unknown: '입원/통원 미확정' };
+const RULE_FACILITY_LABELS = {
+  all: '전체 의료기관',
+  clinic: '의원',
+  hospital: '병원',
+  general_hospital: '종합병원',
+  tertiary_hospital: '상급종합병원',
+};
+
+function ruleLabel(value, labels) {
+  const text = String(value || '').trim();
+  return labels[text] || text;
+}
+
+function formatRulePercent(value) {
+  if (value === undefined || value === null || value === '') return '';
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  return `${Math.round(number * 100)}%`;
+}
+
+function ruleCandidateTitle(item) {
+  const rule = item.proposed_rule || {};
+  const parts = [
+    ruleLabel(rule.generation, RULE_GENERATION_LABELS),
+    ruleLabel(rule.category, RULE_CATEGORY_LABELS),
+    ruleLabel(rule.visit_type, RULE_VISIT_LABELS),
+    ruleLabel(rule.facility_grade, RULE_FACILITY_LABELS),
+  ].filter(Boolean);
+  const ratio = formatRulePercent(rule.copay_ratio || rule.payout_ratio);
+  if (ratio) parts.push(`본인부담금 ${ratio}`);
+  return parts.join(' · ') || rule.description || rule.rule_id || item.candidate_id || '-';
+}
+
 function renderRuleCandidateContext(item) {
   const evidence = item.evidence_text || item.description || item.proposed_rule?.source_clause || '';
-  return `<pre>${escapeHTML(String(evidence || '-').slice(0, 900))}</pre>`;
+  const rule = item.proposed_rule || {};
+  const condition = [
+    ruleLabel(rule.generation, RULE_GENERATION_LABELS),
+    ruleLabel(rule.category, RULE_CATEGORY_LABELS),
+    ruleLabel(rule.visit_type, RULE_VISIT_LABELS),
+    ruleLabel(rule.facility_grade, RULE_FACILITY_LABELS),
+  ].filter(Boolean).join(' · ') || '-';
+  const ratio = formatRulePercent(rule.copay_ratio || rule.payout_ratio) || '-';
+  const minDeductible = rule.min_deductible || rule.deductible_amount || '-';
+  return `
+    <div class="candidate-section">
+      <div class="candidate-section-label">확인할 계산 조건</div>
+      <p class="candidate-text">${escapeHTML(condition)}</p>
+    </div>
+    <div class="candidate-section">
+      <div class="candidate-section-label">제안 값</div>
+      <ul class="candidate-guide">
+        <li>본인부담금 비율: ${escapeHTML(ratio)}</li>
+        <li>최소 공제금: ${escapeHTML(String(minDeductible))}</li>
+      </ul>
+    </div>
+    <div class="candidate-section">
+      <div class="candidate-section-label">원문 근거</div>
+      <pre>${escapeHTML(String(evidence || '-').slice(0, 900))}</pre>
+    </div>
+  `;
 }
 
 function firstEvidence(item) {

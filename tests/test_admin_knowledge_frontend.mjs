@@ -126,6 +126,38 @@ test('ontology candidate cards expose practitioner review context', async () => 
   assert.doesNotMatch(html, /<script>alert/);
 });
 
+
+test('rule candidate cards use practitioner labels and review context', async () => {
+  const { renderCandidateList } = await import('../frontend/js/pages/admin.js');
+
+  const html = renderCandidateList([
+    {
+      candidate_id: 'rulecand.test',
+      status: 'pending',
+      proposed_rule: {
+        rule_id: 'deductible.1th.unknown.hospitalization.test',
+        generation: '1th',
+        category: 'unknown',
+        visit_type: 'hospitalization',
+        facility_grade: 'all',
+        copay_ratio: '0.2',
+        min_deductible: '0',
+        description: '1th unknown hospitalization: 본인부담금 20%',
+        source_clause: '1세대 입원 보상 근거',
+      },
+      evidence_text: '1세대 입원 보상 근거',
+    },
+  ], 'rule');
+
+  assert.match(html, /1세대/);
+  assert.match(html, /입원/);
+  assert.match(html, /급여\/비급여 미확정/);
+  assert.match(html, /전체 의료기관/);
+  assert.match(html, /확인할 계산 조건/);
+  assert.match(html, /원문 근거/);
+  assert.doesNotMatch(html, /1th unknown hospitalization/);
+});
+
 test('knowledge section has apply approved button', async () => {
   const html = await readFile(new URL('../frontend/html/admin.html', import.meta.url), 'utf8');
   assert.match(html, /data-admin-action="apply-approved-knowledge"/);
