@@ -91,7 +91,7 @@ def _load_registry() -> ClaimRuleRegistry:
 
 
 def _normalize_generation(generation: str) -> str:
-    return generation if generation in {"4th", "5th"} else "4th"
+    return generation if generation in {"4th", "5th"} else "5th"
 
 
 def _normalize_visit_type(visit_type: str) -> str:

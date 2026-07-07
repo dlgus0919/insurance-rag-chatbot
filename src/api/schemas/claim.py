@@ -33,7 +33,7 @@ class ClaimCaseContextRequest(BaseModel):
     diagnosis_name: str = ""
     accident_type: str = ""
     situation_note: str = ""
-    policy_generation: Literal["4th", "5th"] = "4th"
+    policy_generation: Literal["4th", "5th"] = "5th"
     complication_asserted: bool = False
     same_disease_claimed: bool = False
     same_treatment_purpose_claimed: bool = False
@@ -75,7 +75,7 @@ class ClaimCalculationResponse(BaseModel):
     review_reasons: list[str]
     notes: str
     candidates: list[dict[str, str]]
-    policy_generation: str = "4th"
+    policy_generation: str = "5th"
     line_results: list[dict] = Field(default_factory=list)
     calculation_status: str = "auto_calculated"
     missing_evidence: list[str] = Field(default_factory=list)

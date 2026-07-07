@@ -79,6 +79,8 @@
   .knowledge-upload{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:16px 18px 0;}
   .knowledge-help{margin:10px 18px 16px;color:var(--gray);font-size:12px;line-height:1.5;}
   .knowledge-review-panel{padding:14px 18px;font-size:12px;color:var(--gray);}
+  .knowledge-review-panel summary{cursor:pointer;font-weight:800;color:var(--navy);}
+  .knowledge-review-panel summary .cnt-badge{margin-left:8px;}
   .knowledge-audit-detail{padding:12px 18px;color:var(--near-black);font-size:11px;line-height:1.45;overflow-wrap:anywhere;}
   .knowledge-audit-detail .knowledge-help{margin:0;color:var(--gray);font-size:11px;line-height:1.45;}
   .audit-summary{display:grid;gap:5px;margin:0 0 10px;padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:#f8fafc;}

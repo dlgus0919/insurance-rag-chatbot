@@ -541,7 +541,7 @@ async function sendClaim(options = {}) {
   const coverageTopic = document.getElementById('claim-coverage-topic')?.value.trim() || '실손';
   const visitType = document.getElementById('claim-visit-type')?.value || '';
   const note = document.getElementById('claim-note')?.value.trim() || '';
-  const policyGeneration = document.querySelector('input[name="claim-policy-generation"]:checked')?.value || '4th';
+  const policyGeneration = document.querySelector('input[name="claim-policy-generation"]:checked')?.value || '5th';
 
   const itemSummary = items.map((item) => {
     const insured = item.insured_copay_amount || '0';
@@ -621,7 +621,7 @@ function resetClaimForm() {
   });
   syncClaimLineLabels();
 
-  const generation = document.querySelector('input[name="claim-policy-generation"][value="4th"]');
+  const generation = document.querySelector('input[name="claim-policy-generation"][value="5th"]');
   if (generation instanceof HTMLInputElement) generation.checked = true;
 
   const diagnosisCode = document.getElementById('claim-diagnosis-code');
@@ -1401,7 +1401,7 @@ function formatSelectedModelLabel(modelId) {
 }
 
 function getPolicyGeneration() {
-  return document.querySelector('input[name="claim-policy-generation"]:checked')?.value || '4th';
+  return document.querySelector('input[name="claim-policy-generation"]:checked')?.value || '5th';
 }
 
 function getIndexMode() {

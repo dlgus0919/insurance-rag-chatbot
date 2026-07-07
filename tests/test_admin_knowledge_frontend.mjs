@@ -7,6 +7,9 @@ test('admin page exposes knowledge extension section', async () => {
   assert.match(html, /data-admin-sub="knowledge"/);
   assert.match(html, /문서 추가/);
   assert.match(html, /후보 검토/);
+  assert.match(html, /id="knowledge-active-rule-list"/);
+  assert.match(html, /id="knowledge-active-rule-count">확인 중/);
+  assert.doesNotMatch(html, /knowledge-active-rule-count">0건/);
 });
 
 test('admin module exports knowledge intake API helpers', async () => {
@@ -36,6 +39,7 @@ test('admin module exports intake audit helper', async () => {
   const module = await import('../frontend/js/modules/admin.js');
 
   assert.equal(typeof module.fetchKnowledgeIntakeAudit, 'function');
+  assert.equal(typeof module.fetchActiveRules, 'function');
 });
 
 test('admin config defines knowledge intake audit endpoint base', async () => {
@@ -45,6 +49,7 @@ test('admin config defines knowledge intake audit endpoint base', async () => {
     API_CONFIG.ENDPOINTS.ADMIN_KNOWLEDGE_INTAKE_AUDIT_BASE,
     '/admin/knowledge/intake/jobs'
   );
+  assert.equal(API_CONFIG.ENDPOINTS.ADMIN_ACTIVE_RULES, '/admin/knowledge/active-rules');
 });
 
 test('audit detail renders failed event fallback reason and next action', async () => {
@@ -126,6 +131,31 @@ test('ontology candidate cards expose practitioner review context', async () => 
   assert.doesNotMatch(html, /<script>alert/);
 });
 
+
+
+test('active rule list renders practitioner-readable current values', async () => {
+  const { renderActiveRuleList } = await import('../frontend/js/pages/admin.js');
+
+  const html = renderActiveRuleList([
+    {
+      section: 'rules',
+      rule_id: 'deductible.4th.benefit.outpatient',
+      copay_ratio: '0.2',
+      min_deductible: '10000',
+      annual_visit_limit: 180,
+      description: '4세대 급여 통원',
+      source_doc: '약관',
+      source_page: '31',
+      source_clause: '제3조',
+    },
+  ]);
+
+  assert.match(html, /4세대 급여 통원/);
+  assert.match(html, /본인부담금\/지급 비율: 20%/);
+  assert.match(html, /최소 공제금: 10,000원/);
+  assert.match(html, /연간 횟수 한도: 180회/);
+  assert.match(html, /약관 · 31 · 제3조/);
+});
 
 test('rule candidate cards use practitioner labels and review context', async () => {
   const { renderCandidateList } = await import('../frontend/js/pages/admin.js');

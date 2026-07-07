@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, UploadFile, status
 
 from scripts.claim_rule_candidate_review import append_log, decide_candidate
+from scripts.claim_rule_review import DEFAULT_RULES_PATH, active_rows, load_manifest, rule_summary
 from src import config
 from src.api.deps import require_permission
 from src.api.exceptions import ValidationException
@@ -32,6 +33,7 @@ DEFAULT_INTAKE_ROOT = config.ROOT_DIR / "data" / "intake" / "jobs"
 RULE_CANDIDATES_PATH = config.ROOT_DIR / "data" / "rules" / "review" / "candidates.jsonl"
 RULE_REVIEW_LOG_PATH = config.ROOT_DIR / "data" / "rules" / "review" / "review_log.jsonl"
 ONTOLOGY_CANDIDATES_PATH = config.ROOT_DIR / "data" / "ontology" / "review" / "candidates.jsonl"
+ACTIVE_RULES_PATH = DEFAULT_RULES_PATH
 
 
 def get_intake_store() -> IntakeJobStore:
@@ -120,6 +122,20 @@ async def decide_ontology_candidate(
         hold_reason_codes=payload.hold_reason_codes,
     )
     return candidate.to_dict()
+
+
+@router.get("/active-rules", response_model=CandidateListResponse)
+async def list_active_rules(
+    _: User = Depends(require_permission("admin.knowledge.read")),
+) -> dict:
+    payload = load_manifest(ACTIVE_RULES_PATH)
+    records = []
+    for section, row in active_rows(payload):
+        record = dict(row)
+        record["section"] = section
+        record["summary"] = rule_summary(section, row)
+        records.append(record)
+    return {"total": len(records), "items": records}
 
 
 @router.get("/rule-candidates", response_model=CandidateListResponse)

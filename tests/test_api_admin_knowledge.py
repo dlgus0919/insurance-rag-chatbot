@@ -90,6 +90,27 @@ async def test_run_intake_job_blocks_scanned_pdf(tmp_path: Path, monkeypatch: py
 
 
 @pytest.mark.anyio
+async def test_list_active_rules_returns_active_manifest_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rules_path = tmp_path / "active_rules.json"
+    rules_path.write_text(
+        '{"version":"test","rules":[{"rule_id":"deductible.4th.benefit.outpatient",'
+        '"generation":"4th","category":"급여","visit_type":"outpatient","facility_grade":"all",'
+        '"copay_ratio":"0.2","min_deductible":"10000","min_deductible_by_facility":{"clinic":"10000"},'
+        '"description":"4세대 급여 통원","source_doc":"약관","source_page":"31","source_clause":"제3조",'
+        '"source_chunk_id":"chunk:1","source_status":"source_grounded","approval_status":"active"},'
+        '{"rule_id":"draft","approval_status":"candidate"}],"prescription_rules":[],"special_rules":[]}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(knowledge, "ACTIVE_RULES_PATH", rules_path)
+
+    payload = await knowledge.list_active_rules(_admin_user())
+
+    assert payload["total"] == 1
+    assert payload["items"][0]["rule_id"] == "deductible.4th.benefit.outpatient"
+    assert payload["items"][0]["section"] == "rules"
+
+
+@pytest.mark.anyio
 async def test_list_rule_candidates_returns_items(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     candidates = tmp_path / "rule_candidates.jsonl"
     candidates.write_text(

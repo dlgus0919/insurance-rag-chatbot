@@ -33,7 +33,7 @@ class ClaimCaseContext:
     diagnosis_name: str = ""  # 진단명
     accident_type: str = ""  # 사고: "accident", 질병: "disease", 상해: "injury"
     situation_note: str = ""  # 상황 메모
-    policy_generation: str = "4th"  # "4th" 또는 "5th"
+    policy_generation: str = "5th"  # "4th" 또는 "5th"
     complication_asserted: bool = False
     same_disease_claimed: bool = False
     same_treatment_purpose_claimed: bool = False
@@ -98,7 +98,7 @@ class CalculationResult:
     review_reasons: list[str] = field(default_factory=list)
     notes: str = ""
     candidates: list[dict[str, str]] = field(default_factory=list)
-    policy_generation: str = "4th"
+    policy_generation: str = "5th"
     line_results: list[dict[str, str | bool | list[str]]] = field(default_factory=list)
     applied_limits: dict[str, str] = field(default_factory=dict)
     calculation_status: str = "auto_calculated"

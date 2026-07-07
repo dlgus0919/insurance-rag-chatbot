@@ -82,11 +82,11 @@ async def test_claim_calculation_route_returns_payable_amount(monkeypatch) -> No
     )
 
     assert response.claimed_amount == "150000"
-    assert response.deductible == "45000"
-    assert response.payable_amount == "105000"
-    assert response.policy_generation == "4th"
+    assert response.deductible == "75000"
+    assert response.payable_amount == "75000"
+    assert response.policy_generation == "5th"
     assert response.line_results[0]["input_name"] == "도수치료"
-    assert response.requires_review is False
+    assert response.requires_review is True
 
 
 @pytest.mark.anyio
@@ -266,5 +266,5 @@ async def test_claim_calculation_route_persists_history(monkeypatch, db_session)
     messages = list((await db_session.execute(select(ChatMessage).order_by(ChatMessage.id))).scalars())
     assert sessions[0].title == "보험금 계산: 도수치료"
     assert [message.role for message in messages] == ["user", "assistant"]
-    assert "보험금 계산/4세대" in messages[0].content
+    assert "보험금 계산/5세대" in messages[0].content
     assert "예상 지급금액" in messages[1].content

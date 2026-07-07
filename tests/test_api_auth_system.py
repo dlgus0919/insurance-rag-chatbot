@@ -23,6 +23,8 @@ async def test_auth_cookie_flow(tmp_path, monkeypatch) -> None:
     assert login.user.username == "admin"
     assert any("access_token=" in header for header in cookie_headers)
     assert any("refresh_token=" in header for header in cookie_headers)
+    auth_cookie_headers = [header for header in cookie_headers if "access_token=" in header or "refresh_token=" in header]
+    assert all("Max-Age" not in header for header in auth_cookie_headers)
 
     pair = auth.security.issue_token_pair("admin", users.ROLE_ADMIN)
     me = await auth.me(await auth.current_user(pair.access_token))

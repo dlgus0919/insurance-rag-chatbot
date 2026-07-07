@@ -56,9 +56,9 @@ def test_launcher_primary_choices_hide_model_rows(tmp_path: Path) -> None:
         env=_launcher_env(tmp_path),
     )
 
-    assert "ontology|review|" in result.stdout
-    assert "rules|candidate|" in result.stdout
-    assert "rules|review|active" in result.stdout
+    assert "ontology|review|" not in result.stdout
+    assert "rules|candidate|" not in result.stdout
+    assert "rules|review|active" not in result.stdout
     assert "model|select|available" in result.stdout
     assert "start|sglang|gpt-oss-20b" not in result.stdout
     if "current|" in result.stdout:
@@ -72,10 +72,12 @@ def test_launcher_primary_dialog_height_fits_default_choices() -> None:
     assert "window_height < 460" in source
 
 
-def test_desktop_launcher_marks_review_gui_as_admin_page_fallback() -> None:
+def test_desktop_launcher_hides_admin_review_choices() -> None:
     source = LAUNCHER.read_text(encoding="utf-8")
 
-    assert "관리자 페이지 우선" in source
+    assert "온톨로지 승인 검토" not in source
+    assert "액티브 룰 신규 후보" not in source
+    assert "액티브 룰 검토" not in source
 
 
 def test_launcher_model_choices_show_available_models(tmp_path: Path) -> None:

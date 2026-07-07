@@ -162,6 +162,10 @@ export function decideOntologyCandidate(candidateId, decision, reason, holdReaso
   });
 }
 
+export function fetchActiveRules() {
+  return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_ACTIVE_RULES);
+}
+
 export function fetchRuleCandidates() {
   return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_RULE_CANDIDATES);
 }

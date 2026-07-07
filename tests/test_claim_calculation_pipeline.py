@@ -23,7 +23,7 @@ def _matches_for(items: list[ClaimItemInput]) -> list[list[dict[str, str]]]:
 
 
 def test_pipeline_calculation_success_dousu():
-    """4세대 도수치료는 현재 규칙표상 비급여 30% 공제로 계산되며 추가 review는 강제하지 않는다.
+    """기본 세대 도수치료는 최신 세대 규칙으로 계산하고 필요한 review 사유를 남긴다.
 
     한도/횟수/특약 조건을 확인할 증빙이 입력되지 않은 실제 심사 화면에서는 review path가
     별도로 붙을 수 있지만, 이 단위 테스트는 표준코드가 단일 보상 후보로 확정된 순수
@@ -59,15 +59,33 @@ def test_pipeline_calculation_success_dousu():
         )
 
         assert isinstance(result, CalculationResult)
-        # 150000원 청구 시 30%인 45,000원이 max(30000, 45000)으로 공제되어 105,000원이어야 함.
-        assert result.payable_amount == "105000"
-        assert result.deductible == "45000"
-        assert result.policy_generation == "4th"
-        assert result.line_results[0]["payable_amount"] == "105000"
-        assert not result.requires_review
+        # 5세대 기본값에서는 3대비급여 통원 50% 공제 기준으로 계산된다.
+        assert result.payable_amount == "75000"
+        assert result.deductible == "75000"
+        assert result.policy_generation == "5th"
+        assert result.line_results[0]["payable_amount"] == "75000"
+        assert result.requires_review
         assert len(result.applied_basis) > 0
         assert "비급여 표준모델" in result.applied_basis[0]["source"]
 
+
+def test_unsupported_policy_generation_defaults_to_latest_supported_generation():
+    items = [
+        ClaimItemInput(
+            line_id="item_unknown_generation",
+            input_name="급여 외래진료비",
+            claimed_amount="100000",
+            user_category_hint="급여",
+        )
+    ]
+    context = ClaimCaseContext(policy_generation="6th", visit_type="outpatient")
+
+    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.policy_generation == "5th"
+    assert result.deductible == "20000"
+    assert result.payable_amount == "80000"
 
 @pytest.mark.parametrize(
     ("generation", "expected_deductible", "expected_payable"),
@@ -824,7 +842,7 @@ def test_pipeline_deterministic_default_prevents_over_claimed_warning():
         assert result.payable_amount == "40000"
         assert result.deductible == "10000"
         assert result.requires_review
-        assert any("급여/비급여 구분" in reason for reason in result.review_reasons)
+        assert any("급여/비급여/중증" in reason for reason in result.review_reasons)
 
 
 def test_pipeline_formatted_amount_parsing():
@@ -860,9 +878,9 @@ def test_pipeline_formatted_amount_parsing():
                 use_fake_planner=True
             )
             assert result.claimed_amount == "150000"
-            assert result.payable_amount == "105000"
-            assert result.deductible == "45000"
-            assert not result.requires_review
+            assert result.payable_amount == "75000"
+            assert result.deductible == "75000"
+            assert result.requires_review
 
 
 def test_pipeline_multiple_candidates_populate():

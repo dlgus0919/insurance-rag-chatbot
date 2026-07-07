@@ -115,9 +115,9 @@ class TestLookupRule:
         assert rule.copay_ratio == Decimal("0.2")
 
     def test_unknown_generation_fallback(self):
-        """미지원 세대 → 4세대로 fallback."""
+        """미지원 세대 → 최신 지원 세대로 fallback."""
         rule = lookup_rule("3rd", "급여", "outpatient")
-        assert rule.generation == "4th"
+        assert rule.generation == "5th"
 
     def test_empty_visit_type_defaults_outpatient(self):
         rule = lookup_rule("4th", "급여", "")
@@ -143,4 +143,4 @@ class TestLookupPrescriptionRule:
 
     def test_unknown_gen_prescription(self):
         rule = lookup_prescription_rule("3rd")
-        assert rule.generation == "4th"
+        assert rule.generation == "5th"

@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 
 
 def _normalize_policy_generation(value: str) -> str:
-    normalized = (value or "4th").strip().lower()
-    if normalized in {"5", "5th", "5세대", "fifth"}:
-        return "5th"
-    return "4th"
+    normalized = (value or "5th").strip().lower()
+    if normalized in {"4", "4th", "4세대", "fourth"}:
+        return "4th"
+    return "5th"
 
 
 def _classify_claim_category(item: ClaimItemInput, match: StandardMatch | None) -> str:

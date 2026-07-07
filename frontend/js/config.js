@@ -37,6 +37,7 @@ export const API_CONFIG = {
     ADMIN_KNOWLEDGE_APPLY_APPROVED: '/admin/knowledge/apply-approved',
     ADMIN_ONTOLOGY_CANDIDATES: '/admin/knowledge/ontology-candidates',
     ADMIN_RULE_CANDIDATES: '/admin/knowledge/rule-candidates',
+    ADMIN_ACTIVE_RULES: '/admin/knowledge/active-rules',
     ADMIN_SESSIONS: '/admin/sessions',
     ADMIN_AUDIT: '/admin/audit',
     SYSTEM_MODELS: '/system/models',

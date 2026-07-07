@@ -273,15 +273,6 @@ print_choices() {
   vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
   ollama_model="$(detect_ollama_model)"
 
-  if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
-    printf 'ontology|review|%s\n' "$(ontology_pending_count)"
-  fi
-  if [[ -x "$RULE_CANDIDATE_REVIEW_GUI" ]]; then
-    printf 'rules|candidate|%s\n' "$(rule_candidate_pending_count)"
-  fi
-  if [[ -x "$RULE_REVIEW_GUI" ]]; then
-    printf 'rules|review|active\n'
-  fi
   printf 'model|select|available\n'
   if [[ -n "$sglang_model" ]]; then
     printf 'current|sglang|%s\n' "$sglang_model"
@@ -379,20 +370,7 @@ choose_action() {
   local vllm_model="$3"
   local trtllm_model="$4"
   local ollama_model="$5"
-  local ontology_pending_count="${6:-0}"
   local rows=()
-  local candidate_count
-  candidate_count="$(rule_candidate_pending_count)"
-
-  if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
-    rows+=("FALSE" "ontology|review|${ontology_pending_count:-0}" "온톨로지 승인 검토" "관리자 페이지 우선, 실행기 fallback · 승인 대기 ${ontology_pending_count:-0}건")
-  fi
-  if [[ -x "$RULE_CANDIDATE_REVIEW_GUI" ]]; then
-    rows+=("FALSE" "rules|candidate|${candidate_count:-0}" "액티브 룰 신규 후보" "관리자 페이지 우선, 실행기 fallback · 검토 대기 ${candidate_count:-0}건")
-  fi
-  if [[ -x "$RULE_REVIEW_GUI" ]]; then
-    rows+=("FALSE" "rules|review|active" "액티브 룰 검토" "관리자 페이지 우선, 실행기 fallback · 승인된 계산 룰 값 수정")
-  fi
 
   if [[ -n "$sglang_model" || -n "$vllm_model" || -n "$ollama_model" ]]; then
     rows+=("FALSE" "model|select|available" "모델 기동 선택" "사용 가능한 모델 목록 보기")
@@ -524,11 +502,6 @@ main() {
     show_error "설치 오류" "기동 wrapper가 없습니다.\n\n$APP_UP"
     exit 1
   }
-  local pending_ontology_count="0"
-  if [[ -x "$ONTOLOGY_REVIEW_GUI" ]]; then
-    pending_ontology_count="$(ontology_pending_count)"
-  fi
-
   local app_running="stopped"
   detect_app_health && app_running="running"
   local sglang_model
@@ -541,7 +514,7 @@ main() {
   ollama_model="$(detect_ollama_model)"
 
   local choice
-  choice="$(choose_action "$app_running" "$sglang_model" "$vllm_model" "$trtllm_model" "$ollama_model" "$pending_ontology_count")" || exit 0
+  choice="$(choose_action "$app_running" "$sglang_model" "$vllm_model" "$trtllm_model" "$ollama_model")" || exit 0
   [[ -n "$choice" ]] || exit 0
 
   IFS='|' read -r mode provider model <<<"$choice"

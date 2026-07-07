@@ -30,7 +30,6 @@ def _set_auth_cookies(response: Response, pair: security.TokenPair) -> None:
     response.set_cookie(
         security.ACCESS_TOKEN_COOKIE,
         pair.access_token,
-        max_age=pair.access_expires_in,
         httponly=True,
         secure=_cookie_secure(),
         samesite="strict",
@@ -39,7 +38,6 @@ def _set_auth_cookies(response: Response, pair: security.TokenPair) -> None:
     response.set_cookie(
         security.REFRESH_TOKEN_COOKIE,
         pair.refresh_token,
-        max_age=pair.refresh_expires_in,
         httponly=True,
         secure=_cookie_secure(),
         samesite="strict",
@@ -74,7 +72,7 @@ async def login(
     response: Response = None,
     db: AsyncSession | None = Depends(get_db),
 ) -> AuthResponse:
-    """Authenticate a user and issue HttpOnly JWT cookies."""
+    """Authenticate a user and issue browser-session HttpOnly JWT cookies."""
 
     if isinstance(request, LoginRequest):  # Backward-compatible direct unit-test call.
         legacy_request = request
@@ -175,7 +173,6 @@ async def refresh(
     response.set_cookie(
         security.ACCESS_TOKEN_COOKIE,
         access,
-        max_age=security.ACCESS_TOKEN_SECONDS,
         httponly=True,
         secure=_cookie_secure(),
         samesite="strict",

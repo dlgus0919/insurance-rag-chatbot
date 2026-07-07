@@ -2,14 +2,16 @@ import { STORAGE_KEYS } from './config.js';
 
 // ===== 토큰 관리 =====
 export function getToken() {
-  return localStorage.getItem(STORAGE_KEYS.TOKEN);
+  return sessionStorage.getItem(STORAGE_KEYS.TOKEN);
 }
 
 export function setToken(token) {
-  localStorage.setItem(STORAGE_KEYS.TOKEN, token);
+  sessionStorage.setItem(STORAGE_KEYS.TOKEN, token);
+  localStorage.removeItem(STORAGE_KEYS.TOKEN);
 }
 
 export function removeToken() {
+  sessionStorage.removeItem(STORAGE_KEYS.TOKEN);
   localStorage.removeItem(STORAGE_KEYS.TOKEN);
 }
 
@@ -19,21 +21,24 @@ export function hasToken() {
 
 // ===== 사용자 정보 관리 =====
 export function getUser() {
-  const user = localStorage.getItem(STORAGE_KEYS.USER);
+  const user = sessionStorage.getItem(STORAGE_KEYS.USER);
   if (!user) return null;
   try {
     return JSON.parse(user);
   } catch {
+    sessionStorage.removeItem(STORAGE_KEYS.USER);
     localStorage.removeItem(STORAGE_KEYS.USER);
     return null;
   }
 }
 
 export function setUser(user) {
-  localStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+  sessionStorage.setItem(STORAGE_KEYS.USER, JSON.stringify(user));
+  localStorage.removeItem(STORAGE_KEYS.USER);
 }
 
 export function removeUser() {
+  sessionStorage.removeItem(STORAGE_KEYS.USER);
   localStorage.removeItem(STORAGE_KEYS.USER);
 }
 

@@ -13,6 +13,7 @@ import {
   createKnowledgeIntakeJob,
   runKnowledgeIntakeJob,
   fetchKnowledgeIntakeAudit,
+  fetchActiveRules,
   fetchOntologyCandidates,
   decideOntologyCandidate,
   fetchRuleCandidates,
@@ -40,6 +41,7 @@ export {
   createKnowledgeIntakeJob,
   runKnowledgeIntakeJob,
   fetchKnowledgeIntakeAudit,
+  fetchActiveRules,
   fetchOntologyCandidates,
   decideOntologyCandidate,
   fetchRuleCandidates,
@@ -486,7 +488,7 @@ async function loadKnowledgeDashboard() {
     }
   }
 
-  await loadKnowledgeCandidates();
+  await Promise.all([loadActiveRules(), loadKnowledgeCandidates()]);
 }
 
 function renderKnowledgeJobRow(job) {
@@ -583,6 +585,60 @@ async function loadKnowledgeAudit(jobId) {
   } catch (error) {
     container.textContent = error.message || '감사 로그를 불러오지 못했습니다.';
   }
+}
+
+async function loadActiveRules() {
+  const container = document.getElementById('knowledge-active-rule-list');
+  const badge = document.getElementById('knowledge-active-rule-count');
+  if (!container) return;
+  container.textContent = '승인된 계산 룰을 확인하는 중입니다.';
+  if (badge) badge.textContent = '확인 중';
+  try {
+    const data = normalizeListResponse(await fetchActiveRules());
+    if (badge) badge.textContent = `${data.total}건`;
+    container.innerHTML = renderActiveRuleList(data.items);
+  } catch (error) {
+    if (badge) badge.textContent = '확인 실패';
+    container.textContent = error.message || '승인된 계산 룰을 불러오지 못했습니다.';
+  }
+}
+
+export function renderActiveRuleList(items) {
+  if (!items.length) return '<p class="knowledge-help">승인된 액티브 룰이 없습니다.</p>';
+  return items.slice(0, 100).map((rule) => {
+    const values = activeRuleValues(rule);
+    return `
+      <article class="candidate-card">
+        <div class="candidate-title">${escapeHTML(activeRuleTitle(rule))}</div>
+        <div class="candidate-meta">${escapeHTML(rule.section || '-')} · ${escapeHTML(rule.rule_id || '-')}</div>
+        <div class="candidate-section">
+          <div class="candidate-section-label">현재 적용 값</div>
+          <ul class="candidate-guide">${values.map((value) => `<li>${escapeHTML(value)}</li>`).join('')}</ul>
+        </div>
+        <div class="candidate-section">
+          <div class="candidate-section-label">근거</div>
+          <p class="candidate-text">${escapeHTML(rule.source_doc || '-')} · ${escapeHTML(rule.source_page || '-')} · ${escapeHTML(rule.source_clause || '-')}</p>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+function activeRuleTitle(rule) {
+  return rule.description || rule.summary || rule.rule_id || '-';
+}
+
+function activeRuleValues(rule) {
+  const values = [];
+  const ratio = formatRulePercent(rule.copay_ratio || rule.payout_ratio);
+  if (ratio) values.push(`본인부담금/지급 비율: ${ratio}`);
+  if (rule.min_deductible) values.push(`최소 공제금: ${formatRuleMoney(rule.min_deductible)}`);
+  if (rule.deductible_amount) values.push(`처방 공제금: ${formatRuleMoney(rule.deductible_amount)}`);
+  if (rule.per_visit_limit) values.push(`회당 한도: ${formatRuleMoney(rule.per_visit_limit)}`);
+  if (rule.annual_limit) values.push(`연간 한도: ${formatRuleMoney(rule.annual_limit)}`);
+  if (rule.annual_visit_limit) values.push(`연간 횟수 한도: ${rule.annual_visit_limit}회`);
+  if (rule.daily_limit) values.push(`일 한도: ${formatRuleMoney(rule.daily_limit)}`);
+  return values.length ? values : ['표시할 수치 조건 없음'];
 }
 
 async function loadKnowledgeCandidates() {
@@ -720,6 +776,12 @@ function formatRulePercent(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return String(value);
   return `${Math.round(number * 100)}%`;
+}
+
+function formatRuleMoney(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  return `${number.toLocaleString('ko-KR')}원`;
 }
 
 function ruleCandidateTitle(item) {
