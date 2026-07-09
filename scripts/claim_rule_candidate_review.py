@@ -124,18 +124,25 @@ def apply_candidates(
     summary = {
         "rules_to_add": [rule["rule_id"] for rule in plan.rules_to_add],
         "links_to_add": [link["rule_id"] for link in plan.links_to_add],
+        "rules_to_replace": [rule["rule_id"] for rule in plan.rules_to_replace],
+        "links_to_replace": [link["rule_id"] for link in plan.links_to_replace],
         "applied_candidate_ids": plan.applied_candidate_ids,
         "dry_run": dry_run,
     }
-    if dry_run or not plan.rules_to_add:
+    if dry_run or not plan.applied_candidate_ids:
         return summary
 
     updated_rules = deepcopy(rules_payload)
     approved = [candidate for candidate in candidates if candidate.get("candidate_id") in plan.applied_candidate_ids]
     by_id = {rule["rule_id"]: rule for rule in plan.rules_to_add}
+    replace_by_id = {rule["rule_id"]: rule for rule in plan.rules_to_replace}
     for candidate in approved:
         section = SECTIONS[str(candidate["rule_type"])]
-        updated_rules.setdefault(section, []).append(by_id[candidate["proposed_rule"]["rule_id"]])
+        rule_id = candidate["proposed_rule"]["rule_id"]
+        if candidate.get("operation") == "replace":
+            _replace_by_rule_id(updated_rules.setdefault(section, []), replace_by_id[rule_id])
+        else:
+            updated_rules.setdefault(section, []).append(by_id[rule_id])
     _validate_rules_payload(updated_rules)
 
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -143,7 +150,11 @@ def apply_candidates(
     _backup(links_path, now)
     rules_path.write_text(json.dumps(updated_rules, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     links_path.parent.mkdir(parents=True, exist_ok=True)
-    links_path.write_text(json.dumps(links + plan.links_to_add, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    updated_links = list(links)
+    for link in plan.links_to_replace:
+        _replace_by_rule_id(updated_links, link)
+    updated_links.extend(plan.links_to_add)
+    links_path.write_text(json.dumps(updated_links, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     for candidate in approved:
         candidate["status"] = "applied"
         candidate["applied_at"] = now
@@ -159,6 +170,15 @@ def _load_links(path: Path) -> list[dict[str, Any]]:
     if not isinstance(data, list):
         raise ValueError("rule link manifest must be a list")
     return [row for row in data if isinstance(row, dict)]
+
+
+def _replace_by_rule_id(rows: list[dict[str, Any]], replacement: dict[str, Any]) -> None:
+    rule_id = replacement["rule_id"]
+    for index, row in enumerate(rows):
+        if row.get("rule_id") == rule_id:
+            rows[index] = replacement
+            return
+    raise ValueError(f"replace target not found: {rule_id}")
 
 
 def _backup(path: Path, timestamp: str) -> None:
@@ -222,6 +242,26 @@ FACILITY_LABELS = {
     "tertiary_hospital": "상급종합병원",
 }
 CATEGORY_LABELS = {"unknown": "급여/비급여 미확정"}
+CATEGORY_LABELS.update(
+    {
+        "급여": "급여",
+        "비급여": "비급여",
+        "3대비급여": "3대비급여",
+        "비급여자기공명영상진단": "비급여 MRI/MRA",
+        "중증비급여": "중증 비급여",
+        "비중증비급여": "비중증 비급여",
+    }
+)
+SPECIAL_STATUS_LABELS = {
+    "applied": "산정특례 적용",
+    "not_applied": "산정특례 미적용",
+    "unknown": "산정특례 확인 필요",
+}
+RISK_FLAG_LABELS = {
+    "manual_review_required": "실무자 검토 필요",
+    "category_scope_unclear": "급여/비급여 범위 확인 필요",
+    "visit_scope_unclear": "입원/통원 범위 확인 필요",
+}
 
 
 def practitioner_label(value: Any, labels: dict[str, str]) -> str:
@@ -231,13 +271,16 @@ def practitioner_label(value: Any, labels: dict[str, str]) -> str:
 
 def candidate_summary(record: dict[str, Any]) -> str:
     rule = record.get("proposed_rule") or {}
+    operation_label = "기존 룰 수정 후보" if record.get("operation") == "replace" else "신규 룰 후보"
     return " ".join(
         part
         for part in (
+            operation_label,
             practitioner_label(rule.get("generation"), GENERATION_LABELS),
             practitioner_label(rule.get("category"), CATEGORY_LABELS),
             practitioner_label(rule.get("visit_type"), VISIT_TYPE_LABELS),
             practitioner_label(rule.get("facility_grade"), FACILITY_LABELS),
+            practitioner_label(rule.get("special_calculation_status"), SPECIAL_STATUS_LABELS),
         )
         if part
     )
@@ -270,6 +313,8 @@ def format_candidate_detail(record: dict[str, Any]) -> str:
         f"- 최소 공제금: {json_text(rule.get('min_deductible') or rule.get('deductible_amount'))}",
         f"- 회당 한도: {json_text(rule.get('per_visit_limit'))}",
         f"- 연간 한도: {json_text(rule.get('annual_limit'))}",
+        f"- 산정특례 상태: {practitioner_label(rule.get('special_calculation_status'), SPECIAL_STATUS_LABELS)}",
+        f"- 위험/확인 표시: {', '.join(practitioner_label(flag, RISK_FLAG_LABELS) for flag in record.get('risk_flags') or []) or '없음'}",
         "",
         "근거:",
         f"- 문서: {rule.get('source_doc', '')}",

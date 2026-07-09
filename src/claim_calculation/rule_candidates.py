@@ -17,6 +17,7 @@ from src.claim_calculation.rule_registry import (
 
 VALID_STATUSES = {"pending", "approved", "rejected", "applied"}
 VALID_RULE_TYPES = {"deductible", "prescription", "special"}
+VALID_OPERATIONS = {"add", "replace"}
 
 
 class CandidateValidationError(ValueError):
@@ -27,6 +28,8 @@ class CandidateValidationError(ValueError):
 class CandidateApplyPlan:
     rules_to_add: list[dict[str, Any]]
     links_to_add: list[dict[str, Any]]
+    rules_to_replace: list[dict[str, Any]]
+    links_to_replace: list[dict[str, Any]]
     applied_candidate_ids: list[str]
 
 
@@ -73,6 +76,11 @@ def validate_candidate_record(record: dict[str, Any]) -> None:
         raise CandidateValidationError("proposed_links is required")
     if proposed_links.get("rule_id") != proposed_rule.get("rule_id"):
         raise CandidateValidationError("proposed_links.rule_id must match proposed_rule.rule_id")
+    operation = record.get("operation") or "add"
+    if operation not in VALID_OPERATIONS:
+        raise CandidateValidationError(f"invalid operation: {operation}")
+    if operation == "replace" and record.get("target_rule_id") != proposed_rule.get("rule_id"):
+        raise CandidateValidationError("target_rule_id must match proposed_rule.rule_id for replace candidates")
     if not (record.get("source_refs") or []) or not (proposed_links.get("source_refs") or []):
         raise CandidateValidationError("source evidence is required")
     if not str(record.get("evidence_text") or "").strip():
@@ -90,6 +98,8 @@ def build_apply_plan(
     seen_links = _rule_ids(active_links)
     rules_to_add: list[dict[str, Any]] = []
     links_to_add: list[dict[str, Any]] = []
+    rules_to_replace: list[dict[str, Any]] = []
+    links_to_replace: list[dict[str, Any]] = []
     applied_candidate_ids: list[str] = []
     for candidate in candidates:
         if candidate.get("status") != "approved":
@@ -98,19 +108,27 @@ def build_apply_plan(
         rule = dict(candidate["proposed_rule"])
         link = dict(candidate["proposed_links"])
         rule_id = str(rule["rule_id"])
+        operation = candidate.get("operation") or "add"
+        rule["approval_status"] = "active"
+        link["link_status"] = "active"
+        _validate_rule_payload(str(candidate["rule_type"]), rule)
+        if operation == "replace":
+            if rule_id not in seen_rules:
+                raise CandidateValidationError(f"replace target rule_id not found: {rule_id}")
+            rules_to_replace.append(rule)
+            links_to_replace.append(link)
+            applied_candidate_ids.append(str(candidate["candidate_id"]))
+            continue
         if rule_id in seen_rules:
             raise CandidateValidationError(f"duplicate rule_id: {rule_id}")
         if rule_id in seen_links:
             raise CandidateValidationError(f"duplicate rule link: {rule_id}")
-        rule["approval_status"] = "active"
-        link["link_status"] = "active"
-        _validate_rule_payload(str(candidate["rule_type"]), rule)
         rules_to_add.append(rule)
         links_to_add.append(link)
         applied_candidate_ids.append(str(candidate["candidate_id"]))
         seen_rules.add(rule_id)
         seen_links.add(rule_id)
-    return CandidateApplyPlan(rules_to_add, links_to_add, applied_candidate_ids)
+    return CandidateApplyPlan(rules_to_add, links_to_add, rules_to_replace, links_to_replace, applied_candidate_ids)
 
 
 def _rule_ids(records: Iterable[dict[str, Any]]) -> set[str]:

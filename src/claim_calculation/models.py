@@ -6,6 +6,20 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
+SPECIAL_CALCULATION_UNKNOWN = "unknown"
+SPECIAL_CALCULATION_APPLIED = "applied"
+SPECIAL_CALCULATION_NOT_APPLIED = "not_applied"
+
+
+def normalize_special_calculation_status(value: str | None) -> str:
+    normalized = (value or SPECIAL_CALCULATION_UNKNOWN).strip().lower()
+    if normalized in {"applied", "적용", "산정특례 적용"}:
+        return SPECIAL_CALCULATION_APPLIED
+    if normalized in {"not_applied", "미적용", "산정특례 미적용"}:
+        return SPECIAL_CALCULATION_NOT_APPLIED
+    return SPECIAL_CALCULATION_UNKNOWN
+
+
 @dataclass
 class ClaimItemInput:
     """사용자가 청구한 개별 항목 입력."""
@@ -34,6 +48,7 @@ class ClaimCaseContext:
     accident_type: str = ""  # 사고: "accident", 질병: "disease", 상해: "injury"
     situation_note: str = ""  # 상황 메모
     policy_generation: str = "5th"  # "4th" 또는 "5th"
+    special_calculation_status: str = SPECIAL_CALCULATION_UNKNOWN
     complication_asserted: bool = False
     same_disease_claimed: bool = False
     same_treatment_purpose_claimed: bool = False
@@ -99,6 +114,7 @@ class CalculationResult:
     notes: str = ""
     candidates: list[dict[str, str]] = field(default_factory=list)
     policy_generation: str = "5th"
+    special_calculation_status: str = SPECIAL_CALCULATION_UNKNOWN
     line_results: list[dict[str, str | bool | list[str]]] = field(default_factory=list)
     applied_limits: dict[str, str] = field(default_factory=dict)
     calculation_status: str = "auto_calculated"

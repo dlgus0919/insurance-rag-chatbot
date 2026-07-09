@@ -6,7 +6,9 @@ from src.api.db import Base
 from src.api.models import AuditLog, ChatMessage, ChatSession
 from src.api.rag_service import prepare_retrieved_context
 from src.api.routes import chat, sessions
+from src.api.routes.claim import _claim_snapshot_context
 from src.api.routes.chat import _document_filter_options, _select_model as select_chat_model
+from src.api.schemas.claim import ClaimCaseContextRequest
 from src.api.schemas.chat import ChatRequest
 from src.api.schemas.sessions import SessionCreateRequest
 from src.auth.users import User
@@ -185,6 +187,89 @@ def _claim_snapshot_source_for_chat(
             },
         },
     }
+
+
+def test_claim_case_context_request_accepts_special_calculation_status() -> None:
+    payload = ClaimCaseContextRequest(
+        policy_generation="5th",
+        visit_type="outpatient",
+        special_calculation_status="applied",
+    )
+
+    assert payload.special_calculation_status == "applied"
+
+
+def test_claim_snapshot_context_keeps_special_calculation_status() -> None:
+    context = ClaimCaseContextRequest(
+        policy_generation="5th",
+        visit_type="hospitalization",
+        special_calculation_status="not_applied",
+    )
+
+    snapshot_context = _claim_snapshot_context(context)
+
+    assert snapshot_context["special_calculation_status"] == "not_applied"
+
+
+def test_recalculation_needs_special_status_for_fifth_generation_three_major() -> None:
+    from src.claim_calculation.thread_recalculation import (
+        detect_recalculation_intent,
+        find_target_line,
+        needs_special_calculation_clarification,
+    )
+
+    snapshot = _claim_snapshot_source_for_chat()
+    claim_snapshot = snapshot["claim_snapshot"]
+    claim_snapshot["input"]["context"] = {
+        "policy_generation": "5th",
+        "visit_type": "outpatient",
+        "coverage_topic": "실손",
+        "special_calculation_status": "unknown",
+    }
+    claim_snapshot["result"]["policy_generation"] = "5th"
+    claim_snapshot["result"]["special_calculation_status"] = "unknown"
+    query = "도수치료를 3대비급여로 보상한다면 다시 계산해줘"
+    intent = detect_recalculation_intent(query)
+    target_line = find_target_line(claim_snapshot, "도수치료")
+
+    assert intent is not None
+    assert target_line is not None
+    assert needs_special_calculation_clarification(claim_snapshot, intent, target_line)
+
+
+def test_recalculation_needs_special_status_for_generic_fifth_generation_three_major() -> None:
+    from src.claim_calculation.thread_recalculation import (
+        detect_recalculation_intent,
+        find_target_line,
+        needs_special_calculation_clarification,
+    )
+
+    snapshot = _claim_snapshot_source_for_chat(
+        line_results=[
+            {
+                "line_id": "line-1",
+                "input_name": "비타민D 검사",
+                "category": "미분류 비급여",
+                "claimed_amount": "20000",
+            }
+        ]
+    )
+    claim_snapshot = snapshot["claim_snapshot"]
+    claim_snapshot["input"]["context"] = {
+        "policy_generation": "5th",
+        "visit_type": "outpatient",
+        "coverage_topic": "실손",
+        "special_calculation_status": "unknown",
+    }
+    claim_snapshot["result"]["policy_generation"] = "5th"
+    claim_snapshot["result"]["special_calculation_status"] = "unknown"
+    query = "비타민D 검사를 3대비급여로 보상한다면 다시 계산해줘"
+    intent = detect_recalculation_intent(query)
+    target_line = find_target_line(claim_snapshot, "비타민D 검사")
+
+    assert intent is not None
+    assert target_line is not None
+    assert needs_special_calculation_clarification(claim_snapshot, intent, target_line)
 
 
 def test_document_filter_options_include_configured_documents() -> None:
@@ -1071,6 +1156,131 @@ async def test_chat_stream_asks_clarification_when_target_line_is_ambiguous(db_s
     assert "비타민D 검사" in stream
     assert messages[-2].role == "user"
     assert messages[-1].role == "assistant"
+
+
+@pytest.mark.anyio
+async def test_chat_stream_asks_special_status_for_fifth_generation_three_major(db_session, monkeypatch) -> None:
+    def fail_run_claim_calculation(**_kwargs):
+        raise AssertionError("산정특례 clarification에서는 재계산을 실행하지 않아야 합니다.")
+
+    monkeypatch.setattr(chat, "run_claim_calculation", fail_run_claim_calculation)
+    created = await sessions.create_session(SessionCreateRequest(title="산정특례 확인"), _user(), db_session)
+    snapshot = _claim_snapshot_source_for_chat()
+    snapshot["claim_snapshot"]["input"]["context"] = {
+        "policy_generation": "5th",
+        "visit_type": "outpatient",
+        "coverage_topic": "실손",
+        "special_calculation_status": "unknown",
+    }
+    snapshot["claim_snapshot"]["result"]["policy_generation"] = "5th"
+    snapshot["claim_snapshot"]["result"]["special_calculation_status"] = "unknown"
+    db_session.add(
+        ChatMessage(
+            session_id=created.id,
+            role="assistant",
+            content="보험금 계산 결과",
+            sources=[snapshot],
+        )
+    )
+    await db_session.commit()
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="도수치료를 3대비급여로 보상한다면 다시 계산해 주세요",
+            session_id=created.id,
+            model="gemma3:4b",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+
+    assert "event: error" not in stream
+    assert "5세대 3대비급여 재계산에는 산정특례 적용 여부가 필요합니다" in stream
+    assert "산정특례 적용으로" in stream
+    assert "산정특례 미적용으로" in stream
+
+
+@pytest.mark.anyio
+async def test_chat_stream_carries_explicit_special_status_into_recalculation_context(db_session, monkeypatch) -> None:
+    captured = {}
+
+    class FakeClaimPipeline:
+        pass
+
+    def fake_pipeline(model, top_k, index_mode="v2_only"):
+        captured["pipeline"] = {"model": model, "top_k": top_k, "index_mode": index_mode}
+        return FakeClaimPipeline()
+
+    def fake_run_claim_calculation(**kwargs):
+        captured["context"] = kwargs["context"]
+        from src.claim_calculation.models import CalculationResult
+
+        return CalculationResult(
+            claimed_amount="150000",
+            payable_amount="105000",
+            deductible="45000",
+            formula_intent="thread_recalculation",
+            executed_code="",
+            applied_basis=[{"source": "테스트 근거", "content": "재계산 근거"}],
+            requires_review=False,
+            review_reasons=[],
+            notes="재계산 완료",
+            candidates=[],
+            policy_generation="5th",
+            special_calculation_status="applied",
+            line_results=[
+                {
+                    "line_id": "line-1",
+                    "input_name": "도수치료",
+                    "category": "3대비급여",
+                    "claimed_amount": "150000",
+                    "deductible": "45000",
+                    "payable_amount": "105000",
+                    "calculation_status": "calculated",
+                    "human_task_amount": "0",
+                },
+            ],
+            calculation_status="auto_calculated",
+        )
+
+    monkeypatch.setattr(chat, "get_rag_pipeline", fake_pipeline)
+    monkeypatch.setattr(chat, "run_claim_calculation", fake_run_claim_calculation)
+    created = await sessions.create_session(SessionCreateRequest(title="산정특례 재계산"), _user(), db_session)
+    snapshot = _claim_snapshot_source_for_chat()
+    snapshot["claim_snapshot"]["input"]["context"] = {
+        "policy_generation": "5th",
+        "visit_type": "outpatient",
+        "coverage_topic": "실손",
+        "special_calculation_status": "unknown",
+    }
+    snapshot["claim_snapshot"]["result"]["policy_generation"] = "5th"
+    snapshot["claim_snapshot"]["result"]["special_calculation_status"] = "unknown"
+    db_session.add(
+        ChatMessage(
+            session_id=created.id,
+            role="assistant",
+            content="보험금 계산 결과",
+            sources=[snapshot],
+        )
+    )
+    await db_session.commit()
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="도수치료를 산정특례 적용으로 3대비급여로 보상한다면 다시 계산해 주세요",
+            session_id=created.id,
+            model="gemma3:4b",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+
+    assert "event: error" not in stream
+    assert captured["context"].special_calculation_status == "applied"
 
 
 @pytest.mark.anyio

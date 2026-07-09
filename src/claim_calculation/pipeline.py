@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from src import config
@@ -15,6 +15,9 @@ from src.claim_calculation.models import (
     BasisSelection,
     CalculationPlan,
     CalculationResult,
+    SPECIAL_CALCULATION_APPLIED,
+    SPECIAL_CALCULATION_NOT_APPLIED,
+    normalize_special_calculation_status,
 )
 from src.claim_calculation.standard_matcher import match_standard_code
 from src.claim_calculation.basis_selector import select_basis_documents
@@ -51,6 +54,55 @@ def _classify_claim_category(item: ClaimItemInput, match: StandardMatch | None) 
     if "급여" in text:
         return "급여"
     return "미분류"
+
+
+THREE_MAJOR_BLOCK_KEYWORDS = ("도수", "체외충격파", "증식", "주사")
+MRI_MRA_KEYWORDS = ("mri", "mra", "자기공명영상")
+
+
+def _special_status(context: ClaimCaseContext) -> str:
+    return normalize_special_calculation_status(getattr(context, "special_calculation_status", "unknown"))
+
+
+def _is_mri_mra_item(item: ClaimItemInput, match: StandardMatch | None) -> bool:
+    text = " ".join([item.input_name or "", item.user_category_hint or "", _standard_match_text(match)]).lower()
+    return any(keyword in text for keyword in MRI_MRA_KEYWORDS)
+
+
+def _is_three_major_nonpay_item(category: str, item: ClaimItemInput, match: StandardMatch | None) -> bool:
+    if category == "3대비급여":
+        return True
+    if category in {"중증비급여", "비중증비급여"}:
+        return False
+    text = " ".join([item.input_name or "", item.user_category_hint or "", _standard_match_text(match)]).lower()
+    return any(keyword in text for keyword in THREE_MAJOR_BLOCK_KEYWORDS) or _is_mri_mra_item(item, match)
+
+
+def _fifth_generation_special_category(
+    category: str,
+    item: ClaimItemInput,
+    match: StandardMatch | None,
+    context: ClaimCaseContext,
+) -> tuple[str, str]:
+    if _normalize_policy_generation(context.policy_generation) != "5th":
+        return category, ""
+    if not _is_three_major_nonpay_item(category, item, match):
+        return category, ""
+
+    status = _special_status(context)
+    if status == SPECIAL_CALCULATION_APPLIED:
+        return "중증비급여", ""
+    if status == SPECIAL_CALCULATION_NOT_APPLIED and _is_mri_mra_item(item, match):
+        from src.claim_calculation.deductible_rules import has_exact_rule
+
+        if not has_exact_rule("5th", "비급여자기공명영상진단", context.visit_type, context.facility_grade):
+            return "비급여자기공명영상진단", "5세대 산정특례 미적용 MRI/MRA 전용 계산 rule이 아직 승인되지 않아 자동 지급 산정하지 않습니다."
+        return "비급여자기공명영상진단", ""
+    if status == SPECIAL_CALCULATION_NOT_APPLIED:
+        return category, "산정특례 미적용 케이스에서는 도수치료, 체외충격파, 증식치료, 주사료 계열 3대비급여를 자동 지급 산정하지 않습니다."
+    if _is_mri_mra_item(item, match):
+        return "비급여자기공명영상진단", "5세대 MRI/MRA 계산에는 산정특례 적용 여부 확인이 필요합니다."
+    return category, "5세대 3대비급여 계산에는 산정특례 적용 여부 확인이 필요합니다."
 
 
 def _is_exclusion_match(match: StandardMatch | None) -> bool:
@@ -321,6 +373,108 @@ def _has_coordination_signal(context: ClaimCaseContext) -> bool:
     return any(keyword in text for keyword in config.CLAIM_COORDINATION_SIGNAL_KEYWORDS)
 
 
+def _deductible_group_for_category(category: str) -> str:
+    if category == "급여":
+        return "benefit_group"
+    if category == "비급여자기공명영상진단":
+        return "mri_mra_group"
+    if category == "3대비급여":
+        return "three_major_nonpay_group"
+    if category in {"비급여", "비중증비급여", "중증비급여"}:
+        return "general_nonpay_group"
+    return ""
+
+
+def _line_is_group_eligible(line: dict[str, str | bool | list[str]]) -> bool:
+    if not line.get("deductible_group"):
+        return False
+    if line.get("excluded_from_calculation") is True:
+        return False
+    if line.get("calculation_status") in {"human_task", "partial_human_task"}:
+        return False
+    return Decimal(str(line.get("claimed_amount") or "0")) > 0
+
+
+def _deductible_group_key(
+    line: dict[str, str | bool | list[str]],
+    context: ClaimCaseContext,
+) -> tuple[str, str, str, str, str, str]:
+    return (
+        str(line.get("policy_generation") or ""),
+        context.visit_type or "",
+        context.facility_grade or "",
+        _special_status(context),
+        str(line.get("category") or ""),
+        str(line.get("deductible_group") or ""),
+    )
+
+
+def _allocate_won(total: Decimal, amounts: list[Decimal]) -> list[Decimal]:
+    if not amounts:
+        return []
+    amount_sum = sum(amounts, Decimal("0"))
+    if amount_sum <= 0:
+        return [Decimal("0") for _ in amounts]
+    allocated: list[Decimal] = []
+    running = Decimal("0")
+    for amount in amounts[:-1]:
+        part = (total * amount / amount_sum).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        allocated.append(part)
+        running += part
+    allocated.append(total - running)
+    return allocated
+
+
+def _apply_grouped_deductibles(
+    line_results: list[dict[str, str | bool | list[str]]],
+    context: ClaimCaseContext,
+) -> tuple[Decimal, Decimal, list[str]]:
+    # 보험 지식값이 아니라 같은 공제 단위는 합산 후 1회 공제한다는 계산 엔진 규칙이다.
+    groups: dict[tuple[str, str, str, str, str, str], list[dict[str, str | bool | list[str]]]] = {}
+    for line in line_results:
+        if _line_is_group_eligible(line):
+            groups.setdefault(_deductible_group_key(line, context), []).append(line)
+
+    review_reasons: list[str] = []
+    generation = _normalize_policy_generation(context.policy_generation)
+    for group_lines in groups.values():
+        if len(group_lines) < 2:
+            continue
+        category = str(group_lines[0].get("category") or "미분류")
+        group_amounts = [Decimal(str(line.get("claimed_amount") or "0")) for line in group_lines]
+        group_amount = sum(group_amounts, Decimal("0"))
+        group_payable, group_deductible, group_rule, group_review = _apply_standard_deductible(
+            group_amount,
+            category,
+            generation,
+            context,
+        )
+        payable_parts = _allocate_won(group_payable, group_amounts)
+        deductible_parts = _allocate_won(group_deductible, group_amounts)
+        for line, payable, deductible in zip(group_lines, payable_parts, deductible_parts):
+            line["payable_amount"] = _format_decimal_won(payable)
+            line["deductible"] = _format_decimal_won(deductible)
+            line["rule_summary"] = f"{line.get('rule_summary')}; 동일 공제 그룹 합산 적용: {group_rule}"
+            line_reasons = list(line.get("review_reasons") or [])
+            line_reasons.extend(reason for reason in group_review if reason not in line_reasons)
+            line["review_reasons"] = line_reasons
+            if group_review:
+                line["requires_review"] = True
+        review_reasons.extend(reason for reason in group_review if reason not in review_reasons)
+
+    total_payable = sum(
+        Decimal(str(line.get("payable_amount") or "0"))
+        for line in line_results
+        if line.get("excluded_from_calculation") is not True
+    )
+    total_deductible = sum(
+        Decimal(str(line.get("deductible") or "0"))
+        for line in line_results
+        if line.get("excluded_from_calculation") is not True
+    )
+    return total_payable, total_deductible, review_reasons
+
+
 def _calculate_line_items(
     items: list[ClaimItemInput],
     context: ClaimCaseContext,
@@ -382,7 +536,18 @@ def _calculate_line_items(
             if nonpay_amount > 0:
                 nonpay_category = _nonpay_category_for_split_line(item, match)
                 category_parts.append(nonpay_category)
-                if _is_nonpay_scope_restriction(match):
+                nonpay_category, special_block_reason = _fifth_generation_special_category(
+                    nonpay_category,
+                    item,
+                    match,
+                    context,
+                )
+                category_parts[-1] = nonpay_category
+                if special_block_reason:
+                    rule_parts.append("비급여 금액: 산정특례 상태 확인 필요로 자동 산정 제외")
+                    line_review = True
+                    line_reasons.append(special_block_reason)
+                elif _is_nonpay_scope_restriction(match):
                     nonpay_deductible = nonpay_amount
                     deductible += nonpay_deductible
                     opinion = match.pay_opn_cd_nm if match else "산정불가"
@@ -457,6 +622,39 @@ def _calculate_line_items(
             rule = rx_rule.description
             category = "처방약"
         else:
+            category, special_block_reason = _fifth_generation_special_category(category, item, match, context)
+            if special_block_reason:
+                deductible = Decimal("0")
+                payable = Decimal("0")
+                rule = "산정특례 상태 확인 필요로 자동 산정 제외"
+                line_review = True
+                line_reasons.append(special_block_reason)
+                total_payable += payable
+                total_deductible += deductible
+                review_reasons.extend(line_reasons)
+                line_results.append(
+                    {
+                        "line_id": item.line_id,
+                        "input_name": item.input_name,
+                        "input_code": item.input_code,
+                        "category": category,
+                        "claimed_amount": _format_decimal_won(amount),
+                        "insured_copay_amount": _format_decimal_won(insured_copay_amount),
+                        "nonpay_amount": _format_decimal_won(nonpay_amount),
+                        "deductible": _format_decimal_won(deductible),
+                        "payable_amount": _format_decimal_won(payable),
+                        "policy_generation": generation,
+                        "rule_summary": rule,
+                        "extra_info": item.extra_info,
+                        "requires_review": line_review,
+                        "review_reasons": line_reasons,
+                        "calculation_status": "human_task",
+                        "excluded_from_calculation": True,
+                        "human_task_amount": _format_decimal_won(amount),
+                        "deductible_group": "",
+                    }
+                )
+                continue
             if _is_unresolved_nonpay(category, match):
                 deductible = Decimal("0")
                 payable = Decimal("0")
@@ -486,6 +684,7 @@ def _calculate_line_items(
                         "calculation_status": "human_task",
                         "excluded_from_calculation": True,
                         "human_task_amount": _format_decimal_won(amount),
+                        "deductible_group": "",
                     }
                 )
                 continue
@@ -547,10 +746,13 @@ def _calculate_line_items(
                 "calculation_status": calculation_status,
                 "excluded_from_calculation": calculation_status == "human_task",
                 "human_task_amount": _format_decimal_won(human_task_amount),
+                "deductible_group": "" if calculation_status == "human_task" else _deductible_group_for_category(category),
             }
         )
 
-    return total_payable, total_deductible, line_results, review_reasons
+    grouped_payable, grouped_deductible, grouped_reviews = _apply_grouped_deductibles(line_results, context)
+    review_reasons.extend(reason for reason in grouped_reviews if reason not in review_reasons)
+    return grouped_payable, grouped_deductible, line_results, review_reasons
 
 
 def _has_exclusion_match(standard_matches: list[StandardMatch]) -> bool:
@@ -1052,6 +1254,7 @@ def run_claim_calculation(
         notes=notes_by_status[calculation_status],
         candidates=disambiguation_candidates,
         policy_generation=_normalize_policy_generation(context.policy_generation),
+        special_calculation_status=_special_status(context),
         line_results=deterministic_line_results,
         applied_limits=_applied_limits,
         calculation_status=calculation_status,

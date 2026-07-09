@@ -41,12 +41,15 @@ from src.rag.query_router import resolve_query_route
 from src.claim_calculation.models import ClaimCaseContext, ClaimItemInput
 from src.claim_calculation.pipeline import run_claim_calculation
 from src.claim_calculation.thread_recalculation import (
+    apply_special_status_override,
     build_recalculation_payload,
     detect_recalculation_intent,
     find_target_lines,
+    needs_special_calculation_clarification,
     line_payable_amount,
     money_text,
     select_claim_snapshot,
+    special_status_from_query,
     snapshot_payable_amount,
 )
 
@@ -154,7 +157,17 @@ async def _handle_claim_follow_up(
             requires_review=True,
         )
 
+    special_status_override = special_status_from_query(query)
+    if needs_special_calculation_clarification(snapshot, intent, target_line) and not special_status_override:
+        return _ClaimFollowUpResult(
+            "5세대 3대비급여 재계산에는 산정특례 적용 여부가 필요합니다. "
+            "'산정특례 적용으로' 또는 '산정특례 미적용으로' 중 하나를 함께 알려주세요.",
+            action=intent.action,
+            status="clarification",
+        )
+
     payload_data = build_recalculation_payload(snapshot, intent, target_line)
+    payload_data = apply_special_status_override(payload_data, special_status_override)
     payload = ClaimCalculationRequest(
         session_id=chat_session_id,
         save_to_history=False,
@@ -164,6 +177,7 @@ async def _handle_claim_follow_up(
         provider=_provider_from_model_id(selected_model),
         index_mode=index_mode if index_mode in {"v2_only", "v1_v2_combined"} else "v2_only",
     )
+    context_data = _recalculation_context_data(payload, payload_data)
     warnings: list[str] = []
     try:
         pipeline = _get_pipeline(selected_model, config.CLAIM_RAG_TOP_K, payload.index_mode)
@@ -187,7 +201,7 @@ async def _handle_claim_follow_up(
             )
             for idx, item in enumerate(payload.items)
         ],
-        context=ClaimCaseContext(**payload.context.model_dump()),
+        context=ClaimCaseContext(**context_data),
         basis_mode=payload.basis_mode,
         selected_basis_docs=payload.selected_basis_docs,
         use_fake_planner=payload.use_fake_planner,
@@ -217,6 +231,15 @@ def _claim_snapshots_from_history(history: list[ChatMessage]) -> list[dict]:
                 if isinstance(snapshot, dict):
                     snapshots.append(snapshot)
     return snapshots
+
+
+def _recalculation_context_data(payload: ClaimCalculationRequest, payload_data: dict) -> dict:
+    context_data = payload.context.model_dump()
+    original_context = payload_data.get("context") or {}
+    special_status = original_context.get("special_calculation_status")
+    if special_status:
+        context_data["special_calculation_status"] = special_status
+    return context_data
 
 
 def _target_not_found_answer(snapshot: dict, target_text: str) -> str:

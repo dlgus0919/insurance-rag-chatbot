@@ -242,7 +242,7 @@
 
   .mode-bar{
     background:var(--soft-bg);border-bottom:1px solid var(--border);
-    padding:7px 20px;display:flex;align-items:center;gap:5px;flex-shrink:0;
+    padding:7px 20px;display:flex;align-items:center;gap:5px;flex-shrink:0;flex-wrap:wrap;
   }
   .mode-label{font-size:11px;font-weight:700;color:var(--gray);margin-right:4px;}
   .mode-tab{
@@ -252,13 +252,18 @@
   }
   .mode-tab:hover{border-color:var(--border);color:var(--navy);}
   .mode-tab.active{background:var(--primary);color:#fff;border-color:var(--primary);font-weight:700;}
-  .mode-claim-generation{
+  .mode-claim-generation,
+  .mode-claim-special{
     display:flex;margin-left:auto;align-items:center;gap:14px;
     font-size:13px;font-weight:700;color:var(--navy);
   }
-  .mode-claim-generation .p-label{margin-bottom:0;}
-  .mode-claim-generation .claim-radio-group{min-height:0;}
-  .mode-claim-generation input{accent-color:var(--primary);}
+  .mode-claim-special{margin-left:10px;}
+  .mode-claim-generation .p-label,
+  .mode-claim-special .p-label{margin-bottom:0;}
+  .mode-claim-generation .claim-radio-group,
+  .mode-claim-special .claim-radio-group{min-height:0;}
+  .mode-claim-generation input,
+  .mode-claim-special input{accent-color:var(--primary);}
 
   .radio-pill{
     display:flex;

@@ -184,6 +184,23 @@ def lookup_rule(
     raise KeyError((gen, category, vt, facility_grade))
 
 
+def has_exact_rule(
+    generation: str,
+    category: str,
+    visit_type: str,
+    facility_grade: str = "",
+) -> bool:
+    """Return whether the active manifest has this exact category rule."""
+
+    gen = _normalize_generation(generation)
+    vt = _normalize_visit_type(visit_type)
+    try:
+        _load_registry().lookup(gen, category, vt, facility_grade)
+    except KeyError:
+        return False
+    return True
+
+
 def lookup_prescription_rule(generation: str) -> PrescriptionRule:
     """Return the approved prescription deductible rule for a generation."""
 

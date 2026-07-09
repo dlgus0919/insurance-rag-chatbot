@@ -24,6 +24,12 @@ DEFAULT_OUTPUT_PATH = PROJECT_ROOT / "data/rules/review/candidates.jsonl"
 RULE_SIGNAL_RE = re.compile(r"(공제|본인부담|한도|연간|통원|입원|처방|급여|비급여|세대|보상)")
 RATIO_RE = re.compile(r"(?P<percent>\d{1,3})\s*%")
 GENERATION_RE = re.compile(r"(?P<generation>[1-5])\s*세대")
+KOREAN_AMOUNT_VALUES = {
+    "3만원": "30000",
+    "5만원": "50000",
+    "20만원": "200000",
+    "5천만원": "50000000",
+}
 
 
 def extract_candidates_from_text(
@@ -102,6 +108,162 @@ def extract_candidates_from_text(
     return [candidate]
 
 
+def _candidate_base(
+    candidate_id: str,
+    rule: dict[str, Any],
+    chunk: dict[str, Any],
+    evidence_text: str,
+    operation: str = "add",
+) -> dict[str, Any]:
+    source_key = f"policy_chunk:{chunk['chunk_id']}"
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    candidate = {
+        "candidate_id": candidate_id,
+        "status": "pending",
+        "rule_type": "deductible",
+        "operation": operation,
+        "target_rule_id": rule["rule_id"] if operation == "replace" else None,
+        "proposed_rule": rule,
+        "proposed_links": {
+            "rule_id": rule["rule_id"],
+            "source_refs": [source_key],
+            "ontology_refs": ["cov.indemnity_medical"],
+            "graph_refs": [f"source_chunk:{chunk['chunk_id']}"],
+            "link_status": "candidate",
+        },
+        "source_refs": [
+            {
+                "kind": "policy_chunk",
+                "doc_short": chunk["doc_short"],
+                "chunk_id": chunk["chunk_id"],
+                "page": chunk["page"],
+                "article": chunk["article"],
+            }
+        ],
+        "evidence_text": evidence_text.strip(),
+        "extraction_reason": "첨부 명세 범위의 5세대 산정특례/3대비급여/MRI-MRA 보완 후보",
+        "risk_flags": ["manual_review_required"],
+        "created_at": now,
+        "reviewed_at": None,
+        "reviewer": None,
+        "review_note": "",
+    }
+    validate_candidate_record(candidate)
+    return candidate
+
+
+def _deductible_rule(
+    *,
+    rule_id: str,
+    category: str,
+    visit_type: str,
+    copay_ratio: str,
+    min_deductible: str,
+    per_visit_limit: str | None,
+    annual_limit: str | None,
+    description: str,
+    chunk: dict[str, Any],
+    special_calculation_status: str,
+) -> dict[str, Any]:
+    return {
+        "rule_id": rule_id,
+        "generation": "5th",
+        "category": category,
+        "visit_type": visit_type,
+        "facility_grade": "all",
+        "copay_ratio": copay_ratio,
+        "min_deductible": min_deductible,
+        "min_deductible_by_facility": {
+            "clinic": min_deductible,
+            "hospital": min_deductible,
+            "general_hospital": min_deductible,
+            "tertiary_hospital": min_deductible,
+        },
+        "per_visit_limit": per_visit_limit,
+        "annual_limit": annual_limit,
+        "annual_visit_limit": None,
+        "description": description,
+        "special_calculation_status": special_calculation_status,
+        "source_doc": chunk["doc_short"],
+        "source_page": str(chunk["page"] or "unknown"),
+        "source_clause": chunk["article"] or f"source_chunk_id:{chunk['chunk_id']}",
+        "source_chunk_id": chunk["chunk_id"],
+        "additional_source_refs": [],
+        "source_status": "source_grounded",
+        "approval_status": "candidate",
+    }
+
+
+def _compact(text: str) -> str:
+    return "".join(text.split())
+
+
+def _has_special_case_three_major_signal(text: str) -> bool:
+    compact = _compact(text)
+    return "산정특례" in compact and "3대비급여" in compact and "30%" in compact
+
+
+def _has_mri_mra_signal(text: str) -> bool:
+    compact = _compact(text).lower()
+    return ("mri" in compact or "mra" in compact or "자기공명영상" in compact) and "50%" in compact
+
+
+def _amount_from_text(text: str, expected_value: str) -> str | None:
+    compact = _compact(text)
+    for pattern, value in KOREAN_AMOUNT_VALUES.items():
+        if pattern in compact and value == expected_value:
+            return value
+    return None
+
+
+def _visit_rule_specs(text: str, outpatient_minimum: str) -> list[tuple[str, str, str | None, str | None]]:
+    specs: list[tuple[str, str, str | None, str | None]] = [
+        ("hospitalization", "0", None, _amount_from_text(text, "50000000")),
+    ]
+    outpatient_min = _amount_from_text(text, outpatient_minimum)
+    outpatient_limit = _amount_from_text(text, "200000")
+    if outpatient_min and outpatient_limit:
+        specs.append(("outpatient", outpatient_min, outpatient_limit, None))
+    return specs
+
+
+def extract_special_case_5th_candidates(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for chunk in chunks:
+        text = str(chunk.get("text") or "")
+        if _has_special_case_three_major_signal(text):
+            for visit_type, min_deductible, per_visit_limit, annual_limit in _visit_rule_specs(text, "30000"):
+                rule = _deductible_rule(
+                    rule_id=f"deductible.5th.three_major_non_benefit.{visit_type}",
+                    category="3대비급여",
+                    visit_type=visit_type,
+                    copay_ratio="0.3",
+                    min_deductible=min_deductible,
+                    per_visit_limit=per_visit_limit,
+                    annual_limit=annual_limit,
+                    description=f"5세대 산정특례 적용 3대비급여 {visit_type} 본인부담금 30%",
+                    chunk=chunk,
+                    special_calculation_status="applied",
+                )
+                candidates.append(_candidate_base(f"rulecand.replace.{rule['rule_id']}", rule, chunk, text, operation="replace"))
+        if _has_mri_mra_signal(text):
+            for visit_type, min_deductible, per_visit_limit, annual_limit in _visit_rule_specs(text, "50000"):
+                rule = _deductible_rule(
+                    rule_id=f"deductible.5th.mri_mra.{visit_type}",
+                    category="비급여자기공명영상진단",
+                    visit_type=visit_type,
+                    copay_ratio="0.5",
+                    min_deductible=min_deductible,
+                    per_visit_limit=per_visit_limit,
+                    annual_limit=annual_limit,
+                    description=f"5세대 산정특례 미적용 비급여 자기공명영상진단 {visit_type} 본인부담금 50%",
+                    chunk=chunk,
+                    special_calculation_status="not_applied",
+                )
+                candidates.append(_candidate_base(f"rulecand.add.{rule['rule_id']}", rule, chunk, text, operation="add"))
+    return candidates
+
+
 def iter_policy_chunks(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -130,14 +292,21 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--replace-existing", action="store_true")
+    parser.add_argument("--scope", choices=["generic", "special-case-5th"], default="generic")
     args = parser.parse_args()
 
-    candidates: list[dict[str, Any]] = []
-    for chunk in iter_policy_chunks(args.index_jsonl):
-        candidates.extend(extract_candidates_from_text(**chunk))
-        if args.limit and len(candidates) >= args.limit:
+    chunks = iter_policy_chunks(args.index_jsonl)
+    if args.scope == "special-case-5th":
+        candidates = extract_special_case_5th_candidates(chunks)
+        if args.limit:
             candidates = candidates[: args.limit]
-            break
+    else:
+        candidates = []
+        for chunk in chunks:
+            candidates.extend(extract_candidates_from_text(**chunk))
+            if args.limit and len(candidates) >= args.limit:
+                candidates = candidates[: args.limit]
+                break
 
     summary = {"candidate_count": len(candidates), "output": str(args.output), "dry_run": args.dry_run}
     if not args.dry_run:

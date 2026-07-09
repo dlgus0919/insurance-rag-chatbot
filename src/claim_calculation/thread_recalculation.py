@@ -4,6 +4,11 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from src.claim_calculation.models import (
+    SPECIAL_CALCULATION_APPLIED,
+    SPECIAL_CALCULATION_NOT_APPLIED,
+)
+
 
 _GENERIC_CATEGORY_TARGETS = {"비급여", "3대비급여", "급여", "급여 본인부담"}
 
@@ -37,6 +42,40 @@ def detect_recalculation_intent(query: str) -> RecalculationIntent | None:
         )
 
     return None
+
+
+def special_status_from_query(query: str) -> str | None:
+    text = " ".join(query.split())
+    if "산정특례" not in text:
+        return None
+    if "미적용" in text or "적용하지" in text or "아니" in text:
+        return SPECIAL_CALCULATION_NOT_APPLIED
+    if "적용" in text:
+        return SPECIAL_CALCULATION_APPLIED
+    return None
+
+
+def apply_special_status_override(payload_data: dict, special_status: str | None) -> dict:
+    if not special_status:
+        return payload_data
+    payload = dict(payload_data)
+    context = dict(payload.get("context") or {})
+    context["special_calculation_status"] = special_status
+    payload["context"] = context
+    return payload
+
+
+def needs_special_calculation_clarification(snapshot: dict, intent: RecalculationIntent, target_line: dict) -> bool:
+    if intent.action != "as_three_major_nonpay":
+        return False
+    result = snapshot.get("result") or {}
+    if result.get("policy_generation") != "5th":
+        return False
+    snapshot_status = str(result.get("special_calculation_status") or "unknown")
+    if snapshot_status in {SPECIAL_CALCULATION_APPLIED, SPECIAL_CALCULATION_NOT_APPLIED}:
+        return False
+    text = " ".join([str(target_line.get("input_name") or ""), str(target_line.get("category") or "")]).lower()
+    return any(keyword in text for keyword in ("도수", "체외충격파", "증식", "주사", "mri", "mra", "자기공명영상")) or intent.action == "as_three_major_nonpay"
 
 
 def find_target_line(snapshot: dict, target_text: str) -> dict | None:

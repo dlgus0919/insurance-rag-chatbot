@@ -403,6 +403,9 @@ def _claim_snapshot_lines(snapshot: dict, index: int) -> list[str]:
         f"- 예상 지급금액: {_sanitize_claim_context_field(result.get('payable_amount', '0'), 60)}원",
         f"- 예상 공제금액: {_sanitize_claim_context_field(result.get('deductible', '0'), 60)}원",
     ]
+    special_status = _claim_special_status_label(result.get("special_calculation_status"))
+    if special_status:
+        lines.append(f"- 산정특례 상태: {special_status}")
 
     human_task_lines = []
     for line in result.get("line_results") or []:
@@ -429,6 +432,14 @@ def _claim_snapshot_lines(snapshot: dict, index: int) -> list[str]:
     for reason in _normalize_review_reasons(result.get("review_reasons")):
         lines.append(f"- 검토 사유: {reason}")
     return lines
+
+
+def _claim_special_status_label(value: object) -> str:
+    return {
+        "unknown": "모름",
+        "applied": "적용",
+        "not_applied": "미적용",
+    }.get(str(value or ""), "")
 
 
 def _join_claim_snapshot_blocks(blocks: list[list[str]], has_omitted_snapshots: bool) -> str:

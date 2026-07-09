@@ -34,6 +34,17 @@ MODEL_ALIAS = {
 }
 
 
+SPECIAL_CALCULATION_LABELS = {
+    "unknown": "산정특례 여부 모름",
+    "applied": "산정특례 적용",
+    "not_applied": "산정특례 미적용",
+}
+
+
+def _special_calculation_label(value: str | None) -> str:
+    return SPECIAL_CALCULATION_LABELS.get(value or "unknown", "산정특례 여부 모름")
+
+
 @router.post("/calculate", response_model=ClaimCalculationResponse)
 async def calculate_claim(
     payload: ClaimCalculationRequest,
@@ -158,12 +169,13 @@ def _claim_title(items: list[ClaimItemInput]) -> str:
 
 def _claim_user_text(payload: ClaimCalculationRequest) -> str:
     generation = "5세대" if payload.context.policy_generation == "5th" else "4세대"
+    special_status = _special_calculation_label(payload.context.special_calculation_status)
     lines = []
     for item in payload.items:
         insured = item.insured_copay_amount or "0"
         nonpay = item.nonpay_amount or "0"
         lines.append(f"{item.input_name} 급여본인부담 {insured}원 / 비급여 {nonpay}원 x {item.quantity}")
-    return f"[보험금 계산/{generation}] " + ", ".join(lines)
+    return f"[보험금 계산/{generation}/{special_status}] " + ", ".join(lines)
 
 
 def _claim_response_text(response: ClaimCalculationResponse) -> str:
@@ -175,6 +187,7 @@ def _claim_response_text(response: ClaimCalculationResponse) -> str:
         f"- 예상 지급금액: {response.payable_amount}원",
         f"- 산정 상태: {response.calculation_status}",
         f"- 보험 세대: {response.policy_generation}",
+        f"- 산정특례 상태: {_special_calculation_label(response.special_calculation_status)}",
         f"- 메모: {response.notes}",
         "",
         "항목별 계산",
@@ -252,6 +265,7 @@ def _claim_snapshot_source(payload: ClaimCalculationRequest, response: ClaimCalc
                 "deductible": response.deductible,
                 "payable_amount": response.payable_amount,
                 "policy_generation": response.policy_generation,
+                "special_calculation_status": response.special_calculation_status,
                 "calculation_status": response.calculation_status,
                 "line_results": [_claim_snapshot_line(line) for line in response.line_results],
                 "review_reasons": list(response.review_reasons or []),
@@ -285,6 +299,7 @@ def _claim_snapshot_context(context) -> dict:
         "diagnosis_name": context.diagnosis_name,
         "accident_type": context.accident_type,
         "policy_generation": context.policy_generation,
+        "special_calculation_status": getattr(context, "special_calculation_status", "unknown"),
         "facility_type": context.facility_type,
         "facility_grade": context.facility_grade,
         "complication_asserted": context.complication_asserted,
@@ -315,6 +330,7 @@ def _claim_snapshot_line(line: dict) -> dict:
         "calculation_status",
         "excluded_from_calculation",
         "human_task_amount",
+        "deductible_group",
     }
     return {key: value for key, value in line.items() if key in allowed}
 

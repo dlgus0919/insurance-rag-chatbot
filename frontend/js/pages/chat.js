@@ -542,6 +542,7 @@ async function sendClaim(options = {}) {
   const visitType = document.getElementById('claim-visit-type')?.value || '';
   const note = document.getElementById('claim-note')?.value.trim() || '';
   const policyGeneration = document.querySelector('input[name="claim-policy-generation"]:checked')?.value || '5th';
+  const specialCalculationStatus = getSpecialCalculationStatus();
 
   const itemSummary = items.map((item) => {
     const insured = item.insured_copay_amount || '0';
@@ -549,7 +550,7 @@ async function sendClaim(options = {}) {
     return `${item.input_name} 급여본인부담 ${insured}원 / 비급여 ${nonpay}원 x ${item.quantity}`;
   }).join(', ');
   if (!suppressUserMessage) {
-    appendMsg('user', `[보험금 계산/${policyGeneration === '5th' ? '5세대' : '4세대'}] ${itemSummary}`);
+    appendMsg('user', `[보험금 계산/${policyGeneration === '5th' ? '5세대' : '4세대'}/${specialCalculationLabel(specialCalculationStatus)}] ${itemSummary}`);
   }
   await calculateClaim({
     session_id: currentSession,
@@ -561,6 +562,7 @@ async function sendClaim(options = {}) {
       diagnosis_code: diagnosisCode,
       situation_note: note,
       policy_generation: policyGeneration,
+      special_calculation_status: specialCalculationStatus,
     },
     model: getSelectedModel(),
     top_k: getTopK(),
@@ -623,6 +625,8 @@ function resetClaimForm() {
 
   const generation = document.querySelector('input[name="claim-policy-generation"][value="5th"]');
   if (generation instanceof HTMLInputElement) generation.checked = true;
+  const specialStatus = document.querySelector('input[name="claim-special-calculation"][value="unknown"]');
+  if (specialStatus instanceof HTMLInputElement) specialStatus.checked = true;
 
   const diagnosisCode = document.getElementById('claim-diagnosis-code');
   const coverageTopic = document.getElementById('claim-coverage-topic');
@@ -900,6 +904,7 @@ function renderClaimResultHtml(result) {
     <div class="claim-result">
       ${noteHtml}
       <div class="claim-note-text">계산 기준: ${result.policy_generation === '5th' ? '5세대 실손 표준약관' : '4세대 실손 기준'}</div>
+      <div class="claim-note-text">산정특례 상태: ${escapeHTML(specialCalculationLabel(result.special_calculation_status || 'unknown'))}</div>
       <div class="claim-summary-grid">
         <div class="claim-summary-claimed"><span>총 청구금액</span><strong>${formatMoney(result.claimed_amount)}원</strong></div>
         <div class="claim-summary-deductible"><span>예상 공제금액</span><strong>${formatMoney(result.deductible)}원</strong></div>
@@ -921,6 +926,7 @@ function claimResultToText(result) {
   const lines = [
     `보험금 계산 결과: ${result.requires_review ? '검토 필요' : '계산 완료'}`,
     `계산 기준: ${result.policy_generation === '5th' ? '5세대 실손 표준약관' : '4세대 실손 기준'}`,
+    `산정특례 상태: ${specialCalculationLabel(result.special_calculation_status || 'unknown')}`,
     `총 청구금액: ${formatMoney(result.claimed_amount)}원`,
     `예상 공제금액: ${formatMoney(result.deductible)}원`,
     `예상 지급금액: ${formatMoney(result.payable_amount)}원`,
@@ -1402,6 +1408,16 @@ function formatSelectedModelLabel(modelId) {
 
 function getPolicyGeneration() {
   return document.querySelector('input[name="claim-policy-generation"]:checked')?.value || '5th';
+}
+
+function getSpecialCalculationStatus() {
+  return document.querySelector('input[name="claim-special-calculation"]:checked')?.value || 'unknown';
+}
+
+function specialCalculationLabel(value) {
+  if (value === 'applied') return '산정특례 적용';
+  if (value === 'not_applied') return '산정특례 미적용';
+  return '산정특례 여부 모름';
 }
 
 function getIndexMode() {

@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from src.claim_calculation.models import CalculationResult
+from src.claim_calculation.models import CalculationResult, normalize_special_calculation_status
 
 
 class ClaimItemRequest(BaseModel):
@@ -34,6 +34,7 @@ class ClaimCaseContextRequest(BaseModel):
     accident_type: str = ""
     situation_note: str = ""
     policy_generation: Literal["4th", "5th"] = "5th"
+    special_calculation_status: Literal["unknown", "applied", "not_applied"] = "unknown"
     complication_asserted: bool = False
     same_disease_claimed: bool = False
     same_treatment_purpose_claimed: bool = False
@@ -76,6 +77,7 @@ class ClaimCalculationResponse(BaseModel):
     notes: str
     candidates: list[dict[str, str]]
     policy_generation: str = "5th"
+    special_calculation_status: Literal["unknown", "applied", "not_applied"] = "unknown"
     line_results: list[dict] = Field(default_factory=list)
     calculation_status: str = "auto_calculated"
     missing_evidence: list[str] = Field(default_factory=list)
@@ -110,6 +112,7 @@ class ClaimCalculationResponse(BaseModel):
             notes=result.notes,
             candidates=result.candidates,
             policy_generation=result.policy_generation,
+            special_calculation_status=normalize_special_calculation_status(result.special_calculation_status),
             line_results=result.line_results,
             calculation_status=result.calculation_status,
             missing_evidence=result.missing_evidence,

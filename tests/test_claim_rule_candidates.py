@@ -149,6 +149,51 @@ def test_apply_plan_blocks_duplicate_rule_id() -> None:
         build_apply_plan(active_rules=[{"rule_id": "deductible.test.valid"}], active_links=[], candidates=[candidate])
 
 
+def test_apply_plan_allows_approved_replace_candidate_for_existing_rule() -> None:
+    active_rule = _deductible_rule(
+        rule_id="deductible.5th.three_major_non_benefit.outpatient",
+        category="3대비급여",
+        copay_ratio="0.5",
+        min_deductible="50000",
+        min_deductible_by_facility={
+            "clinic": "50000",
+            "hospital": "50000",
+            "general_hospital": "50000",
+            "tertiary_hospital": "50000",
+        },
+        per_visit_limit="200000",
+        annual_limit="50000000",
+        description="5세대 3대비급여 통원 공제",
+        source_doc="표준약관",
+        source_page="1",
+        source_clause="source_chunk_id:표준약관_ch_005607",
+        source_chunk_id="표준약관_ch_005607",
+    )
+    candidate_rule = dict(active_rule, copay_ratio="0.3")
+    candidate = _candidate(
+        candidate_id="rulecand.replace.5th.three_major_non_benefit.outpatient",
+        status="approved",
+        operation="replace",
+        target_rule_id=active_rule["rule_id"],
+        proposed_rule=candidate_rule,
+        proposed_links={
+            "rule_id": candidate_rule["rule_id"],
+            "source_refs": ["policy_chunk:표준약관_ch_005607"],
+            "ontology_refs": ["cov.indemnity_medical"],
+            "graph_refs": ["source_chunk:표준약관_ch_005607"],
+            "link_status": "candidate",
+        },
+        source_refs=[{"kind": "policy_chunk", "doc_short": "표준약관", "chunk_id": "표준약관_ch_005607"}],
+        evidence_text="산정특례 적용 대상자는 30%를 공제한다.",
+    )
+
+    plan = build_apply_plan(active_rules=[active_rule], active_links=[], candidates=[candidate])
+
+    assert plan.rules_to_add == []
+    assert plan.rules_to_replace[0]["rule_id"] == active_rule["rule_id"]
+    assert plan.rules_to_replace[0]["copay_ratio"] == "0.3"
+
+
 def test_jsonl_roundtrip(tmp_path) -> None:
     path = tmp_path / "candidates.jsonl"
     record = _candidate()

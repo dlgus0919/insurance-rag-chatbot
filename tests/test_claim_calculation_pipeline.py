@@ -22,12 +22,12 @@ def _matches_for(items: list[ClaimItemInput]) -> list[list[dict[str, str]]]:
     ]
 
 
-def test_pipeline_calculation_success_dousu():
-    """기본 세대 도수치료는 최신 세대 규칙으로 계산하고 필요한 review 사유를 남긴다.
+def test_pipeline_dousu_unknown_special_status_requires_review():
+    """기본 5세대 도수치료는 산정특례 상태가 없으면 자동 산정하지 않고 review 사유를 남긴다.
 
     한도/횟수/특약 조건을 확인할 증빙이 입력되지 않은 실제 심사 화면에서는 review path가
-    별도로 붙을 수 있지만, 이 단위 테스트는 표준코드가 단일 보상 후보로 확정된 순수
-    계산 경로만 검증한다.
+    별도로 붙을 수 있다. 이 단위 테스트는 산정특례 상태가 케이스 단위로 확인되지 않은
+    5세대 3대비급여 항목을 자동 지급액에 합산하지 않는 안전 경로를 검증한다.
     """
     items = [
         ClaimItemInput(
@@ -59,14 +59,14 @@ def test_pipeline_calculation_success_dousu():
         )
 
         assert isinstance(result, CalculationResult)
-        # 5세대 기본값에서는 3대비급여 통원 50% 공제 기준으로 계산된다.
-        assert result.payable_amount == "75000"
-        assert result.deductible == "75000"
+        assert result.payable_amount == "0"
+        assert result.deductible == "0"
         assert result.policy_generation == "5th"
-        assert result.line_results[0]["payable_amount"] == "75000"
+        assert result.line_results[0]["payable_amount"] == "0"
+        assert result.line_results[0]["calculation_status"] == "human_task"
         assert result.requires_review
         assert len(result.applied_basis) > 0
-        assert "비급여 표준모델" in result.applied_basis[0]["source"]
+        assert any("산정특례 적용 여부" in reason for reason in result.line_results[0]["review_reasons"])
 
 
 def test_unsupported_policy_generation_defaults_to_latest_supported_generation():
@@ -107,6 +107,22 @@ def test_generation_same_result_for_outpatient_covered_benefit(generation: str, 
     assert not result.requires_review
 
 
+def test_claim_case_context_defaults_special_calculation_unknown():
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient")
+
+    assert context.special_calculation_status == "unknown"
+
+
+def test_claim_case_context_accepts_case_level_special_calculation_status():
+    context = ClaimCaseContext(
+        policy_generation="5th",
+        visit_type="hospitalization",
+        special_calculation_status="not_applied",
+    )
+
+    assert context.special_calculation_status == "not_applied"
+
+
 @pytest.mark.parametrize(
     ("generation", "expected_deductible", "expected_payable"),
     [
@@ -142,19 +158,98 @@ def test_generation_difference_for_nonsevere_nonpay():
     assert fifth.payable_amount == "100000"
 
 
-def test_fifth_generation_three_nonpay_uses_nonsevere_rate():
-    """5세대 도수치료 등 3대비급여는 비중증 비급여 공제 기준을 적용한다."""
+def test_fifth_generation_unknown_three_major_nonpay_requires_special_status():
+    """5세대 3대비급여는 산정특례 여부가 모호하면 자동 지급 산정하지 않는다."""
     items = [ClaimItemInput(line_id="line_dosu", input_name="도수치료", claimed_amount="100000", user_category_hint="3대비급여")]
-    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient")
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", special_calculation_status="unknown")
 
     with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
         result = run_claim_calculation(None, items, context, use_fake_planner=True)
 
-    assert result.deductible == "50000"
-    assert result.payable_amount == "50000"
+    assert result.deductible == "0"
+    assert result.payable_amount == "0"
     assert result.requires_review
-    assert "5세대 3대비급여" in result.line_results[0]["rule_summary"]
-    assert "50%" in result.line_results[0]["rule_summary"]
+    assert result.line_results[0]["calculation_status"] == "human_task"
+    assert result.line_results[0]["excluded_from_calculation"] is True
+    assert any("산정특례 적용 여부" in reason for reason in result.line_results[0]["review_reasons"])
+
+
+def test_fifth_generation_not_applied_manual_therapy_is_not_auto_paid():
+    """5세대 산정특례 미적용의 도수치료는 자동 지급 산정에서 제외한다."""
+    items = [ClaimItemInput(line_id="line_dosu", input_name="도수치료", claimed_amount="100000", user_category_hint="3대비급여")]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", special_calculation_status="not_applied")
+
+    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.deductible == "0"
+    assert result.payable_amount == "0"
+    assert result.requires_review
+    assert result.line_results[0]["calculation_status"] == "human_task"
+    assert result.line_results[0]["human_task_amount"] == "100000"
+    assert any("산정특례 미적용" in reason for reason in result.line_results[0]["review_reasons"])
+
+
+def test_fifth_generation_not_applied_mri_waits_for_approved_rule():
+    """MRI/MRA 전용 active rule이 없으면 기존 급여 fallback으로 자동 계산하지 않는다."""
+    items = [ClaimItemInput(line_id="line_mri", input_name="MRI 자기공명영상진단", claimed_amount="100000", user_category_hint="3대비급여")]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", special_calculation_status="not_applied")
+
+    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.deductible == "0"
+    assert result.payable_amount == "0"
+    assert result.line_results[0]["calculation_status"] == "human_task"
+    assert any("전용 계산 rule" in reason for reason in result.line_results[0]["review_reasons"])
+
+
+def test_fifth_generation_applied_three_major_nonpay_uses_special_case_rule():
+    """5세대 산정특례 적용 3대비급여는 승인된 중증비급여 rule 경로로 계산한다."""
+    items = [ClaimItemInput(line_id="line_dosu", input_name="도수치료", claimed_amount="100000", user_category_hint="3대비급여")]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", special_calculation_status="applied")
+
+    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.deductible == "30000"
+    assert result.payable_amount == "70000"
+    assert "중증비급여" in result.line_results[0]["category"]
+
+
+def test_grouped_deductible_applies_once_for_same_fifth_benefit_outpatient_group():
+    """동일 공제 그룹의 급여 통원 항목은 합산 금액에 대해 한 번 공제한다."""
+    items = [
+        ClaimItemInput(line_id="line_1", input_name="급여 외래진료비 A", claimed_amount="30000", user_category_hint="급여"),
+        ClaimItemInput(line_id="line_2", input_name="급여 외래진료비 B", claimed_amount="30000", user_category_hint="급여"),
+    ]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", facility_grade="clinic")
+
+    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.claimed_amount == "60000"
+    assert result.deductible == "12000"
+    assert result.payable_amount == "48000"
+    assert sum(int(line["deductible"]) for line in result.line_results) == 12000
+    assert all(line["deductible_group"] == "benefit_group" for line in result.line_results)
+
+
+def test_grouped_deductible_excludes_human_task_lines_from_group_amount():
+    """자동 산정 제외 항목은 동일 공제 그룹 합산에서 제외한다."""
+    items = [
+        ClaimItemInput(line_id="line_1", input_name="급여 외래진료비", claimed_amount="30000", user_category_hint="급여"),
+        ClaimItemInput(line_id="line_2", input_name="도수치료", claimed_amount="100000", user_category_hint="3대비급여"),
+    ]
+    context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", facility_grade="clinic", special_calculation_status="unknown")
+
+    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.deductible == "10000"
+    assert result.payable_amount == "20000"
+    assert result.line_results[1]["calculation_status"] == "human_task"
+    assert result.line_results[1]["deductible_group"] == ""
 
 
 def test_excluded_standard_opinion_forces_zero_payable():
@@ -878,8 +973,9 @@ def test_pipeline_formatted_amount_parsing():
                 use_fake_planner=True
             )
             assert result.claimed_amount == "150000"
-            assert result.payable_amount == "75000"
-            assert result.deductible == "75000"
+            assert result.payable_amount == "0"
+            assert result.deductible == "0"
+            assert result.line_results[0]["calculation_status"] == "human_task"
             assert result.requires_review
 
 
@@ -953,9 +1049,11 @@ def test_pipeline_mri_does_not_match_unrelated_treatment_material():
             use_fake_planner=True,
         )
 
-    assert result.payable_amount == "50000"
-    assert result.deductible == "50000"
-    assert result.line_results[0]["category"] == "3대비급여"
+    assert result.payable_amount == "0"
+    assert result.deductible == "0"
+    assert result.line_results[0]["category"] == "비급여자기공명영상진단"
+    assert result.line_results[0]["calculation_status"] == "human_task"
+    assert any("산정특례 적용 여부" in reason for reason in result.review_reasons)
     assert "HE115" in result.applied_basis[0]["source"]
     assert "TM001" not in result.applied_basis[0]["source"]
 
