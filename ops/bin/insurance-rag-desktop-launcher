@@ -373,11 +373,10 @@ open_browser() {
 }
 
 choose_action() {
-  local app_running="$1"
-  local sglang_model="$2"
-  local vllm_model="$3"
-  local trtllm_model="$4"
-  local ollama_model="$5"
+  local sglang_model="$1"
+  local vllm_model="$2"
+  local trtllm_model="$3"
+  local ollama_model="$4"
   local rows=()
 
   if [[ -n "$sglang_model" || -n "$vllm_model" || -n "$ollama_model" ]]; then
@@ -394,7 +393,16 @@ choose_action() {
   fi
 
   local current_text
-  current_text="앱: $app_running\nSGLang: ${sglang_model:-실행 안 됨}\nvLLM: ${vllm_model:-실행 안 됨}\nTensorRT-LLM: ${trtllm_model:-실행 안 됨}\nOllama: ${ollama_model:-실행 안 됨}"
+  current_text="앱 상태: stopped"
+  if [[ -n "$sglang_model" ]]; then
+    current_text="앱 상태: SGLang ($sglang_model) 실행 중"
+  elif [[ -n "$vllm_model" ]]; then
+    current_text="앱 상태: vLLM ($vllm_model) 실행 중"
+  elif [[ -n "$trtllm_model" ]]; then
+    current_text="앱 상태: TensorRT-LLM ($trtllm_model) 실행 중"
+  elif [[ -n "$ollama_model" ]]; then
+    current_text="앱 상태: Ollama ($ollama_model) 실행 중"
+  fi
   local row_count window_height
   row_count=$(( ${#rows[@]} / 4 ))
   window_height=$(( row_count * 44 + 250 ))
@@ -510,8 +518,6 @@ main() {
     show_error "설치 오류" "기동 wrapper가 없습니다.\n\n$APP_UP"
     exit 1
   }
-  local app_running="stopped"
-  detect_app_health && app_running="running"
   local sglang_model
   local vllm_model
   local trtllm_model
@@ -522,7 +528,7 @@ main() {
   ollama_model="$(detect_ollama_active_model)"
 
   local choice
-  choice="$(choose_action "$app_running" "$sglang_model" "$vllm_model" "$trtllm_model" "$ollama_model")" || exit 0
+  choice="$(choose_action "$sglang_model" "$vllm_model" "$trtllm_model" "$ollama_model")" || exit 0
   [[ -n "$choice" ]] || exit 0
 
   IFS='|' read -r mode provider model <<<"$choice"

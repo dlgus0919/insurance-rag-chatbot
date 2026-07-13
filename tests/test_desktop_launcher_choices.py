@@ -76,6 +76,42 @@ esac
     return env
 
 
+def _primary_dialog_output(
+    tmp_path: Path,
+    *,
+    sglang_model: str = "",
+    vllm_model: str = "",
+    trtllm_model: str = "",
+    ollama_model: str = "",
+) -> str:
+    fake_bin = tmp_path / "dialog-bin"
+    fake_bin.mkdir()
+    zenity_path = fake_bin / "zenity"
+    zenity_path.write_text("#!/usr/bin/env bash\nprintf '%s\\n' \"$@\"\n", encoding="utf-8")
+    zenity_path.chmod(zenity_path.stat().st_mode | stat.S_IXUSR)
+
+    source = LAUNCHER.read_text(encoding="utf-8")
+    assert 'main "$@"' in source
+    source = source.rsplit('main "$@"', 1)[0] + 'choose_action "$@"\n'
+    result = subprocess.run(
+        [
+            "bash",
+            "-s",
+            "--",
+            sglang_model,
+            vllm_model,
+            trtllm_model,
+            ollama_model,
+        ],
+        check=True,
+        text=True,
+        input=source,
+        capture_output=True,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+    )
+    return result.stdout
+
+
 def test_launcher_primary_choices_hide_model_rows(tmp_path: Path) -> None:
     result = subprocess.run(
         ["bash", str(LAUNCHER), "--choices"],
@@ -99,6 +135,27 @@ def test_launcher_primary_dialog_height_fits_default_choices() -> None:
 
     assert "row_count * 44 + 250" in source
     assert "window_height < 460" in source
+
+
+def test_launcher_primary_dialog_shows_only_stopped_app_status(tmp_path: Path) -> None:
+    output = _primary_dialog_output(tmp_path)
+
+    assert "앱 상태: stopped" in output
+    assert "SGLang:" not in output
+    assert "vLLM:" not in output
+    assert "TensorRT-LLM:" not in output
+    assert "Ollama:" not in output
+
+
+def test_launcher_primary_dialog_summarizes_active_model_in_one_status_line(tmp_path: Path) -> None:
+    output = _primary_dialog_output(
+        tmp_path,
+        sglang_model="qwen3-next-80b-a3b-instruct-fp8",
+    )
+
+    assert "앱 상태: SGLang (qwen3-next-80b-a3b-instruct-fp8) 실행 중" in output
+    assert "앱: running" not in output
+    assert "SGLang:" not in output
 
 
 def test_desktop_launcher_hides_admin_review_choices() -> None:
