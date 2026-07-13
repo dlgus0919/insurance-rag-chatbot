@@ -105,7 +105,13 @@ detect_openai_compatible_model() {
   json_value openai_first_model "$json"
 }
 
-detect_ollama_model() {
+detect_ollama_active_model() {
+  local json
+  json="$(curl_json "${OLLAMA_HOST%/}/api/ps")"
+  json_value ollama_first_model "$json"
+}
+
+detect_ollama_installed_model() {
   local json
   json="$(curl_json "${OLLAMA_HOST%/}/api/tags")"
   json_value ollama_first_model "$json"
@@ -209,7 +215,7 @@ print_status() {
   sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
   vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
   trtllm_model="$(detect_openai_compatible_model "$TRTLLM_BASE_URL" "${TRTLLM_API_KEY:-EMPTY}")"
-  ollama_model="$(detect_ollama_model)"
+  ollama_model="$(detect_ollama_active_model)"
 
   printf 'app=%s\n' "$app"
   printf 'sglang=%s\n' "${sglang_model:-}"
@@ -221,19 +227,21 @@ print_status() {
 print_model_choices() {
   local sglang_model
   local vllm_model
-  local ollama_model
+  local ollama_active_model
+  local ollama_installed_model
   local trtllm_model
   sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
   vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
   trtllm_model="$(detect_openai_compatible_model "$TRTLLM_BASE_URL" "${TRTLLM_API_KEY:-EMPTY}")"
-  ollama_model="$(detect_ollama_model)"
+  ollama_active_model="$(detect_ollama_active_model)"
+  ollama_installed_model="$(detect_ollama_installed_model)"
 
   if [[ -n "$sglang_model" ]]; then
     printf 'current|sglang|%s\n' "$sglang_model"
   elif [[ -n "$vllm_model" ]]; then
     printf 'current|vllm|%s\n' "$vllm_model"
-  elif [[ -n "$ollama_model" ]]; then
-    printf 'current|ollama|%s\n' "$ollama_model"
+  elif [[ -n "$ollama_active_model" ]]; then
+    printf 'current|ollama|%s\n' "$ollama_active_model"
   fi
 
   for model in \
@@ -256,11 +264,11 @@ print_model_choices() {
     fi
   done
 
-  if [[ -n "$ollama_model" ]]; then
-    printf 'start|ollama|%s\n' "$ollama_model"
+  if [[ -n "$ollama_installed_model" ]]; then
+    printf 'start|ollama|%s\n' "$ollama_installed_model"
   fi
   if ollama_gguf_model_ready "$LLAMA_GGUF_OLLAMA_MODEL" \
-    && [[ "$ollama_model" != "$LLAMA_GGUF_OLLAMA_MODEL" && "$ollama_model" != "$LLAMA_GGUF_OLLAMA_MODEL:latest" ]]; then
+    && [[ "$ollama_installed_model" != "$LLAMA_GGUF_OLLAMA_MODEL" && "$ollama_installed_model" != "$LLAMA_GGUF_OLLAMA_MODEL:latest" ]]; then
     printf 'start|ollama|%s\n' "$LLAMA_GGUF_OLLAMA_MODEL"
   fi
 }
@@ -271,7 +279,7 @@ print_choices() {
   local ollama_model
   sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
   vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
-  ollama_model="$(detect_ollama_model)"
+  ollama_model="$(detect_ollama_active_model)"
 
   printf 'model|select|available\n'
   if [[ -n "$sglang_model" ]]; then
@@ -436,7 +444,7 @@ choose_model_action() {
     rows+=("FALSE" "start|vllm|exaone-4.0-32b-awq" "vLLM 서버 시작/전환" "exaone-4.0-32b-awq")
   fi
   local ollama_model
-  ollama_model="$(detect_ollama_model)"
+  ollama_model="$(detect_ollama_installed_model)"
   if [[ -n "$ollama_model" ]]; then
     rows+=("FALSE" "start|ollama|$ollama_model" "Ollama 모델 사용" "$ollama_model")
   fi
@@ -511,7 +519,7 @@ main() {
   sglang_model="$(detect_openai_compatible_model "$SGLANG_BASE_URL" "${SGLANG_API_KEY:-EMPTY}")"
   vllm_model="$(detect_openai_compatible_model "$VLLM_BASE_URL" "${VLLM_API_KEY:-EMPTY}")"
   trtllm_model="$(detect_openai_compatible_model "$TRTLLM_BASE_URL" "${TRTLLM_API_KEY:-EMPTY}")"
-  ollama_model="$(detect_ollama_model)"
+  ollama_model="$(detect_ollama_active_model)"
 
   local choice
   choice="$(choose_action "$app_running" "$sglang_model" "$vllm_model" "$trtllm_model" "$ollama_model")" || exit 0

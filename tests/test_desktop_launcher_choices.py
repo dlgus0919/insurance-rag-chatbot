@@ -47,6 +47,35 @@ def _launcher_env(tmp_path: Path) -> dict[str, str]:
     return env
 
 
+def _launcher_env_with_ollama_state(
+    tmp_path: Path,
+    *,
+    installed_models: str,
+    running_models: str,
+) -> dict[str, str]:
+    env = _launcher_env(tmp_path)
+    curl_path = Path(env["AI_OPS_BIN_DIR"]) / "curl"
+    curl_path.write_text(
+        """#!/usr/bin/env bash
+url="${!#}"
+case "$url" in
+  */api/tags) printf '%s' "${FAKE_OLLAMA_TAGS:-}" ;;
+  */api/ps) printf '%s' "${FAKE_OLLAMA_PS:-}" ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    curl_path.chmod(curl_path.stat().st_mode | stat.S_IXUSR)
+    env.update(
+        {
+            "PATH": f"{curl_path.parent}:{env['PATH']}",
+            "FAKE_OLLAMA_TAGS": installed_models,
+            "FAKE_OLLAMA_PS": running_models,
+        }
+    )
+    return env
+
+
 def test_launcher_primary_choices_hide_model_rows(tmp_path: Path) -> None:
     result = subprocess.run(
         ["bash", str(LAUNCHER), "--choices"],
@@ -90,6 +119,42 @@ def test_launcher_model_choices_show_available_models(tmp_path: Path) -> None:
     )
 
     assert "start|sglang|gpt-oss-20b" in result.stdout
+
+
+def test_launcher_does_not_keep_installed_but_unloaded_ollama_model(tmp_path: Path) -> None:
+    env = _launcher_env_with_ollama_state(
+        tmp_path,
+        installed_models='{"models":[{"name":"llama-3.3-70b-instruct-q4-k-m:latest"}]}',
+        running_models='{"models":[]}',
+    )
+
+    result = subprocess.run(
+        ["bash", str(LAUNCHER), "--choices"],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+    assert "current|ollama|" not in result.stdout
+
+
+def test_launcher_keeps_ollama_model_reported_by_running_endpoint(tmp_path: Path) -> None:
+    env = _launcher_env_with_ollama_state(
+        tmp_path,
+        installed_models='{"models":[{"name":"exaone3.5:7.8b"}]}',
+        running_models='{"models":[{"name":"llama-3.3-70b-instruct-q4-k-m:latest"}]}',
+    )
+
+    result = subprocess.run(
+        ["bash", str(LAUNCHER), "--choices"],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+    assert "current|ollama|llama-3.3-70b-instruct-q4-k-m:latest" in result.stdout
 
 
 def test_launcher_does_not_auto_open_ontology_preflight() -> None:
