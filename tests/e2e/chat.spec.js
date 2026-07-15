@@ -292,6 +292,54 @@ test.describe('채팅 플로우', () => {
     await expect(claimResult).toContainText('미분류 비급여');
   });
 
+  test('보험금 계산은 케이스 단위 산정특례 상태를 전송함', async ({ page }) => {
+    const claimPayloads = [];
+
+    await page.route('**/api/sessions', async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
+    });
+    await page.route('**/api/claim/calculate', async (route) => {
+      claimPayloads.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          session_id: 'claim-special-session',
+          claimed_amount: '100000',
+          deductible: '30000',
+          payable_amount: '70000',
+          formula_intent: '',
+          executed_code: '',
+          applied_basis: [],
+          requires_review: false,
+          review_reasons: [],
+          notes: '',
+          candidates: [],
+          policy_generation: '5th',
+          special_calculation_status: 'not_applied',
+          line_results: [],
+          calculation_status: 'auto_calculated',
+          warnings: [],
+        }),
+      });
+    });
+
+    await page.click('[data-mode="claim"]');
+    await page.getByLabel('5세대 실손').check();
+    await page.getByLabel('미적용').check();
+    await page.locator('.claim-item-name').first().fill('도수치료');
+    await page.locator('.claim-nonpay-amount').first().fill('100000');
+    await page.click('[data-action="send-claim"]');
+
+    await expect.poll(() => claimPayloads.length).toBe(1);
+    expect(claimPayloads[0].context.special_calculation_status).toBe('not_applied');
+    expect(claimPayloads[0].items[0].special_calculation_status).toBeUndefined();
+  });
+
   test('보험금 계산 후보 선택 재계산도 히스토리에 저장함', async ({ page }) => {
     const claimPayloads = [];
 
