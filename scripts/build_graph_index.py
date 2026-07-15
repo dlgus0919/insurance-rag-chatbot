@@ -8,9 +8,16 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
 from src.graph.build import build_graph
+from scripts.build_graph_visualization_snapshot import build_snapshot
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build SQLite Property Graph index for insurance RAG.")
+    parser.add_argument(
+        "--viz-snapshot",
+        type=str,
+        default="data/index/graph/insurance_graph_viz.json",
+        help="Output JSON path for the bounded GraphDB visualization snapshot.",
+    )
     parser.add_argument(
         "--chunks-path",
         type=str,
@@ -109,6 +116,7 @@ def main() -> None:
         skip_hira_codes=args.skip_hira_codes,
         rule_links_path=args.rule_links,
     )
+    build_snapshot(Path(args.output), Path(args.viz_snapshot))
 
 if __name__ == "__main__":
     main()

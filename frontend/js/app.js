@@ -6,7 +6,7 @@ import { apiFetch } from './utils.js';
 import { STORAGE_KEYS } from './config.js';
 import { initLoginCanvas, initLoginPage } from './pages/login.js?v=20260602_model_sync_fix1';
 import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260707_claim_generation_default';
-import { initAdminPage } from './pages/admin.js?v=20260707_active_rules_session_defaults';
+import { disposeAdminPage, initAdminPage } from './pages/admin.js?v=20260715_graph_viz';
 
 const PAGES = {
   LOGIN: '/html/login.html',
@@ -216,6 +216,7 @@ async function loadPageByRoute(routeName) {
 
 function cleanupPreviousPage() {
   abortActiveChat();
+  disposeAdminPage();
 }
 
 async function syncSelectedModelForAuthenticatedRoute() {

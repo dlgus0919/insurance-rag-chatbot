@@ -194,3 +194,19 @@ def test_graph_store_readonly_and_transaction(temp_db: str) -> None:
     assert len(nodes) == 0
 
     rw_store.close()
+
+
+def test_graph_store_creates_visualization_lookup_indexes(temp_db: str) -> None:
+    store = GraphStore(temp_db)
+
+    index_names = {
+        row["name"]
+        for row in store.query("SELECT name FROM sqlite_master WHERE type = 'index';")
+    }
+
+    assert {
+        "idx_graph_nodes_normalized_name",
+        "idx_graph_edges_source",
+        "idx_graph_edges_target",
+    }.issubset(index_names)
+    store.close()

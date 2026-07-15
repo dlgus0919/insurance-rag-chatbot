@@ -3,11 +3,14 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "esbuild js/app.js --bundle --minify --outfile=dist/app.min.js --format=esm",
+    "build": "npm run build:graph && esbuild js/app.js --bundle --minify --outfile=dist/app.min.js --format=esm",
     "build:dev": "esbuild js/app.js --bundle --sourcemap --outfile=dist/app.dev.js --format=esm",
-    "watch": "esbuild js/app.js --bundle --sourcemap --outfile=dist/app.dev.js --format=esm --watch"
+    "watch": "esbuild js/app.js --bundle --sourcemap --outfile=dist/app.dev.js --format=esm --watch",
+    "build:graph": "esbuild js/graph/force-graph-entry.js --bundle --minify --outfile=dist/graph-viz.min.js --format=iife"
   },
   "devDependencies": {
-    "esbuild": "^0.25.0"
+    "3d-force-graph": "1.80.0",
+    "esbuild": "^0.25.0",
+    "three": "0.185.1"
   }
 }

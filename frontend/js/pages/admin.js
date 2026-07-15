@@ -21,6 +21,11 @@ import {
   applyApprovedKnowledge,
   normalizeListResponse,
 } from '../modules/admin.js?v=20260531_graph_sync';
+import {
+  activateAdminGraphPage,
+  deactivateAdminGraphPage,
+  disposeAdminGraphPage,
+} from './admin-graph.js';
 import { fetchCurrentUser, getCurrentUser } from '../modules/auth.js';
 import { createAlertModal, createConfirmModal } from '../modules/modal.js';
 import { closeModal, getResetTargetUser, openModal, setResetTargetUser, toast } from '../modules/ui.js';
@@ -61,6 +66,15 @@ export async function initAdminPage({ isUserAdmin, onLogout, onGoChat } = {}) {
   setupAdminActionHandlers();
 
   await loadAdminDashboard();
+}
+
+export function disposeAdminPage() {
+  disposeAdminGraphPage();
+  if (adminActionRoot && adminActionClickHandler) {
+    adminActionRoot.removeEventListener('click', adminActionClickHandler);
+  }
+  adminActionRoot = null;
+  adminActionClickHandler = null;
 }
 
 let adminActionRoot = null;
@@ -997,19 +1011,21 @@ function setupAdminMenuHandlers({ onLogout, onGoChat }) {
 }
 
 async function showSub(sub, element) {
+  if (sub !== 'graph') deactivateAdminGraphPage();
   document.querySelectorAll('.a-sub').forEach((section) => section.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach((item) => item.classList.remove('active'));
   document.getElementById('sub-' + sub)?.classList.add('active');
   element?.classList.add('active');
 
   const title = document.getElementById('admin-ttl');
-  const subTitles = { logs: '로그 조회', stats: '통계', users: '사용자 관리', system: '시스템 상태', rag: 'RAG 검색 진단', knowledge: '지식 확장' };
+  const subTitles = { logs: '로그 조회', stats: '통계', users: '사용자 관리', system: '시스템 상태', rag: 'RAG 검색 진단', graph: 'GraphDB 탐색', knowledge: '지식 확장' };
   if (title) title.textContent = subTitles[sub];
   if (sub === 'logs') await loadAdminLogs();
   if (sub === 'stats') await loadAdminStats();
   if (sub === 'users') await loadAdminUsers();
   if (sub === 'system') await loadSystemSummary();
   if (sub === 'rag') await loadRagDiagnostics();
+  if (sub === 'graph') await activateAdminGraphPage();
   if (sub === 'knowledge') await loadKnowledgeDashboard();
 }
 

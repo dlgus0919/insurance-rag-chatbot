@@ -19,7 +19,7 @@ from src.api.middleware import request_id_middleware
 from src.api.rate_limit import RateLimitExceeded, limiter
 from src.api.rag_service import get_rag_pipeline
 from src.api.routes.claim import CLAIM_RAG_TOP_K
-from src.api.routes import admin, auth, chat, claim, knowledge, sessions, system
+from src.api.routes import admin, admin_graph, auth, chat, claim, knowledge, sessions, system
 from src.api.settings import get_api_settings
 from src import config
 
@@ -104,6 +104,7 @@ def create_app() -> FastAPI:
     app.include_router(claim.router, prefix="/api")
     app.include_router(sessions.router, prefix="/api")
     app.include_router(admin.router, prefix="/api")
+    app.include_router(admin_graph.router, prefix="/api")
     app.include_router(knowledge.router, prefix="/api")
 
     # Mount frontend static files

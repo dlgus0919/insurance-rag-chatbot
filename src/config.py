@@ -342,6 +342,12 @@ CHUNK_OVERLAP_CHARS: int = int(os.getenv("CHUNK_OVERLAP_CHARS", "100"))
 # GraphDB Configuration
 GRAPH_ENABLED: bool = os.getenv("GRAPH_ENABLED", "false").lower() == "true"
 GRAPH_INDEX_PATH: Path = Path(os.getenv("GRAPH_INDEX_PATH", str(ROOT_DIR / "data" / "index" / "graph" / "insurance_graph.sqlite")))
+GRAPH_VIZ_SNAPSHOT_PATH: Path = Path(
+    os.getenv(
+        "GRAPH_VIZ_SNAPSHOT_PATH",
+        str(ROOT_DIR / "data" / "index" / "graph" / "insurance_graph_viz.json"),
+    )
+)
 GRAPH_REQUIRE_EVIDENCE: bool = os.getenv("GRAPH_REQUIRE_EVIDENCE", "true").lower() == "true"
 GRAPH_ALLOW_CANDIDATE_POLICY: bool = os.getenv("GRAPH_ALLOW_CANDIDATE_POLICY", "true").lower() == "true"
 GRAPH_CONTEXT_TOP_K: int = int(os.getenv("GRAPH_CONTEXT_TOP_K", "20"))

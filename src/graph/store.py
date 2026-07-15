@@ -142,9 +142,12 @@ class GraphStore:
 
         # 필수 인덱스 생성
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_nodes_type_norm ON graph_nodes(node_type, normalized_name);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_nodes_normalized_name ON graph_nodes(normalized_name);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_aliases_norm ON graph_aliases(normalized_alias);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_edges_type_src ON graph_edges(edge_type, source_node_id);")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_edges_type_dst ON graph_edges(edge_type, target_node_id);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_edges_source ON graph_edges(source_node_id, edge_type);")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_graph_edges_target ON graph_edges(target_node_id, edge_type);")
         existing_columns = {row["name"] for row in cursor.execute("PRAGMA table_info(graph_evidence)")}
         if "canonical_chunk_id" not in existing_columns:
             cursor.execute("ALTER TABLE graph_evidence ADD COLUMN canonical_chunk_id TEXT;")
