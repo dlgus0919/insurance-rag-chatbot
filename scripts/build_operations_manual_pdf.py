@@ -14,6 +14,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
@@ -26,6 +27,7 @@ FONT_CANDIDATES = (
     Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
     Path("/System/Library/Fonts/Supplemental/AppleGothic.ttf"),
 )
+KOREAN_CID_FONT = "HYSMyeongJo-Medium"
 
 
 def resolve_korean_font(font_path: str | Path | None = None) -> Path:
@@ -38,6 +40,11 @@ def resolve_korean_font(font_path: str | Path | None = None) -> Path:
 
 
 def _register_font(font_path: Path) -> str:
+    if font_path.suffix.lower() == ".ttc":
+        if KOREAN_CID_FONT not in pdfmetrics.getRegisteredFontNames():
+            pdfmetrics.registerFont(UnicodeCIDFont(KOREAN_CID_FONT))
+        return KOREAN_CID_FONT
+
     font_name = "PractitionerKorean"
     if font_name not in pdfmetrics.getRegisteredFontNames():
         pdfmetrics.registerFont(TTFont(font_name, str(font_path)))
@@ -200,7 +207,7 @@ def _markdown_story(source: Path, styles: dict[str, ParagraphStyle]) -> list[obj
 
 def _draw_footer(canvas, doc) -> None:  # type: ignore[no-untyped-def]
     canvas.saveState()
-    canvas.setFont("PractitionerKorean", 7.2)
+    canvas.setFont(getattr(doc, "manual_font_name", "PractitionerKorean"), 7.2)
     canvas.setFillColor(colors.HexColor("#475569"))
     canvas.drawCentredString(A4[0] / 2, 14 * mm, f"실무자 전체 운영 오류 대응 매뉴얼 · 페이지 {doc.page}")
     canvas.restoreState()
@@ -223,6 +230,7 @@ def build_pdf(source: str | Path, output: str | Path, font_path: str | Path | No
         title="실무자 전체 운영 오류 대응 매뉴얼",
         author="Insurance RAG Chatbot",
     )
+    document.manual_font_name = font_name
     document.build(_markdown_story(source_path, styles), onFirstPage=_draw_footer, onLaterPages=_draw_footer)
 
 

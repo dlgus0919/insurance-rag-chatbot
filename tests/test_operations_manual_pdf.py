@@ -36,6 +36,22 @@ def test_operations_manual_pdf_contains_title_ids_and_page_numbers() -> None:
     assert "페이지 1" in text
 
 
+def test_operations_manual_pdf_uses_korean_cid_font_for_ttc_input() -> None:
+    builder = _load_builder()
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        ttc_font = temp_path / "NotoSansCJK-Regular.ttc"
+        ttc_font.touch()
+        output = temp_path / "manual.pdf"
+        builder.build_pdf(MANUAL, output, ttc_font)
+
+        reader = PdfReader(str(output))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+
+    assert "실무자 전체 운영 오류 대응 매뉴얼" in text
+    assert "페이지 1" in text
+
+
 if __name__ == "__main__":
     test_operations_manual_pdf_contains_title_ids_and_page_numbers()
     print("operations manual PDF checks passed")
