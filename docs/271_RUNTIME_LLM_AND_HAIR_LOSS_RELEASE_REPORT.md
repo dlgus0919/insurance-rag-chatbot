@@ -64,6 +64,8 @@
 | 운영 앱 health | 정상 |
 | 운영 모델 API | Qwen 주력 모델 1건, EXAONE 0건 |
 | 운영 탈모 active manifest 검증 | 4세대·5세대 6개 기대 상태 확인 |
+| 온톨로지 동기화 검사 | 통과, concepts 55 / aliases 126 / candidate aliases 18 |
+| GraphDB 무결성 검사 | 통과, 규칙 속성 및 근거 매핑 오류 0건 |
 | 기존 Qwen endpoint smoke | HTTP 200, 비어 있지 않은 응답 |
 
 전체 pytest의 단일 실패는 `test_claim_calculation_route_returns_payable_amount`의 공제액 기대값 불일치다. 이번 릴리스 전 보호된 DGX 기준선에서도 같은 실패가 재현됐으며, 이번 변경 범위인 검색·답변·온톨로지·LLM 표시와 독립적이다. 보험금 계산 로직은 임의로 변경하지 않았다.
