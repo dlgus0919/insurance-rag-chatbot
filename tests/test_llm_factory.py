@@ -15,6 +15,9 @@ class FakeOllama:
     def list_models(self):
         return ["gemma3:4b", "gemma3:1b"]
 
+    def list_running_models(self):
+        return []
+
 
 class FakeOpenAI:
     provider = "openai"
@@ -35,6 +38,12 @@ def test_is_openai_model_accepts_prefix_and_gpt_models() -> None:
     assert factory.is_openai_model("openai:gpt-4.1-nano") is True
     assert factory.is_openai_model("sglang:gpt-oss-20b") is False
     assert factory.is_openai_model("gemma3:4b") is False
+
+
+def test_ollama_is_disabled_without_explicit_runtime_opt_in(monkeypatch) -> None:
+    monkeypatch.delenv("ALLOW_OLLAMA", raising=False)
+
+    assert factory.is_ollama_allowed() is False
 
 
 def test_model_info_and_label_for_known_and_custom_models() -> None:
@@ -156,9 +165,40 @@ def test_list_runtime_available_models_only_exposes_live_local_endpoints(monkeyp
         "sglang": ["gpt-oss-20b"],
         "vllm": [],
         "trtllm": [],
-        "ollama": ["gemma3:4b", "gemma3:1b"],
+        "ollama": [],
         "openai": [],
     }
+
+
+def test_runtime_sglang_process_never_advertises_running_ollama_model(monkeypatch) -> None:
+    class RunningOllama(FakeOllama):
+        def list_running_models(self):
+            return ["exaone3.5:7.8b"]
+
+    monkeypatch.setattr(factory, "OllamaClient", RunningOllama)
+    monkeypatch.setenv("ALLOW_OLLAMA", "true")
+    monkeypatch.setenv("INSURANCE_RAG_PROVIDER", "sglang")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    monkeypatch.setattr(factory.config, "OFFLINE_MODE", True)
+    monkeypatch.setattr(factory.config, "SGLANG_CANDIDATE_MODELS", ["qwen3-next-80b-a3b-instruct-fp8"])
+    monkeypatch.setattr(factory.config, "SGLANG_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "SGLANG_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "VLLM_CANDIDATE_MODELS", [])
+    monkeypatch.setattr(factory.config, "VLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "VLLM_DISABLED_MODELS", set())
+    monkeypatch.setattr(factory.config, "TRTLLM_CANDIDATE_MODELS", [])
+    monkeypatch.setattr(factory.config, "TRTLLM_MODEL_ENDPOINTS", {})
+    monkeypatch.setattr(factory.config, "TRTLLM_DISABLED_MODELS", set())
+    monkeypatch.setattr(
+        factory,
+        "_served_models_for_endpoint",
+        lambda endpoint, api_key=None: ["qwen3-next-80b-a3b-instruct-fp8"] if endpoint.endswith("30000/v1") else [],
+    )
+
+    grouped = factory.list_runtime_available_models()
+
+    assert grouped["sglang"] == ["qwen3-next-80b-a3b-instruct-fp8"]
+    assert grouped["ollama"] == []
 
 
 def test_build_llm_routes_to_ollama(monkeypatch) -> None:

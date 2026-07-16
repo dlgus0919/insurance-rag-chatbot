@@ -102,6 +102,22 @@ def test_ollama_list_models_returns_empty_on_error(monkeypatch) -> None:
     assert OllamaClient("http://localhost:11434", "model").list_models() == []
 
 
+def test_ollama_list_running_models_returns_only_loaded_models(monkeypatch) -> None:
+    def fake_get(url, timeout):
+        assert url == "http://localhost:11434/api/ps"
+        return DummyResponse(
+            200,
+            {"models": [{"name": "qwen3-next-80b-a3b-instruct-fp8:latest"}]},
+        )
+
+    monkeypatch.setattr(requests, "get", fake_get)
+
+    assert OllamaClient("http://localhost:11434", "model").list_running_models() == [
+        "qwen3-next-80b-a3b-instruct-fp8:latest",
+        "qwen3-next-80b-a3b-instruct-fp8",
+    ]
+
+
 def test_ollama_generate_stream_yields_tokens(monkeypatch) -> None:
     captured = {}
 

@@ -25,6 +25,7 @@ from src.api.rate_limit import limiter
 from src.api.rag_service import (
     SYSTEM_PROMPT,
     finalize_answer_for_question,
+    graph_payload_has_renderable_evidence,
     get_rag_pipeline,
     prepare_formal_context,
     prepare_quickcode_context,
@@ -456,6 +457,9 @@ async def chat_stream(
                     effective_filters,
                 )
             elif resolved_mode == "formal":
+                formal_kwargs = {}
+                if chat_request.policy_generation:
+                    formal_kwargs["policy_generation"] = chat_request.policy_generation
                 chunks, sources, prompt, doc_filter = await prepare_formal_context(
                     pipeline,
                     context_query,
@@ -463,15 +467,19 @@ async def chat_stream(
                     history,
                     effective_filters,
                     chat_request.memo,
+                    **formal_kwargs,
                 )
             else:
+                retrieval_kwargs = {"auto_params": auto_decision}
+                if chat_request.policy_generation:
+                    retrieval_kwargs["policy_generation"] = chat_request.policy_generation
                 chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug_info = await prepare_retrieved_context(
                     pipeline,
                     context_query,
                     retrieval_top_k,
                     history,
                     effective_filters,
-                    auto_params=auto_decision,
+                    **retrieval_kwargs,
                 )
             prompt = _prompt_with_policy_generation(prompt, chat_request.policy_generation)
             yield _sse("sources", sources)
@@ -491,6 +499,9 @@ async def chat_stream(
                     yield _sse("token", {"t": token})
                     await asyncio.sleep(0)
             else:
+                # A renderable Graph/canonical panel can replace model templates. Buffer it so
+                # no streamed text disappears when the final normalized answer is emitted.
+                suppress_live_tokens = graph_payload_has_renderable_evidence(graph_payload)
                 llm_stream = _generate_llm_stream(
                     pipeline.llm,
                     prompt,
@@ -500,7 +511,8 @@ async def chat_stream(
                 )
                 for token in llm_stream:
                     tokens.append(token)
-                    yield _sse("token", {"t": token})
+                    if not suppress_live_tokens:
+                        yield _sse("token", {"t": token})
                     await asyncio.sleep(0)
                 for warning in _llm_safety_warnings(pipeline.llm):
                     warnings.append(warning)

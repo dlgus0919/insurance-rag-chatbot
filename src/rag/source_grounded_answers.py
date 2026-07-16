@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 from src.claim_calculation.deductible_rules import DeductibleRule, lookup_rule
+from src.ontology.registry import OntologyConcept, OntologyRegistry, get_default_ontology_registry
 from src.parser.chunker import Chunk
 
 
@@ -14,8 +17,159 @@ _HIRA_CODE_SEGMENT_PATTERN = re.compile(r"\b(?P<code>[A-Z]\d{4})\b\s*(?P<body>.*
 _HIRA_SCORE_PATTERN = re.compile(r"(?P<score>\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*점")
 
 
+@dataclass(frozen=True)
+class PolicyClauseDecision:
+    """A source-backed policy decision rendered independently from GraphDB paths."""
+
+    answer: str
+    payload: dict[str, Any]
+    chunks: list[Chunk]
+
+
 def _compact(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
+
+
+def _source_evidence(chunk: Chunk) -> dict[str, Any]:
+    metadata = chunk.metadata or {}
+    return {
+        "doc_short": metadata.get("doc_short") or "문서",
+        "page_start": metadata.get("page_start"),
+        "page_end": metadata.get("page_end", metadata.get("page_start")),
+        "chunk_id": chunk.id,
+        "is_own_company": metadata.get("is_own_company"),
+    }
+
+
+def _hair_loss_profile(
+    question: str,
+    registry: OntologyRegistry,
+) -> tuple[OntologyConcept, dict[str, Any]] | None:
+    compact_question = _compact(question)
+    for concept in registry.concepts:
+        profile = concept.properties.get("source_grounded_decision")
+        if not isinstance(profile, dict):
+            continue
+        question_terms = [str(term).strip() for term in profile.get("question_terms", [])]
+        if any(_compact(term) and _compact(term) in compact_question for term in question_terms):
+            return concept, profile
+    return None
+
+
+def _selected_policy_chunks(chunks: list[Chunk], policy_generation: str) -> list[Chunk]:
+    return [
+        chunk
+        for chunk in chunks
+        if str((chunk.metadata or {}).get("policy_generation") or "") == policy_generation
+    ]
+
+
+def _direct_clause_chunks(
+    chunks: list[Chunk],
+    evidence_terms: list[str],
+    preferred_chunk_ids: list[str] | None = None,
+) -> list[Chunk]:
+    compact_terms = [_compact(term) for term in evidence_terms if _compact(term)]
+    if not compact_terms:
+        return []
+    direct_chunks = [
+        chunk
+        for chunk in chunks
+        if all(term in _compact(chunk.text) for term in compact_terms)
+    ]
+    preferred = set(preferred_chunk_ids or [])
+    preferred_chunks = [chunk for chunk in direct_chunks if chunk.id in preferred]
+    return preferred_chunks or direct_chunks
+
+
+def _matches_any_term(question: str, terms: list[str]) -> bool:
+    compact_question = _compact(question)
+    return any(_compact(term) and _compact(term) in compact_question for term in terms)
+
+
+def _authority_note(
+    policy_generation: str,
+    direct_chunks: list[Chunk],
+    profile: dict[str, Any],
+) -> str:
+    if any((chunk.metadata or {}).get("is_own_company") is True for chunk in direct_chunks):
+        return f"현재 선택한 {policy_generation.replace('th', '세대')} 자사 약관의 직접 조항 근거입니다."
+    standard_note = str(profile.get("standard_reference_note") or "").strip()
+    if policy_generation == "5th" and standard_note:
+        return standard_note
+    return f"현재 선택한 {policy_generation.replace('th', '세대')} 기준 문서의 직접 조항 근거입니다."
+
+
+def _join_decision_answer(summary: str, authority_note: str, conditions: list[str]) -> str:
+    condition_text = ", ".join(conditions)
+    lines = [summary, authority_note]
+    if condition_text:
+        lines.append(f"확인할 조건: {condition_text}.")
+    return "\n\n".join(line for line in lines if line)
+
+
+def build_policy_clause_decision(
+    question: str,
+    chunks: list[Chunk],
+    *,
+    policy_generation: str | None,
+    registry: OntologyRegistry | None = None,
+) -> PolicyClauseDecision | None:
+    """Build a constrained hair-loss decision only from a selected policy clause."""
+
+    if policy_generation not in {"4th", "5th"}:
+        return None
+
+    registry = registry or get_default_ontology_registry()
+    matched = _hair_loss_profile(question, registry)
+    if matched is None:
+        return None
+    concept, profile = matched
+    direct_source_ids = profile.get("direct_source_chunk_ids") or {}
+    preferred_chunk_ids = direct_source_ids.get(policy_generation, []) if isinstance(direct_source_ids, dict) else []
+    direct_chunks = _direct_clause_chunks(
+        _selected_policy_chunks(chunks, policy_generation),
+        [str(term) for term in profile.get("evidence_terms", [])],
+        [str(chunk_id) for chunk_id in preferred_chunk_ids],
+    )
+    if not direct_chunks:
+        return None
+
+    conditions = [str(item) for item in profile.get("conditions", []) if str(item).strip()]
+    questions = list(concept.planner_clarification_questions)
+    required_evidence = list(concept.planner_required_evidence)
+    authority_note = _authority_note(policy_generation, direct_chunks, profile)
+
+    if _matches_any_term(question, [str(term) for term in profile.get("disease_or_side_effect_terms", [])]):
+        status = "clarification_required"
+        status_label = "추가 확인 필요"
+        summary = str(profile.get("alternative_cause_note") or "").strip()
+    elif _matches_any_term(question, [str(term) for term in profile.get("age_related_terms", [])]):
+        status = "conditional_exclusion"
+        status_label = "조건부 보상 제외 조항 확인"
+        summary = str(profile.get("conditional_exclusion_summary") or "").strip()
+    else:
+        status = "clarification_required"
+        status_label = "추가 확인 필요"
+        scope_note = str(profile.get("general_scope_note") or "").strip()
+        exclusion_note = str(profile.get("conditional_exclusion_summary") or "").strip()
+        summary = " ".join(note for note in (scope_note, exclusion_note) if note)
+
+    payload = {
+        "status": status,
+        "status_label": status_label,
+        "summary": summary,
+        "authority_note": authority_note,
+        "conditions": conditions,
+        "clarification_questions": questions,
+        "required_evidence": required_evidence,
+        "source_evidence": [_source_evidence(chunk) for chunk in direct_chunks],
+    }
+    return PolicyClauseDecision(
+        answer=_join_decision_answer(summary, authority_note, conditions),
+        payload=payload,
+        chunks=direct_chunks,
+    )
 
 
 def _format_won(value: int) -> str:

@@ -169,6 +169,18 @@ async function loadSystemSummary() {
   const assets = data.assets || {};
   const llm = data.llm || {};
   const embedding = data.embedding || {};
+  const providerLabels = {
+    sglang: 'SGLang',
+    vllm: 'vLLM',
+    trtllm: 'TensorRT-LLM',
+    ollama: 'Ollama',
+    openai: 'OpenAI',
+  };
+  const runningModels = Object.entries(llm.running_models || {}).flatMap(([provider, models]) => (
+    Array.isArray(models)
+      ? models.map((model) => ({ provider: providerLabels[provider] || provider, model }))
+      : []
+  ));
   container.innerHTML = `
     <div class="sys-grid">
       <div class="sys-card">
@@ -187,19 +199,16 @@ async function loadSystemSummary() {
         ${renderSystemFlagRow('users.json', assets.users)}
       </div>
       <div class="sys-card">
-        <h3>LLM</h3>
-        <div class="sys-row"><span class="sys-k">Ollama 허용</span><span class="sys-v ${llm.ollama_allowed ? 'ok' : 'err'}">${String(Boolean(llm.ollama_allowed))}</span></div>
-        <div class="sys-row"><span class="sys-k">기본 Ollama</span><span class="sys-v">${escapeHTML(llm.default_local_model || '-')}</span></div>
-        <div class="sys-row"><span class="sys-k">기본 vLLM</span><span class="sys-v">${escapeHTML(llm.default_vllm_model || '-')}</span></div>
-        <div class="sys-row"><span class="sys-k">기본 SGLang</span><span class="sys-v">${escapeHTML(llm.default_sglang_model || '-')}</span></div>
-        <div class="sys-row"><span class="sys-k">기본 OpenAI</span><span class="sys-v">${escapeHTML(llm.default_openai_model || '-')}</span></div>
+        <h3>기동 중인 LLM</h3>
+        ${runningModels.length
+          ? runningModels.map(({ provider, model }) => `<div class="sys-row"><span class="sys-k">${escapeHTML(provider)}</span><span class="sys-v ok">${escapeHTML(model)}</span></div>`).join('')
+          : '<div class="sys-row"><span class="sys-k">현재 서버</span><span class="sys-v">기동 중인 LLM 없음</span></div>'}
       </div>
       <div class="sys-card">
-        <h3>임베딩 / 모델 목록</h3>
+        <h3>임베딩</h3>
         <div class="sys-row"><span class="sys-k">임베딩 모델</span><span class="sys-v">${escapeHTML(embedding.model || '-')}</span></div>
         <div class="sys-row"><span class="sys-k">HF 다운로드</span><span class="sys-v ${embedding.hf_model_download ? 'ok' : 'err'}">${String(Boolean(embedding.hf_model_download))}</span></div>
         <div class="sys-row"><span class="sys-k">클라우드 배포</span><span class="sys-v ${embedding.cloud_deploy ? 'ok' : 'err'}">${String(Boolean(embedding.cloud_deploy))}</span></div>
-        <div class="code-blk">${escapeHTML(JSON.stringify(llm.available_models || {}, null, 2))}</div>
       </div>
     </div>
   `;

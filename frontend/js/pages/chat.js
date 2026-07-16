@@ -476,7 +476,8 @@ function appendMsg(role, text, sources, track = true, uiPayload = null) {
   const claimSnapshot = role === 'bot' ? (uiPayload?.claimSnapshot || null) : null;
   const claimSnapshotHtml = claimSnapshot?.result ? renderClaimResultHtml(claimSnapshot.result) : '';
   const botExtras = role === 'bot'
-    ? renderClarificationHtml(graphResult)
+    ? renderCanonicalDecisionHtml(graphResult)
+      + renderClarificationHtml(graphResult)
       + renderWarningHtml(warnings)
       + renderLegacyStructuredNoticeHtml(legacyStructuredNotice)
       + renderGraphReviewPathsHtml(graphResult)
@@ -777,6 +778,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
     if (!answer) answer = '응답이 비어 있습니다.';
     answer = sanitizeAssistantAnswer(answer, graphResult);
     bubble.innerHTML = renderAssistantContent(answer)
+      + renderCanonicalDecisionHtml(graphResult)
       + renderClarificationHtml(graphResult)
       + renderWarningHtml(warnings)
       + renderGraphReviewPathsHtml(graphResult)
@@ -964,7 +966,11 @@ function renderClarificationHtml(graphResult) {
   const terms = plan.normalized_terms && typeof plan.normalized_terms === 'object' ? plan.normalized_terms : {};
   const candidates = Array.isArray(plan.term_correction_candidates) ? plan.term_correction_candidates : [];
   const ambiguous = Array.isArray(plan.ambiguous_terms) ? plan.ambiguous_terms : [];
-  if (!questions.length && !Object.keys(terms).length && !candidates.length && !ambiguous.length) return '';
+  const requiredEvidence = [...new Set([
+    ...(Array.isArray(plan.required_evidence) ? plan.required_evidence : []),
+    ...(Array.isArray(graphResult?.required_evidence) ? graphResult.required_evidence : []),
+  ].map((value) => String(value || '').trim()).filter(Boolean))];
+  if (!questions.length && !Object.keys(terms).length && !candidates.length && !ambiguous.length && !requiredEvidence.length) return '';
 
   const questionHtml = questions.length
     ? `<div class="clarify-subtitle">추가 확인 질문</div><ul>${questions.map((question) => `<li>${escapeHTML(question)}</li>`).join('')}</ul>`
@@ -978,8 +984,45 @@ function renderClarificationHtml(graphResult) {
   const ambiguousHtml = ambiguous.length
     ? `<div class="clarify-tags">${ambiguous.map((term) => `<span>${escapeHTML(term)}</span>`).join('')}</div>`
     : '';
+  const evidenceHtml = requiredEvidence.length
+    ? `<div class="clarify-subtitle">확인할 자료</div><ul>${requiredEvidence.map((item) => `<li>${escapeHTML(item)}</li>`).join('')}</ul>`
+    : '';
 
-  return `<div class="msg-clarifications"><div class="evidence-title">추가 확인 필요</div>${ambiguousHtml}${questionHtml}${termHtml}${candidateHtml}</div>`;
+  return `<div class="msg-clarifications"><div class="evidence-title">추가 확인 필요</div>${ambiguousHtml}${questionHtml}${evidenceHtml}${termHtml}${candidateHtml}</div>`;
+}
+
+function renderCanonicalDecisionHtml(graphResult) {
+  const decision = graphResult?.canonical_decision;
+  if (!decision || typeof decision !== 'object') return '';
+
+  const status = String(decision.status_label || '약관 조항 확인').trim();
+  const summary = String(decision.summary || '').trim();
+  const authority = String(decision.authority_note || '').trim();
+  const conditions = Array.isArray(decision.conditions)
+    ? decision.conditions.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const evidence = Array.isArray(decision.source_evidence) ? decision.source_evidence : [];
+  if (!status && !summary && !authority && !conditions.length && !evidence.length) return '';
+
+  const conditionsHtml = conditions.length
+    ? `<div class="review-line"><strong>적용 조건</strong>: ${conditions.map(escapeHTML).join(', ')}</div>`
+    : '';
+  const sourceText = evidence.map((source) => {
+    const documentName = String(source?.doc_short || '약관').trim();
+    const pageStart = source?.page_start;
+    const pageEnd = source?.page_end;
+    if (pageStart === null || pageStart === undefined || pageStart === '') return documentName;
+    return pageEnd && pageEnd !== pageStart
+      ? `${documentName} p.${pageStart}-${pageEnd}`
+      : `${documentName} p.${pageStart}`;
+  }).filter(Boolean);
+  const sourceHtml = sourceText.length
+    ? `<div class="review-line"><strong>직접 조항 근거</strong>: ${sourceText.map(escapeHTML).join(', ')}</div>`
+    : '';
+  const summaryHtml = summary ? `<div class="review-summary">${escapeHTML(summary)}</div>` : '';
+  const authorityHtml = authority ? `<div class="review-line">${escapeHTML(authority)}</div>` : '';
+
+  return `<div class="graph-review-paths canonical-decision"><div class="evidence-title">${escapeHTML(status)}</div>${summaryHtml}${authorityHtml}${conditionsHtml}${sourceHtml}</div>`;
 }
 
 function renderWarningHtml(warnings) {
@@ -992,12 +1035,14 @@ function renderWarningHtml(warnings) {
 
 function hasRenderableGraphPayload(graphResult) {
   if (!graphResult || typeof graphResult !== 'object') return false;
+  if (graphResult.canonical_decision && typeof graphResult.canonical_decision === 'object') return true;
   if (Array.isArray(graphResult.graph_review_paths) && graphResult.graph_review_paths.length > 0) return true;
   if (Array.isArray(graphResult.facts) && graphResult.facts.length > 0) return true;
 
   const plan = graphResult.plan && typeof graphResult.plan === 'object' ? graphResult.plan : {};
   return Boolean(
     (Array.isArray(plan.clarification_questions) && plan.clarification_questions.length > 0)
+    || (Array.isArray(plan.required_evidence) && plan.required_evidence.length > 0)
     || (plan.normalized_terms && typeof plan.normalized_terms === 'object' && Object.keys(plan.normalized_terms).length > 0)
     || (Array.isArray(plan.term_correction_candidates) && plan.term_correction_candidates.length > 0)
     || (Array.isArray(plan.ambiguous_terms) && plan.ambiguous_terms.length > 0)
@@ -1361,6 +1406,8 @@ export {
   getActiveScopeFilters,
   hasRenderableGraphPayload,
   isReasoningSupportedModel,
+  renderCanonicalDecisionHtml,
+  renderClarificationHtml,
   renderSourcesHtml,
   sanitizeAssistantAnswer,
   renderGraphReviewPathsHtml,
@@ -1398,7 +1445,6 @@ function formatSelectedModelLabel(modelId) {
   const [, raw = value] = value.split(':', 2);
   if (value === 'sglang:qwen3-next-80b-a3b-instruct-fp8') return 'SGLang · Qwen3 Next 80B Instruct';
   if (value === 'sglang:gpt-oss-20b') return 'SGLang · GPT-OSS 20B';
-  if (value === 'ollama:exaone3.5:7.8b') return 'Ollama · exaone3.5:7.8b';
   if (value.startsWith('sglang:')) return `SGLang · ${raw}`;
   if (value.startsWith('vllm:')) return `vLLM · ${raw}`;
   if (value.startsWith('ollama:')) return `Ollama · ${raw}`;

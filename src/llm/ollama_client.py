@@ -108,8 +108,16 @@ class OllamaClient:
     def list_models(self) -> list[str]:
         """Ollama에 설치된 모델 이름 목록을 반환한다. 실패 시 빈 리스트."""
 
+        return self._list_model_names("api/tags")
+
+    def list_running_models(self) -> list[str]:
+        """Ollama가 현재 메모리에 올려 서빙하는 모델 이름을 반환한다."""
+
+        return self._list_model_names("api/ps")
+
+    def _list_model_names(self, path: str) -> list[str]:
         try:
-            response = requests.get(urljoin(self.host, "api/tags"), timeout=5)
+            response = requests.get(urljoin(self.host, path), timeout=5)
         except requests.RequestException:
             return []
         if response.status_code >= 400:

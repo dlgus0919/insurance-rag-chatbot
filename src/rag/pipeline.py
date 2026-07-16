@@ -22,9 +22,11 @@ from src.rag.source_grounded_answers import (
     build_absent_code_guard_answer,
     build_generation_deductible_comparison_answer,
     build_hira_fee_answer,
+    build_policy_clause_decision,
 )
 from src.rag.table_store import TableStore
 from src.retrieval import Hit
+from src.retrieval.chunk_lookup import graph_chunk_fallback_ids
 from src.retrieval.hybrid import rrf_fuse
 from src.retrieval.reranker import RerankResult, build_reranker
 try:
@@ -155,7 +157,8 @@ _HIRA_TERM_ALIASES: dict[str, tuple[str, ...]] = {
     "췌장 이식수술": ("췌이식술", "췌장이식술"),
     "간장 이식수술": ("간이식술", "간장이식술"),
 }
-_HIRA_LOOKUP_TRIGGERS = ("수가", "수가코드", "심평원", "점수", "코드")
+_HIRA_LOOKUP_TRIGGERS = ("수가코드", "수가", "심평원", "수가표", "점수", "수술코드", "hira")
+_HIRA_FEE_CODE_PATTERN = re.compile(r"^[A-Z]{1,3}\d{3,5}$")
 _HIRA_TERM_PATTERN = re.compile(r"[가-힣A-Za-z0-9·∙/()_-]{1,24}(?:이식수술|이식술|수술|절제술|폐쇄술|치료|검사)")
 _HIRA_CHUNK_CACHE: list[dict] | None = None
 
@@ -260,7 +263,7 @@ def _extract_hira_lookup_terms(question: str, graph_context: str | None = None) 
     """질문/Graph context에서 심평원 수가표 직접 조회용 코드와 시술명을 추출한다."""
 
     combined = f"{question}\n{graph_context or ''}"
-    codes = _extract_query_codes(combined)
+    codes = _extract_hira_fee_codes(question)
     terms: list[str] = []
     for match in _HIRA_TERM_PATTERN.finditer(combined):
         term = match.group(0).strip(" .,:;()[]")
@@ -277,6 +280,15 @@ def _extract_hira_lookup_terms(question: str, graph_context: str | None = None) 
                 if alias not in terms:
                     terms.append(alias)
     return codes, terms
+
+
+def _has_explicit_hira_fee_intent(question: str) -> bool:
+    """사용자 질문에 심평원 수가표 직접 조회 의도가 있는지 판별한다."""
+
+    normalized_question = str(question or "").replace(" ", "").casefold()
+    return bool(_extract_hira_fee_codes(question)) or any(
+        trigger in normalized_question for trigger in _HIRA_LOOKUP_TRIGGERS
+    )
 
 
 def _extract_relevant_hira_lines(text: str, codes: list[str], terms: list[str]) -> list[str]:
@@ -302,8 +314,7 @@ def _extract_relevant_hira_lines(text: str, codes: list[str], terms: list[str]) 
 def _build_hira_fee_context(question: str, graph_context: str | None = None) -> str | None:
     """HIRA 수가/점수 질의에서 chunk 검색 실패를 보완하는 직접 조회 컨텍스트."""
 
-    combined = f"{question}\n{graph_context or ''}"
-    if not any(trigger in combined for trigger in _HIRA_LOOKUP_TRIGGERS):
+    if not _has_explicit_hira_fee_intent(question):
         return None
     codes, terms = _extract_hira_lookup_terms(question, graph_context)
     if not codes and not terms:
@@ -470,6 +481,16 @@ def _extract_query_codes(question: str) -> list[str]:
     """질문에서 의료 코드 패턴을 추출하고 순서를 보존해 중복 제거한다."""
 
     return extract_code_terms(question)
+
+
+def _extract_hira_fee_codes(question: str) -> list[str]:
+    """Return user-supplied fee-code shaped values, excluding ICD diagnosis codes."""
+
+    return [
+        code
+        for code in _extract_query_codes(question)
+        if _HIRA_FEE_CODE_PATTERN.fullmatch(code.upper())
+    ]
 
 
 def _expand_retrieval_query(question: str) -> str:
@@ -1596,7 +1617,16 @@ def _prefer_exact_text_hits(hits: list[Hit], terms: list[str]) -> list[Hit]:
 
     if not terms:
         return hits
-    return sorted(hits, key=lambda hit: any(term in hit.document for term in terms), reverse=True)
+    compact_terms = [re.sub(r"\s+", "", term) for term in terms if term]
+
+    def exact_score(hit: Hit) -> int:
+        compact_document = re.sub(r"\s+", "", hit.document or "")
+        return max(
+            (len(term) for term in compact_terms if term and term in compact_document),
+            default=0,
+        )
+
+    return sorted(hits, key=exact_score, reverse=True)
 
 
 def _filter_hits_by_doc(hits: list[Hit], doc_filter: list[str] | None) -> list[Hit]:
@@ -1606,6 +1636,19 @@ def _filter_hits_by_doc(hits: list[Hit], doc_filter: list[str] | None) -> list[H
         return hits
     allowed = set(doc_filter)
     return [hit for hit in hits if hit.metadata.get("doc_short") in allowed]
+
+
+def _filter_hits_by_policy_generation(hits: list[Hit], policy_generation: str | None) -> list[Hit]:
+    """Keep selected-generation policy hits while retaining generation-neutral evidence."""
+
+    if policy_generation not in {"4th", "5th"}:
+        return hits
+    return [
+        hit
+        for hit in hits
+        if not hit.metadata.get("policy_generation")
+        or str(hit.metadata.get("policy_generation")) == policy_generation
+    ]
 
 
 def _hit_dedupe_key(hit: Hit) -> tuple[str, str, str, str, str]:
@@ -1765,6 +1808,7 @@ class RagPipeline:
         clause_detail_row_store: ClauseDetailRowStore | None = None,
         pair_mapping_store=None,
         v1_chunk_lookup: dict[str, dict] | None = None,
+        source_chunk_lookup: dict[str, dict] | None = None,
     ):
         self.embedder = embedder
         self.vector_store = vector_store
@@ -1783,6 +1827,7 @@ class RagPipeline:
         self._clause_detail_row_store = clause_detail_row_store
         self._pair_mapping_store = pair_mapping_store
         self._v1_chunk_lookup = v1_chunk_lookup or {}
+        self._source_chunk_lookup = source_chunk_lookup or {}
         self.graph_enabled = config.GRAPH_ENABLED and _GRAPH_IMPORT_OK
         if self.graph_enabled:
             try:
@@ -1792,6 +1837,42 @@ class RagPipeline:
                 self.graph_enabled = False
         else:
             self.graph_retriever = None
+
+    def _hydrate_source_metadata(self, hits: list[Hit]) -> list[Hit]:
+        """Restore missing index metadata from the canonical processed chunk record."""
+
+        if not self._source_chunk_lookup:
+            return hits
+
+        fields = (
+            "policy_generation",
+            "is_own_company",
+            "doc_name",
+            "product_name",
+            "product_type",
+            "effective_date",
+        )
+        for hit in hits:
+            source_row = self._source_chunk_lookup.get(hit.id)
+            if source_row is None:
+                for candidate_id in graph_chunk_fallback_ids(hit.id):
+                    source_row = self._source_chunk_lookup.get(candidate_id)
+                    if source_row is not None:
+                        break
+            if not isinstance(source_row, dict):
+                continue
+            source_metadata = source_row.get("metadata")
+            if not isinstance(source_metadata, dict):
+                continue
+            metadata = dict(hit.metadata or {})
+            changed = False
+            for field in fields:
+                if metadata.get(field) is None and source_metadata.get(field) is not None:
+                    metadata[field] = source_metadata[field]
+                    changed = True
+            if changed:
+                hit.metadata = metadata
+        return hits
 
     def _clause_detail_manifest_rows(
         self,
@@ -1919,10 +2000,12 @@ class RagPipeline:
         doc_filter: list[str] | None = None,
         return_debug: bool = False,
         graph_hits: list[Hit] | None = None,
+        policy_generation: str | None = None,
     ) -> tuple[list[Hit], DebugInfo | None]:
         """질문에 대한 최종 검색 후보를 반환한다."""
 
         final_top_k = top_k or self.top_k_final
+        graph_hits = self._hydrate_source_metadata(list(graph_hits or []))
         search_intent = classify_search_intent(
             question,
             doc_filter=doc_filter,
@@ -1931,7 +2014,8 @@ class RagPipeline:
         )
         retrieval_query = _expand_retrieval_query(question)
         query_codes = _extract_query_codes(question)
-        named_code_terms = _extract_named_code_terms(question)
+        lexical_priority_terms = get_default_ontology_registry().lexical_priority_terms(question)
+        named_code_terms = _ordered_unique(_extract_named_code_terms(question) + lexical_priority_terms)
         surgery_name = _extract_surgery_name_from_query(question)
         requested_docs = _infer_requested_doc_shorts(question, doc_filter)
         enforce_doc_coverage = _needs_doc_coverage(question, requested_docs)
@@ -1986,6 +2070,8 @@ class RagPipeline:
                 prefer_non_table=True,
                 doc_filter=doc_filter,
             )
+            code_hits = self._hydrate_source_metadata(code_hits)
+            code_hits = _filter_hits_by_policy_generation(code_hits, policy_generation)
 
         should_run_general_dense = not (can_skip_general_dense_candidate and bool(code_hits))
         if should_run_general_dense and query_embedding is not None:
@@ -1994,6 +2080,8 @@ class RagPipeline:
             else:
                 general_top_k = dense_top_k
             general_hits = self.vector_store.query(query_embedding, general_top_k, doc_filter=doc_filter)
+            general_hits = self._hydrate_source_metadata(general_hits)
+            general_hits = _filter_hits_by_policy_generation(general_hits, policy_generation)
             seen = {hit.id for hit in code_hits}
             dense_hits = code_hits + [hit for hit in general_hits if hit.id not in seen]
         else:
@@ -2001,7 +2089,9 @@ class RagPipeline:
 
         if not search_intent.skip_bm25:
             bm25_hits = self.bm25.query(retrieval_query, bm25_top_k)
+            bm25_hits = self._hydrate_source_metadata(bm25_hits)
             bm25_hits = _filter_hits_by_doc(bm25_hits, doc_filter)
+            bm25_hits = _filter_hits_by_policy_generation(bm25_hits, policy_generation)
         execution_info = RetrievalExecutionInfo(
             dynamic_rrf_enabled=dynamic_enabled,
             dynamic_rrf_mode=dynamic_mode,
@@ -2029,6 +2119,8 @@ class RagPipeline:
                 detail_query = _expand_clause_detail_query(question, retrieval_query)
                 detail_pool_size = max(bm25_top_k * 4, 80)
                 detail_candidates = _filter_hits_by_doc(self.bm25.query(detail_query, detail_pool_size), focus_docs)
+                detail_candidates = self._hydrate_source_metadata(detail_candidates)
+                detail_candidates = _filter_hits_by_policy_generation(detail_candidates, policy_generation)
                 scored_detail_hits = [
                     (_score_clause_detail_hit(hit, question), hit)
                     for hit in detail_candidates
@@ -2072,7 +2164,10 @@ class RagPipeline:
             fused_hits = _boost_surgery_name_table_rows(fused_hits, surgery_name)
 
         if graph_hits:
-            fused_hits = _merge_hits_preserving_order(fused_hits, graph_hits)
+            fused_hits = _merge_hits_preserving_order(
+                fused_hits,
+                _filter_hits_by_policy_generation(graph_hits, policy_generation),
+            )
         if clause_detail_hits:
             fused_hits = _merge_hits_preserving_order(
                 clause_detail_hits,
@@ -2097,9 +2192,16 @@ class RagPipeline:
         if clause_detail_hits:
             final_hits = _merge_hits_preserving_order(clause_detail_hits, final_hits, limit=final_top_k)
         if graph_hits:
-            final_hits = _merge_hits_preserving_order(final_hits, graph_hits, limit=final_top_k)
+            final_hits = _merge_hits_preserving_order(
+                final_hits,
+                _filter_hits_by_policy_generation(graph_hits, policy_generation),
+                limit=final_top_k,
+            )
         if enforce_doc_coverage:
             final_hits = self._restore_doc_coverage(final_hits, coverage_hits, final_top_k)
+        final_hits = self._hydrate_source_metadata(final_hits)
+        final_hits = _filter_hits_by_policy_generation(final_hits, policy_generation)
+        final_hits = _prefer_exact_text_hits(final_hits, named_code_terms)
         debug = (
             DebugInfo(
                 dense_hits=_hits_to_stage(debug_dense),
@@ -2123,6 +2225,7 @@ class RagPipeline:
         doc_filter: list[str] | None = None,
         return_debug: bool = False,
         auto_params: AutoRagParams | None = None,
+        policy_generation: str | None = None,
     ) -> RagAnswer:
         """질문에 대해 답변과 사용한 청크를 반환한다."""
 
@@ -2190,6 +2293,7 @@ class RagPipeline:
             doc_filter=doc_filter,
             return_debug=return_debug,
             graph_hits=graph_hits,
+            policy_generation=policy_generation,
         )
         if auto_params is not None:
             preserve_ids = {hit.id for hit in graph_hits}
@@ -2211,6 +2315,13 @@ class RagPipeline:
             debug.graph_result = graph_result
 
         chunks = [_hit_to_chunk(hit) for hit in fused_hits]
+        policy_decision = build_policy_clause_decision(
+            question,
+            chunks,
+            policy_generation=policy_generation,
+        )
+        if policy_decision is not None:
+            chunks = policy_decision.chunks
         clause_detail_rows = self._clause_detail_manifest_rows(
             question,
             _clause_detail_categories(question),
@@ -2218,11 +2329,15 @@ class RagPipeline:
         )
 
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
-        deterministic_answer = _deterministic_guard_answer(
-            question,
-            chunks,
-            graph_context=graph_context,
-            clause_detail_rows=clause_detail_rows,
+        deterministic_answer = (
+            policy_decision.answer
+            if policy_decision is not None
+            else _deterministic_guard_answer(
+                question,
+                chunks,
+                graph_context=graph_context,
+                clause_detail_rows=clause_detail_rows,
+            )
         )
         if deterministic_answer:
             answer_text = append_retrieved_source_citations(deterministic_answer, chunks)

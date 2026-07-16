@@ -297,6 +297,63 @@ def test_policy_generation_context_is_added_to_general_prompt() -> None:
     assert "사용자가 선택한 실손 세대는 5세대 실손" in prompt
 
 
+@pytest.mark.anyio
+async def test_general_chat_forwards_selected_policy_generation_to_retrieval(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
+    captured: dict[str, object] = {}
+
+    async def fake_prepare(*_args, **kwargs):
+        captured["policy_generation"] = kwargs.get("policy_generation")
+        return [], [], "prompt", {"graph_review_paths": [], "facts": [], "plan": {}}, [], "세대별 근거 답변", None
+
+    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_prepare)
+    created = await sessions.create_session(SessionCreateRequest(title="세대 필터"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="노화현상으로 인한 탈모는 보상 가능한가요?",
+            session_id=created.id,
+            model="gemma3:4b",
+            policy_generation="4th",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    await _stream_text(response)
+
+    assert captured["policy_generation"] == "4th"
+
+
+@pytest.mark.anyio
+async def test_general_chat_uses_current_policy_generation_for_each_turn_in_same_session(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
+    captured: list[str | None] = []
+
+    async def fake_prepare(*_args, **kwargs):
+        captured.append(kwargs.get("policy_generation"))
+        return [], [], "prompt", {"graph_review_paths": [], "facts": [], "plan": {}}, [], "세대별 근거 답변", None
+
+    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_prepare)
+    created = await sessions.create_session(SessionCreateRequest(title="세대 전환"), _user(), db_session)
+
+    for policy_generation in ("4th", "5th"):
+        response = await chat.chat_stream(
+            ChatRequest(
+                query="노화현상으로 인한 탈모는 보상 가능한가요?",
+                session_id=created.id,
+                model="gemma3:4b",
+                policy_generation=policy_generation,
+            ),
+            None,
+            _user(),
+            db_session,
+        )
+        await _stream_text(response)
+
+    assert captured == ["4th", "5th"]
+
+
 class FakeGraphRetriever:
     def retrieve(self, question):
         return GraphRetrievalResult(
@@ -624,6 +681,7 @@ async def test_chat_stream_strips_model_structured_template_when_graph_payload_i
 
     assert "event: graph" in stream
     assert "진단코드 검토" in stream
+    assert "■ 섹션 1️⃣" not in stream
     assert messages[1].content == "N39.3은 보상 제외로 판단됩니다."
     assert "■ 섹션" not in messages[1].content
 

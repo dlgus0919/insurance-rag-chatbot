@@ -541,7 +541,14 @@ def is_openai_model(model: str) -> bool:
 def is_ollama_allowed() -> bool:
     """Return whether Ollama models are allowed."""
 
-    return os.getenv("ALLOW_OLLAMA", "true").lower() == "true"
+    return os.getenv("ALLOW_OLLAMA", "false").lower() == "true"
+
+
+def _matches_runtime_provider(provider: str) -> bool:
+    """Return whether a provider belongs to this app process's active runtime."""
+
+    active_provider = os.getenv("INSURANCE_RAG_PROVIDER", "").strip().lower()
+    return not active_provider or active_provider == provider
 
 
 def is_cloud_allowed() -> bool:
@@ -643,17 +650,17 @@ def list_runtime_available_models() -> dict[str, list[str]]:
     """Return only models that are callable in the current runtime."""
 
     grouped: dict[str, list[str]] = {
-        "sglang": _runtime_available_sglang_models(),
-        "vllm": _runtime_available_vllm_models(),
-        "trtllm": _runtime_available_trtllm_models(),
+        "sglang": _runtime_available_sglang_models() if _matches_runtime_provider("sglang") else [],
+        "vllm": _runtime_available_vllm_models() if _matches_runtime_provider("vllm") else [],
+        "trtllm": _runtime_available_trtllm_models() if _matches_runtime_provider("trtllm") else [],
         "ollama": [],
         "openai": [],
     }
-    if is_ollama_allowed():
+    if is_ollama_allowed() and _matches_runtime_provider("ollama"):
         try:
-            installed = set(OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL).list_models())
-            grouped["ollama"] = [model for model in config.OLLAMA_CANDIDATE_MODELS if model in installed]
-            if config.OLLAMA_MODEL in installed and config.OLLAMA_MODEL not in grouped["ollama"]:
+            running = set(OllamaClient(config.OLLAMA_HOST, config.OLLAMA_MODEL).list_running_models())
+            grouped["ollama"] = [model for model in config.OLLAMA_CANDIDATE_MODELS if model in running]
+            if config.OLLAMA_MODEL in running and config.OLLAMA_MODEL not in grouped["ollama"]:
                 grouped["ollama"].insert(0, config.OLLAMA_MODEL)
         except Exception:
             grouped["ollama"] = []

@@ -52,6 +52,29 @@ def test_query_planner_ordinary_rag() -> None:
     assert plan.grade_system is None
 
 
+def test_query_planner_does_not_treat_surgery_suffix_as_drunk_injury() -> None:
+    plan = GraphQueryPlanner().plan("충수절제술의 1-5종 수술종수는?")
+
+    assert plan.conditions.count("음주 후 상해") == 0
+    assert plan.normalized_terms.get("술") is None
+
+
+@pytest.mark.parametrize("query", ["술먹고 다쳤습니다.", "술마시고 넘어졌어요."])
+def test_query_planner_matches_attached_standalone_drinking_expression(query: str) -> None:
+    plan = GraphQueryPlanner().plan(query)
+
+    assert "음주 후 상해" in plan.conditions
+
+
+def test_query_planner_hair_loss_adds_source_grounded_cause_questions() -> None:
+    plan = GraphQueryPlanner().plan("탈모 보상 가능?")
+
+    assert "탈모" in plan.coverage_topics
+    assert any("노화현상" in question and "질병성 탈모" in question for question in plan.clarification_questions)
+    assert "진단명 또는 진단코드" in plan.required_evidence
+    assert "의사소견" in plan.required_evidence
+
+
 def test_query_planner_comparison_no_extraction() -> None:
     planner = GraphQueryPlanner()
     query = "기관지 식도루 폐쇄술과 간장 이식수술의 차이점과 각각 해당하는 수술종류를 알려주세요."

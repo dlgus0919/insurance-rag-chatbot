@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
-from src.ontology.registry import OntologyRegistry, get_default_ontology_registry
+from src.ontology.registry import OntologyRegistry, get_default_ontology_registry, matches_ontology_alias
 
 
 @dataclass
@@ -40,6 +40,7 @@ class GraphQueryPlan:
     term_correction_candidates: list[dict[str, Any]] = field(default_factory=list)
     ambiguous_terms: List[str] = field(default_factory=list)
     clarification_questions: List[str] = field(default_factory=list)
+    required_evidence: List[str] = field(default_factory=list)
 
 
 class GraphQueryPlanner:
@@ -115,25 +116,23 @@ class GraphQueryPlanner:
         )
 
     def _apply_aliases(self, query: str, plan: GraphQueryPlan) -> None:
-        lowered_query = query.lower()
         for canonical, aliases in self.term_aliases.items():
             for alias in aliases:
-                if alias.lower() in lowered_query:
+                if matches_ontology_alias(query, alias):
                     self._append_unique(plan.coverage_topics, canonical)
                     if alias != canonical:
                         plan.normalized_terms[alias] = canonical
         for canonical, aliases in self.condition_aliases.items():
             for alias in aliases:
-                if alias.lower() in lowered_query:
+                if matches_ontology_alias(query, alias):
                     self._append_unique(plan.conditions, canonical)
                     if alias != canonical:
                         plan.normalized_terms[alias] = canonical
 
     def _apply_term_correction_candidates(self, query: str, plan: GraphQueryPlan) -> None:
-        lowered_query = query.lower()
         for normalized, aliases in self.term_candidate_aliases.items():
             for alias in aliases:
-                if alias.lower() in lowered_query:
+                if matches_ontology_alias(query, alias):
                     self._append_candidate(
                         plan,
                         raw=alias,
@@ -220,38 +219,45 @@ class GraphQueryPlanner:
             "보상", "청구", "계산", "지급", "가능", "한도", "공제", "자기부담",
             "검토", "판단", "확인", "봐야", "되나요", "받을 수",
         )
-        if not any(token in query for token in judgment_tokens):
-            return
+        if any(token in query for token in judgment_tokens):
+            generation_sensitive = {
+                "실손", "도수치료", "체외충격파치료", "증식치료", "비급여 주사료",
+                "MRI", "MRA", "자기공명영상진단", "상급병실료 차액", "3대비급여",
+            }
+            if generation_sensitive.intersection(plan.coverage_topics) and not plan.policy_generation:
+                self._append_unique(plan.clarification_questions, "어느 실손 세대(예: 4세대/5세대) 기준인지 확인해 주세요.")
+                self._append_unique(plan.ambiguous_terms, "실손 세대")
 
-        generation_sensitive = {
-            "실손", "도수치료", "체외충격파치료", "증식치료", "비급여 주사료",
-            "MRI", "MRA", "자기공명영상진단", "상급병실료 차액", "3대비급여",
-        }
-        if generation_sensitive.intersection(plan.coverage_topics) and not plan.policy_generation:
-            self._append_unique(plan.clarification_questions, "어느 실손 세대(예: 4세대/5세대) 기준인지 확인해 주세요.")
-            self._append_unique(plan.ambiguous_terms, "실손 세대")
+            visit_sensitive = generation_sensitive | {"건강보험 미적용"}
+            if visit_sensitive.intersection(plan.coverage_topics) and not plan.visit_type:
+                self._append_unique(plan.clarification_questions, "입원/통원/처방조제 중 어떤 방문 구분인지 확인해 주세요.")
+                self._append_unique(plan.ambiguous_terms, "방문 구분")
 
-        visit_sensitive = generation_sensitive | {"건강보험 미적용"}
-        if visit_sensitive.intersection(plan.coverage_topics) and not plan.visit_type:
-            self._append_unique(plan.clarification_questions, "입원/통원/처방조제 중 어떤 방문 구분인지 확인해 주세요.")
-            self._append_unique(plan.ambiguous_terms, "방문 구분")
+            if ("특약" in plan.coverage_topics or "특약 가입 여부 확인" in plan.conditions) and not plan.policy_product:
+                self._append_unique(plan.clarification_questions, "어떤 상품 또는 특약 가입 여부를 기준으로 볼지 확인해 주세요.")
+                self._append_unique(plan.ambiguous_terms, "상품/특약")
 
-        if ("특약" in plan.coverage_topics or "특약 가입 여부 확인" in plan.conditions) and not plan.policy_product:
-            self._append_unique(plan.clarification_questions, "어떤 상품 또는 특약 가입 여부를 기준으로 볼지 확인해 주세요.")
-            self._append_unique(plan.ambiguous_terms, "상품/특약")
+            if (
+                "미용 목적" in plan.coverage_topics
+                or "미용 목적" in plan.conditions
+                or "건강검진" in plan.coverage_topics
+                or "예방 목적" in plan.conditions
+            ) and "치료 목적" not in plan.conditions:
+                self._append_unique(plan.clarification_questions, "치료 목적인지 미용/예방 목적인지 확인할 수 있는 진단서 또는 의사소견이 있는지 확인해 주세요.")
+                self._append_unique(plan.ambiguous_terms, "치료 목적")
 
-        if (
-            "미용 목적" in plan.coverage_topics
-            or "미용 목적" in plan.conditions
-            or "건강검진" in plan.coverage_topics
-            or "예방 목적" in plan.conditions
-        ) and "치료 목적" not in plan.conditions:
-            self._append_unique(plan.clarification_questions, "치료 목적인지 미용/예방 목적인지 확인할 수 있는 진단서 또는 의사소견이 있는지 확인해 주세요.")
-            self._append_unique(plan.ambiguous_terms, "치료 목적")
+            if not plan.evidence_tags and any(topic in plan.coverage_topics for topic in generation_sensitive | {"실손", "건강보험 미적용"}):
+                self._append_unique(plan.clarification_questions, "진료비 영수증, 진료비 세부내역서, 진단서 등 어떤 증빙이 있는지 확인해 주세요.")
+                self._append_unique(plan.ambiguous_terms, "증빙 서류")
 
-        if not plan.evidence_tags and any(topic in plan.coverage_topics for topic in generation_sensitive | {"실손", "건강보험 미적용"}):
-            self._append_unique(plan.clarification_questions, "진료비 영수증, 진료비 세부내역서, 진단서 등 어떤 증빙이 있는지 확인해 주세요.")
-            self._append_unique(plan.ambiguous_terms, "증빙 서류")
+        questions, evidence = self.ontology_registry.planner_guidance(
+            plan.coverage_topics,
+            plan.conditions,
+        )
+        for question in questions:
+            self._append_unique(plan.clarification_questions, question)
+        for item in evidence:
+            self._append_unique(plan.required_evidence, item)
 
     def plan(self, query: str, clarification: dict | None = None) -> GraphQueryPlan:
         plan = GraphQueryPlan()

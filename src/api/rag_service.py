@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from functools import lru_cache
 import logging
 import re
@@ -17,11 +18,13 @@ from src.rag.clause_detail_rows import ClauseDetailRowStore, resolve_clause_deta
 from src.rag.evidence import append_evidence_validation_warning
 from src.rag.pipeline import RagPipeline, _deterministic_guard_answer, _hit_to_chunk
 from src.rag.quick_code import build_quick_code_prompt, retrieve_quick_code_chunks
+from src.rag.source_grounded_answers import PolicyClauseDecision, build_policy_clause_decision
 from src.rag.table_store import TableStore
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
 from src.retrieval.index_mode import INDEX_MODES, resolve_effective_index_mode, resolve_index_paths, resolve_index_profile
 from src.retrieval.reranker import build_reranker
+from src.retrieval.pair_mapping import load_chunk_lookup
 from src.retrieval.vector_store import VectorStore
 
 
@@ -77,6 +80,7 @@ _GRAPH_STRUCTURED_CUE_KEYS = (
     "disease_grouping_requested",
     "normalized_terms",
     "clarification_questions",
+    "required_evidence",
 )
 
 
@@ -98,6 +102,15 @@ def _load_index_retrieval_components(index_mode: str):
     vector_store = VectorStore(chroma_dir)
     bm25 = BM25Index.load(bm25_path)
     return vector_store, bm25
+
+
+@lru_cache(maxsize=1)
+def _load_source_chunk_lookup() -> dict[str, dict]:
+    """Load canonical chunk metadata used to repair legacy index records."""
+
+    if not config.CHUNKS_PATH.exists():
+        return {}
+    return load_chunk_lookup(config.CHUNKS_PATH)
 
 
 @lru_cache(maxsize=16)
@@ -122,6 +135,7 @@ def get_rag_pipeline(
         rrf_k=config.RRF_K,
         reranker=reranker,
         clause_detail_row_store=ClauseDetailRowStore(resolve_clause_detail_rows_path(index_mode)),
+        source_chunk_lookup=_load_source_chunk_lookup(),
     )
 
 
@@ -233,6 +247,7 @@ async def prepare_retrieved_context(
     filters: dict | None = None,
     *,
     auto_params: AutoRagParams | None = None,
+    policy_generation: str | None = None,
 ):
     """Retrieve chunks, GraphDB facts, source metadata, and a prompt for generation."""
 
@@ -275,13 +290,15 @@ async def prepare_retrieved_context(
             graph_hits = []
 
     doc_filter = extract_doc_filter(filters)
-    hits, debug = pipeline.retrieve_hits(
-        question,
-        top_k=top_k,
-        doc_filter=doc_filter,
-        graph_hits=graph_hits,
-        return_debug=True,
-    )
+    retrieval_kwargs: dict[str, Any] = {
+        "top_k": top_k,
+        "doc_filter": doc_filter,
+        "graph_hits": graph_hits,
+        "return_debug": True,
+    }
+    if policy_generation:
+        retrieval_kwargs["policy_generation"] = policy_generation
+    hits, debug = pipeline.retrieve_hits(question, **retrieval_kwargs)
     if auto_params is not None:
         preserve_ids = {hit.id for hit in graph_hits}
         hits, cutoff = apply_adaptive_k_to_hits(
@@ -299,15 +316,29 @@ async def prepare_retrieved_context(
             debug.final_hits = [item for item in debug.final_hits if item.chunk_id in selected_ids]
             debug.auto_cutoff = cutoff
     chunks = [_hit_to_chunk(hit) for hit in hits]
+    policy_decision = build_policy_clause_decision(
+        question,
+        chunks,
+        policy_generation=policy_generation,
+    )
+    if policy_decision is not None:
+        chunks = policy_decision.chunks
     sources = chunks_to_sources(chunks)
     prompt = pipeline.build_prompt(question, chunks, graph_context=graph_context)
     history_context = build_history_context(history)
     if history_context:
         prompt = f"{history_context}\n\n{prompt}"
-    deterministic_answer = _deterministic_guard_answer(question, chunks, graph_context=graph_context)
+    deterministic_answer = (
+        policy_decision.answer
+        if policy_decision is not None
+        else _deterministic_guard_answer(question, chunks, graph_context=graph_context)
+    )
     if debug is not None:
         debug.graph_result = graph_result
-    graph_payload = graph_result_to_payload(graph_result)
+    graph_payload = apply_policy_clause_decision(
+        graph_result_to_payload(graph_result),
+        policy_decision,
+    )
     _log_graph_payload_visibility(question, graph_payload)
     return chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug
 
@@ -686,6 +717,7 @@ def graph_result_to_payload(result: Any) -> dict | None:
         "term_correction_candidates": list(getattr(plan, "term_correction_candidates", []) or []),
         "ambiguous_terms": list(getattr(plan, "ambiguous_terms", []) or []),
         "clarification_questions": list(getattr(plan, "clarification_questions", []) or []),
+        "required_evidence": list(getattr(plan, "required_evidence", []) or []),
     }
     _prune_clarification_for_confirmed_exclusion(plan_payload, review_paths)
 
@@ -700,6 +732,51 @@ def graph_result_to_payload(result: Any) -> dict | None:
         "source_chunk_ids": list(getattr(result, "source_chunk_ids", []) or []),
         "warnings": list(getattr(result, "warnings", []) or []),
     }
+
+
+def _merge_unique_text(existing: list[Any], additions: list[Any]) -> list[str]:
+    merged: list[str] = []
+    for value in [*existing, *additions]:
+        text = str(value or "").strip()
+        if text and text not in merged:
+            merged.append(text)
+    return merged
+
+
+def apply_policy_clause_decision(
+    graph_payload: dict | None,
+    decision: PolicyClauseDecision | None,
+) -> dict | None:
+    """Attach direct policy evidence without allowing a generic Graph fallback to override it."""
+
+    if decision is None:
+        return graph_payload
+
+    payload = deepcopy(graph_payload) if isinstance(graph_payload, dict) else {}
+    plan = payload.setdefault("plan", {})
+    if not isinstance(plan, dict):
+        plan = {}
+        payload["plan"] = plan
+    decision_payload = deepcopy(decision.payload)
+    plan["clarification_questions"] = _merge_unique_text(
+        list(plan.get("clarification_questions") or []),
+        list(decision_payload.get("clarification_questions") or []),
+    )
+    plan["required_evidence"] = _merge_unique_text(
+        list(plan.get("required_evidence") or []),
+        list(decision_payload.get("required_evidence") or []),
+    )
+    payload["required_evidence"] = _merge_unique_text(
+        list(payload.get("required_evidence") or []),
+        list(decision_payload.get("required_evidence") or []),
+    )
+    payload["canonical_decision"] = decision_payload
+    payload["graph_review_paths"] = [
+        path
+        for path in list(payload.get("graph_review_paths") or [])
+        if path.get("path_type") != "claim_condition_review"
+    ]
+    return payload
 
 
 async def prepare_quickcode_context(
@@ -778,12 +855,16 @@ async def prepare_formal_context(
     history: list[ChatMessage],
     filters: dict | None,
     memo: str | None = None,
+    policy_generation: str | None = None,
 ):
     """Build formal-mode context with a forced metadata/doc filter."""
 
     doc_filter = formal_doc_filter(filters)
     retrieval_query = build_formal_retrieval_query(question, filters)
-    hits, _ = pipeline.retrieve_hits(retrieval_query, top_k=top_k, doc_filter=doc_filter)
+    retrieval_kwargs: dict[str, Any] = {"top_k": top_k, "doc_filter": doc_filter}
+    if policy_generation:
+        retrieval_kwargs["policy_generation"] = policy_generation
+    hits, _ = pipeline.retrieve_hits(retrieval_query, **retrieval_kwargs)
     chunks = [_hit_to_chunk(hit) for hit in hits]
     sources = chunks_to_sources(chunks)
     prompt_blocks: list[str] = []
@@ -910,6 +991,8 @@ def graph_payload_has_renderable_evidence(graph_payload: dict | None) -> bool:
 
     if not isinstance(graph_payload, dict):
         return False
+    if isinstance(graph_payload.get("canonical_decision"), dict):
+        return True
     if graph_payload.get("graph_review_paths"):
         return True
     if graph_payload.get("facts"):
@@ -964,6 +1047,7 @@ __all__ = [
     "finalize_answer",
     "finalize_answer_for_question",
     "formal_doc_filter",
+    "apply_policy_clause_decision",
     "graph_result_to_payload",
     "graph_payload_has_renderable_evidence",
     "get_rag_pipeline",

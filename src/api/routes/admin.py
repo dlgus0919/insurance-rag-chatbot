@@ -30,7 +30,7 @@ from src.api.schemas.admin import (
 from src.auth import users as user_store
 from src.auth.users import User
 from src.graph.vector_sync import build_report, check_evidence_sync, load_evidence_rows
-from src.llm.factory import is_ollama_allowed, list_available_models
+from src.llm.factory import list_runtime_available_models
 from src.retrieval.index_mode import (
     INDEX_MODES,
     USER_FACING_DEFAULT_ALIASES,
@@ -391,12 +391,7 @@ async def system_summary(
         },
         "indices": index_rows,
         "llm": {
-            "ollama_allowed": is_ollama_allowed(),
-            "default_local_model": config.OLLAMA_MODEL,
-            "default_openai_model": config.OPENAI_DEFAULT_MODEL,
-            "default_vllm_model": config.VLLM_DEFAULT_MODEL,
-            "default_sglang_model": config.SGLANG_DEFAULT_MODEL,
-            "available_models": list_available_models(),
+            "running_models": list_runtime_available_models(),
         },
         "embedding": {
             "model": config.EMBEDDING_MODEL,

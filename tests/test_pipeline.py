@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 import src.rag.pipeline as pipeline_module
 
 from src.rag.pipeline import (
@@ -9,6 +10,8 @@ from src.rag.pipeline import (
     _build_hira_fee_context,
     _build_structured_context,
     _boost_surgery_name_table_rows,
+    _filter_hits_by_policy_generation,
+    _prefer_exact_text_hits,
     _deterministic_guard_answer,
     _extract_clause_detail_evidence_rows,
     _extract_disability_region_from_query,
@@ -21,7 +24,6 @@ from src.rag.pipeline import (
     _is_low_value_wide_range,
     _merge_hits_preserving_order,
     _needs_doc_coverage,
-    _prefer_exact_text_hits,
 )
 from src.parser.chunker import Chunk
 from src.retrieval import Hit
@@ -99,6 +101,135 @@ def test_hira_fee_context_finds_pancreas_transplant_codes_from_chunks(monkeypatc
     assert "Q8061" in context
     assert "Q8062" in context
     assert "p.638" in context
+
+
+def test_hira_fee_context_requires_explicit_fee_intent_from_user_question(monkeypatch) -> None:
+    monkeypatch.setattr(
+        pipeline_module,
+        "_HIRA_CHUNK_CACHE",
+        [
+            {
+                "text": "충수절제술\\nQ2861 충수절제술\\nQ2862 충수절제술(복강경)",
+                "metadata": {"doc_short": "심평원", "page_start": 321, "source_file": "hira-fee.pdf"},
+            }
+        ],
+    )
+
+    no_fee_context = _build_hira_fee_context(
+        "충수절제술의 1-5종 수술종수는?",
+        graph_context="코드나 약관 판단은 원문 근거를 우선합니다.",
+    )
+    fee_context = _build_hira_fee_context("충수절제술의 수가코드와 점수를 알려줘.")
+
+    assert no_fee_context is None
+    assert fee_context is not None
+    assert "Q2861" in fee_context
+    assert "Q2862" in fee_context
+
+
+@pytest.mark.parametrize("question", ["N39.3 보상 가능 여부", "N39.3 진단코드가 무엇인가요?"])
+def test_hira_fee_context_does_not_treat_icd_code_as_fee_lookup_intent(monkeypatch, question: str) -> None:
+    monkeypatch.setattr(
+        pipeline_module,
+        "_HIRA_CHUNK_CACHE",
+        [
+            {
+                "text": "충수절제술\\nQ2861 충수절제술\\nQ2862 충수절제술(복강경)",
+                "metadata": {"doc_short": "심평원", "page_start": 321, "source_file": "hira-fee.pdf"},
+            }
+        ],
+    )
+
+    assert _build_hira_fee_context(question, graph_context="Q2861 수가 행이 존재합니다.") is None
+
+
+@pytest.mark.parametrize("question", ["Q2861 설명", "AA157 설명", "충수절제술의 수가와 점수를 알려줘"])
+def test_hira_fee_context_keeps_fee_code_or_explicit_fee_intent(monkeypatch, question: str) -> None:
+    monkeypatch.setattr(
+        pipeline_module,
+        "_HIRA_CHUNK_CACHE",
+        [
+            {
+                "text": "충수절제술\\nQ2861 충수절제술 100점\\nAA157 충수절제술 보조 80점",
+                "metadata": {"doc_short": "심평원", "page_start": 321, "source_file": "hira-fee.pdf"},
+            }
+        ],
+    )
+
+    assert _build_hira_fee_context(question) is not None
+
+
+def test_policy_generation_filter_excludes_other_generation_and_exact_policy_term_wins() -> None:
+    fourth = Hit(
+        id="hair-4th",
+        score=0.1,
+        document="노화현상으로 인한 탈모 치료 관련 비급여 의료비",
+        metadata={"policy_generation": "4th", "doc_short": "약관"},
+    )
+    fifth = Hit(
+        id="hair-5th",
+        score=0.9,
+        document="노화현상으로 인한 탈모 치료 관련 비급여 의료비",
+        metadata={"policy_generation": "5th", "doc_short": "표준약관"},
+    )
+    casebook = Hit(
+        id="casebook",
+        score=1.0,
+        document="상담사례집의 일반 안내 문장",
+        metadata={"doc_short": "상담사례집"},
+    )
+
+    selected = _filter_hits_by_policy_generation([casebook, fifth, fourth], "4th")
+    ordered = _prefer_exact_text_hits(selected, ["노화현상으로 인한 탈모", "탈모"])
+
+    assert [hit.id for hit in selected] == ["casebook", "hair-4th"]
+    assert ordered[0].id == "hair-4th"
+
+
+def test_retrieve_hits_hydrates_missing_generation_from_source_chunk_lookup() -> None:
+    class HairVectorStore:
+        def query(self, query_embedding, top_k: int, doc_filter: list[str] | None = None):
+            return [
+                Hit(
+                    id="hair-5th",
+                    score=0.9,
+                    document="노화현상으로 인한 탈모 관련 조항",
+                    metadata={"doc_short": "표준약관"},
+                ),
+                Hit(
+                    id="hair-4th",
+                    score=0.8,
+                    document="노화현상으로 인한 탈모 관련 조항",
+                    metadata={"doc_short": "약관"},
+                ),
+            ]
+
+    class HairBM25:
+        def query(self, text: str, top_k: int):
+            return HairVectorStore().query(None, top_k)
+
+    source_chunk_lookup = {
+        "hair-4th": {"metadata": {"policy_generation": "4th", "is_own_company": True}},
+        "hair-5th": {"metadata": {"policy_generation": "5th", "is_own_company": None}},
+    }
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        HairVectorStore(),
+        HairBM25(),
+        DummyLLM(),
+        top_k_final=4,
+        reranker_enabled=False,
+        source_chunk_lookup=source_chunk_lookup,
+    )
+
+    hits, _ = pipeline.retrieve_hits(
+        "노화현상으로 인한 탈모는 보상 가능한가요?",
+        top_k=4,
+        policy_generation="4th",
+    )
+
+    assert [hit.id for hit in hits] == ["hair-4th"]
+    assert hits[0].metadata["policy_generation"] == "4th"
 
 
 def test_deterministic_guard_blocks_fake_robot_code() -> None:
@@ -464,6 +595,13 @@ def test_expand_retrieval_query_for_drunk_injury() -> None:
     assert "중대한 과실" in expanded
 
 
+def test_expand_retrieval_query_does_not_treat_surgery_suffix_as_drinking() -> None:
+    expanded = _expand_retrieval_query("충수절제술 후 상해 치료를 받았습니다.")
+
+    assert "면책" not in expanded
+    assert "중대한 과실" not in expanded
+
+
 def test_extract_named_code_terms() -> None:
     assert _extract_named_code_terms("식도조루술의 코드를 알려줘.") == ["식도조루술"]
 
@@ -528,6 +666,7 @@ def test_build_structured_context_surgery_grade() -> None:
     assert result is not None
     assert "충수절제술" in result
     assert "1-5종: 2" in result
+    assert "p.109" in result
 
 
 def test_build_structured_context_surgery_grade_alias_normalization() -> None:

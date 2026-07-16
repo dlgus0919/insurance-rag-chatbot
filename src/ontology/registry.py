@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -53,8 +54,26 @@ def _append_unique(values: list[str], value: str) -> None:
         values.append(value)
 
 
+_STANDALONE_DRINKING_ALIAS = re.compile(
+    r'(?<![0-9A-Za-z가-힣])술(?=$|[\s.,!?;:()\[\]{}\'"“”‘’]|[은는이가을를과와도만로에의]|(?:먹|마시)(?:고|다|면|면서|는|던|었|았|어|겠습니다))'
+)
+
+
+def matches_ontology_alias(text: str, alias: str) -> bool:
+    """Return whether an ontology alias occurs as a usable user expression."""
+
+    normalized_alias = str(alias or "").strip()
+    if not normalized_alias:
+        return False
+    # The manifest owns the short alias. This boundary only prevents the Korean
+    # suffix in surgical terms from being misread as the standalone drinking word.
+    if normalized_alias == "술":
+        return bool(_STANDALONE_DRINKING_ALIAS.search(text))
+    return normalized_alias.casefold() in text.casefold()
+
+
 def _contains_any(text: str, terms: Iterable[str]) -> bool:
-    return any(term and term in text for term in terms)
+    return any(matches_ontology_alias(text, term) for term in terms)
 
 
 @dataclass(frozen=True)
@@ -101,9 +120,12 @@ class OntologyConcept:
     planner_conditions: tuple[str, ...] = field(default_factory=tuple)
     planner_intents: tuple[str, ...] = field(default_factory=tuple)
     planner_claim_unit_terms: tuple[str, ...] = field(default_factory=tuple)
+    planner_clarification_questions: tuple[str, ...] = field(default_factory=tuple)
+    planner_required_evidence: tuple[str, ...] = field(default_factory=tuple)
     candidate_aliases: tuple[str, ...] = field(default_factory=tuple)
     evidence_tags: tuple[str, ...] = field(default_factory=tuple)
     retrieval_expansion_rules: tuple[RetrievalExpansionRule, ...] = field(default_factory=tuple)
+    retrieval_lexical_priority_terms: tuple[str, ...] = field(default_factory=tuple)
     properties: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -120,6 +142,8 @@ class OntologyConcept:
             planner_conditions=tuple(_as_str_list(planner.get("conditions"))),
             planner_intents=tuple(_as_str_list(planner.get("intents"))),
             planner_claim_unit_terms=tuple(_as_str_list(planner.get("claim_unit_terms"))),
+            planner_clarification_questions=tuple(_as_str_list(planner.get("clarification_questions"))),
+            planner_required_evidence=tuple(_as_str_list(planner.get("required_evidence"))),
             candidate_aliases=tuple(_as_str_list(payload.get("candidate_aliases"))),
             evidence_tags=tuple(_as_str_list(payload.get("evidence_tags"))),
             retrieval_expansion_rules=tuple(
@@ -127,6 +151,7 @@ class OntologyConcept:
                 for rule in rules
                 if isinstance(rule, dict)
             ),
+            retrieval_lexical_priority_terms=tuple(_as_str_list(retrieval.get("lexical_priority_terms"))),
             properties=dict(payload.get("properties") or {}),
         )
 
@@ -258,6 +283,38 @@ class OntologyRegistry:
         if not expansion_terms:
             return question
         return f"{question} {' '.join(expansion_terms)}"
+
+    def planner_guidance(
+        self,
+        coverage_topics: Iterable[str],
+        conditions: Iterable[str],
+    ) -> tuple[list[str], list[str]]:
+        """Return manifest-owned questions and evidence for matched concepts."""
+
+        selected = set(coverage_topics) | set(conditions)
+        questions: list[str] = []
+        evidence: list[str] = []
+        for concept in self.concepts:
+            concept_topics = set(concept.planner_coverage_topics) | set(concept.planner_conditions)
+            if not selected.intersection(concept_topics):
+                continue
+            for question in concept.planner_clarification_questions:
+                _append_unique(questions, question)
+            for item in concept.planner_required_evidence:
+                _append_unique(evidence, item)
+        return questions, evidence
+
+    def lexical_priority_terms(self, question: str) -> list[str]:
+        """Return manifest-owned exact terms for the currently matched concept."""
+
+        terms: list[str] = []
+        for concept in self.concepts:
+            aliases = (*concept.aliases, concept.canonical_name)
+            if not _contains_any(question, aliases):
+                continue
+            for term in concept.retrieval_lexical_priority_terms:
+                _append_unique(terms, term)
+        return terms
 
     def concepts_for_graph_seed(self) -> list[OntologyConcept]:
         return [concept for concept in self.concepts if concept.node_type]

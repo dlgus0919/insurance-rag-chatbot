@@ -129,6 +129,27 @@ async def test_admin_stats_returns_live_aggregates(db_session) -> None:
 
 
 @pytest.mark.anyio
+async def test_system_summary_reports_only_running_llm_models(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admin,
+        "list_runtime_available_models",
+        lambda: {
+            "sglang": ["qwen3-next-80b-a3b-instruct-fp8"],
+            "vllm": [],
+            "trtllm": [],
+            "ollama": [],
+            "openai": [],
+        },
+    )
+
+    payload = await admin.system_summary(_admin_user())
+
+    assert payload["llm"]["running_models"]["sglang"] == ["qwen3-next-80b-a3b-instruct-fp8"]
+    assert "available_models" not in payload["llm"]
+    assert "default_local_model" not in payload["llm"]
+
+
+@pytest.mark.anyio
 async def test_latest_rag_diagnostics_returns_latest_general_query(db_session) -> None:
     db_session.add(
         AuditLog(

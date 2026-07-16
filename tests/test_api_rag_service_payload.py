@@ -2,6 +2,7 @@ import pytest
 
 from src.api import rag_service
 from src.api.rag_service import (
+    apply_policy_clause_decision,
     build_formal_retrieval_query,
     chunks_to_sources,
     extract_doc_filter,
@@ -15,6 +16,7 @@ from src.api.rag_service import (
 from src.graph.query_planner import GraphQueryPlan
 from src.graph.retriever import GraphPathStep, GraphRetrievalResult, GraphReviewPath
 from src.parser.chunker import Chunk
+from src.rag.source_grounded_answers import PolicyClauseDecision
 
 
 def test_graph_result_to_payload_adds_review_display_labels() -> None:
@@ -115,6 +117,37 @@ def test_graph_payload_has_renderable_evidence_checks_panels_and_clarifications(
     assert graph_payload_has_renderable_evidence(
         {"plan": {"clarification_questions": ["어느 실손 세대 기준인지 확인해 주세요."]}}
     ) is True
+
+
+def test_direct_policy_clause_decision_overrides_missing_generic_claim_condition_review() -> None:
+    graph_payload = {
+        "graph_review_paths": [
+            {
+                "path_type": "claim_condition_review",
+                "status": "missing",
+                "summary": "GraphDB 근거가 없습니다.",
+            }
+        ],
+        "facts": [],
+        "plan": {"clarification_questions": ["방문 구분을 확인해 주세요."]},
+    }
+    decision = PolicyClauseDecision(
+        answer="탈모만으로는 보상 여부를 확정할 수 없습니다.",
+        payload={
+            "status": "clarification_required",
+            "status_label": "추가 확인 필요",
+            "summary": "노화성 탈모 조항을 일반 탈모 전체에 자동 적용할 수 없습니다.",
+            "clarification_questions": ["노화현상인지 질병성 탈모인지 확인해 주세요."],
+            "required_evidence": ["진단명 또는 진단코드"],
+        },
+        chunks=[],
+    )
+
+    updated = apply_policy_clause_decision(graph_payload, decision)
+
+    assert updated["canonical_decision"]["status_label"] == "추가 확인 필요"
+    assert updated["graph_review_paths"] == []
+    assert "노화현상인지 질병성 탈모인지 확인해 주세요." in updated["plan"]["clarification_questions"]
 
 
 def test_extract_doc_filter_deduplicates_and_normalizes() -> None:

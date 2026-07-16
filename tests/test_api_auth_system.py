@@ -155,6 +155,16 @@ def test_create_app_registers_week1_routes() -> None:
     assert "/api/admin/stats" in paths
 
 
+def test_frontend_javascript_revalidates_after_deploy() -> None:
+    client = TestClient(create_app())
+
+    root = client.get("/")
+    javascript = client.get("/js/app.js")
+
+    assert root.headers["cache-control"] == "no-cache"
+    assert javascript.headers["cache-control"] == "no-cache"
+
+
 def test_logout_route_clears_cookies_without_access_token(monkeypatch) -> None:
     monkeypatch.setenv("API_COOKIE_SECURE", "false")
     client = TestClient(create_app())

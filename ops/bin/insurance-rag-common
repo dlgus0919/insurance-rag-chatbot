@@ -144,16 +144,18 @@ setup_fastapi_env() {
   export TRTLLM_DISABLED_MODELS="${TRTLLM_DISABLED_MODELS:-openai/gpt-oss-120b,gpt-oss-120b,/models/gpt-oss-120b}"
   export TRTLLM_STRICT_AVAILABLE_MODELS="${TRTLLM_STRICT_AVAILABLE_MODELS:-true}"
 
-  export ALLOW_OLLAMA="${ALLOW_OLLAMA:-true}"
   export OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
   export OLLAMA_NUM_PREDICT="${OLLAMA_NUM_PREDICT:-4096}"
   if [[ "$DEFAULT_PROVIDER" == "ollama" ]]; then
+    export ALLOW_OLLAMA="${ALLOW_OLLAMA:-true}"
     local selected_ollama_model="${INSURANCE_RAG_MODEL:-${OLLAMA_MODEL:-$DEFAULT_MODEL}}"
     export OLLAMA_MODEL="$selected_ollama_model"
     export OLLAMA_CANDIDATE_MODELS="$selected_ollama_model"
     export SGLANG_STRICT_AVAILABLE_MODELS=false
     export VLLM_STRICT_AVAILABLE_MODELS=false
   else
+    # A different active provider must not advertise an installed Ollama fallback.
+    export ALLOW_OLLAMA=false
     export OLLAMA_MODEL="${OLLAMA_MODEL:-exaone3.5:7.8b}"
     export OLLAMA_CANDIDATE_MODELS="${OLLAMA_CANDIDATE_MODELS:-exaone3.5:7.8b}"
   fi

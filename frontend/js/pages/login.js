@@ -32,8 +32,8 @@ export async function initLoginPage({ onLogin } = {}) {
     if (onLogin) {
       const selectedModel = document.querySelector('input[name="llm-model"]:checked')?.value;
       if (!selectedModel) {
-        showError('현재 서버에서 사용 가능한 LLM 모델이 없습니다.');
-        createAlertModal('모델 선택 오류', '현재 서버에서 사용 가능한 LLM 모델이 없습니다. vLLM/SGLang/Ollama 상태를 확인해 주세요.', null).show();
+        showError('현재 서버에서 기동 중인 LLM이 없습니다.');
+        createAlertModal('LLM 상태 오류', '현재 서버에서 기동 중인 LLM이 없습니다. SGLang, vLLM 또는 Ollama 상태를 확인해 주세요.', null).show();
         return;
       }
       localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, selectedModel);
@@ -85,6 +85,9 @@ function restoreSelectedModel() {
   const selectedRadio = savedRadio || defaultRadio;
   selectedRadio.checked = true;
   localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL, selectedRadio.value);
+  if (!savedRadio) {
+    localStorage.setItem(STORAGE_KEYS.SELECTED_LLM_MODEL_SOURCE, MODEL_SELECTION_SOURCES.DEFAULT);
+  }
 }
 
 async function renderAvailableModelOptions() {
@@ -95,7 +98,7 @@ async function renderAvailableModelOptions() {
     const response = await fetchAPI('/system/models');
     const models = response.providers?.local || [];
     if (!models.length) {
-      group.innerHTML = '<div class="lp-model-status">현재 서버에 로드되어 노출 가능한 로컬 LLM 모델이 없습니다.</div>';
+      group.innerHTML = '<div class="lp-model-status">현재 서버에서 기동 중인 로컬 LLM이 없습니다.</div>';
       return;
     }
 
@@ -103,7 +106,7 @@ async function renderAvailableModelOptions() {
     group.innerHTML = models.map((model, index) => renderModelOption(model, defaultIds.has(model.id) || index === 0)).join('');
   } catch (error) {
     console.warn('Failed to load model list:', error);
-    group.innerHTML = '<div class="lp-model-status">모델 목록을 불러오지 못했습니다. 서버 상태를 확인해 주세요.</div>';
+    group.innerHTML = '<div class="lp-model-status">기동 중인 LLM 목록을 불러오지 못했습니다. 서버 상태를 확인해 주세요.</div>';
   }
 }
 
@@ -121,7 +124,7 @@ function renderModelOption(model, isDefault) {
 function describeModel(modelId) {
   if (modelId.startsWith('vllm:')) return 'vLLM 서버에서 현재 서빙 중인 모델';
   if (modelId.startsWith('sglang:')) return 'SGLang 서버에서 현재 서빙 중인 모델';
-  if (modelId.startsWith('ollama:')) return 'Ollama에 설치되어 사용 가능한 저부하 모델';
+  if (modelId.startsWith('ollama:')) return 'Ollama 서버에서 현재 서빙 중인 모델';
   if (modelId.startsWith('openai:')) return 'OpenAI API 설정이 있을 때 사용 가능한 클라우드 모델';
   return '서버에서 사용 가능하다고 보고된 모델';
 }

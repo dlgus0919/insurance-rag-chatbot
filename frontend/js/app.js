@@ -4,14 +4,14 @@ import { MODEL_SELECTION_SOURCES, resolveSelectedModelForAuthenticatedRoute } fr
 import { toast } from './modules/ui.js';
 import { apiFetch } from './utils.js';
 import { STORAGE_KEYS } from './config.js';
-import { initLoginCanvas, initLoginPage } from './pages/login.js?v=20260602_model_sync_fix1';
-import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260707_claim_generation_default';
-import { disposeAdminPage, initAdminPage } from './pages/admin.js?v=20260715_graph_viz';
+import { initLoginCanvas, initLoginPage } from './pages/login.js?v=20260716_runtime_llm';
+import { abortActiveChat, initChatPage, resetChatState } from './pages/chat.js?v=20260716_runtime_llm';
+import { disposeAdminPage, initAdminPage } from './pages/admin.js?v=20260716_runtime_llm';
 
 const PAGES = {
   LOGIN: '/html/login.html',
-  CHAT: '/html/chat.html?v=20260707_claim_generation_default',
-  ADMIN: '/html/admin.html?v=20260707_active_rules_session_defaults',
+  CHAT: '/html/chat.html?v=20260716_runtime_llm',
+  ADMIN: '/html/admin.html?v=20260716_runtime_llm',
 };
 
 const ROUTES = {

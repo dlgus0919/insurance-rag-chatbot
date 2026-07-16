@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 
 import {
   hasRenderableGraphPayload,
+  renderCanonicalDecisionHtml,
+  renderClarificationHtml,
   renderGraphFactsHtml,
   renderGraphReviewPathsHtml,
   sanitizeAssistantAnswer,
@@ -59,4 +61,28 @@ test('treats facts and clarification questions as renderable graph payload', () 
     true,
   );
   assert.match(renderGraphFactsHtml({ facts: [{ subject: 'N39.3', relation: 'EXCLUDES', object: '보상 제외' }] }), /구조화 근거/);
+});
+
+test('renders canonical policy decision with Korean labels and structured follow-ups', () => {
+  const graph = {
+    canonical_decision: {
+      status_label: '추가 확인 필요',
+      summary: '일반 탈모만으로 보상 여부를 확정할 수 없습니다.',
+      authority_note: '4세대 자사 약관 직접 근거입니다.',
+      conditions: ['노화현상으로 인한 탈모', '비급여 의료비', '업무 또는 일상생활 지장 여부'],
+    },
+    plan: {
+      clarification_questions: ['노화현상인지 질병성 탈모인지 확인해 주세요.'],
+      required_evidence: ['진단명 또는 진단코드', '의사소견'],
+    },
+  };
+
+  const canonicalHtml = renderCanonicalDecisionHtml(graph);
+  const clarificationHtml = renderClarificationHtml(graph);
+
+  assert.match(canonicalHtml, /추가 확인 필요/);
+  assert.match(canonicalHtml, /4세대 자사 약관/);
+  assert.doesNotMatch(canonicalHtml, /claim_condition_review/);
+  assert.match(clarificationHtml, /진단명 또는 진단코드/);
+  assert.match(clarificationHtml, /의사소견/);
 });

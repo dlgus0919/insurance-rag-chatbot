@@ -72,9 +72,9 @@ async def static_cache_middleware(request: Request, call_next):
 
     response = await call_next(request)
     path = request.url.path
-    if path.startswith(("/css/", "/js/")):
+    if path.startswith("/css/"):
         response.headers["Cache-Control"] = "public, max-age=3600"
-    elif path.startswith("/html/"):
+    elif path in {"/", "/index.html"} or path.startswith(("/html/", "/js/", "/dist/")):
         response.headers["Cache-Control"] = "no-cache"
     return response
 
