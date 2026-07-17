@@ -23,7 +23,9 @@
       "source_page": "31-38",
       "source_clause": "제3조 보장종목별 보상내용 / 제6조 보험가입금액 한도 등",
       "source_chunk_id": "약관_ch_002330",
-      "additional_source_refs": ["약관_ch_002347"],
+      "additional_source_refs": [
+        "약관_ch_002347"
+      ],
       "source_status": "source_grounded",
       "approval_status": "active"
     },
@@ -49,7 +51,9 @@
       "source_page": "31-38",
       "source_clause": "제3조 통원항목별 공제금액 / 제6조 보험가입금액 한도 등",
       "source_chunk_id": "약관_ch_002331",
-      "additional_source_refs": ["약관_ch_002348"],
+      "additional_source_refs": [
+        "약관_ch_002348"
+      ],
       "source_status": "legacy_behavior_with_partial_indexed_source",
       "approval_status": "active"
     },
@@ -75,7 +79,9 @@
       "source_page": "8-31",
       "source_clause": "소비자가 반드시 알아야 할 유의사항 - 자기부담금",
       "source_chunk_id": "약관_ch_002309",
-      "additional_source_refs": ["약관_ch_002431"],
+      "additional_source_refs": [
+        "약관_ch_002431"
+      ],
       "source_status": "source_grounded",
       "approval_status": "active"
     },
@@ -126,7 +132,9 @@
       "source_page": "31-38",
       "source_clause": "제3조 보장종목별 보상내용 / 제6조 보험가입금액 한도 등",
       "source_chunk_id": "약관_ch_002330",
-      "additional_source_refs": ["약관_ch_002347"],
+      "additional_source_refs": [
+        "약관_ch_002347"
+      ],
       "source_status": "source_grounded",
       "approval_status": "active"
     },
@@ -152,7 +160,9 @@
       "source_page": "31-38",
       "source_clause": "제3조 통원항목별 공제금액 / 제6조 보험가입금액 한도 등",
       "source_chunk_id": "약관_ch_002331",
-      "additional_source_refs": ["약관_ch_002348"],
+      "additional_source_refs": [
+        "약관_ch_002348"
+      ],
       "source_status": "source_grounded",
       "approval_status": "active"
     },
@@ -178,7 +188,9 @@
       "source_page": "372-395",
       "source_clause": "특별약관1 산정특례 대상 질환 비급여",
       "source_chunk_id": "표준약관_ch_005558",
-      "additional_source_refs": ["표준약관_ch_005588"],
+      "additional_source_refs": [
+        "표준약관_ch_005588"
+      ],
       "source_status": "source_grounded",
       "approval_status": "active"
     },
@@ -204,7 +216,9 @@
       "source_page": "372-395",
       "source_clause": "특별약관1 통원항목별 공제금액",
       "source_chunk_id": "표준약관_ch_005559",
-      "additional_source_refs": ["표준약관_ch_005588"],
+      "additional_source_refs": [
+        "표준약관_ch_005588"
+      ],
       "source_status": "source_grounded",
       "approval_status": "active"
     },
@@ -255,7 +269,10 @@
       "source_page": "400-410",
       "source_clause": "특별약관2 통원항목별 공제금액 / 비급여 자기공명영상진단 공제금액",
       "source_chunk_id": "표준약관_ch_005607",
-      "additional_source_refs": ["표준약관_ch_005600", "표준약관_ch_005628"],
+      "additional_source_refs": [
+        "표준약관_ch_005600",
+        "표준약관_ch_005628"
+      ],
       "source_status": "legacy_behavior_with_broad_indexed_source",
       "approval_status": "active"
     },
@@ -306,7 +323,10 @@
       "source_page": "400-410",
       "source_clause": "특별약관2 통원항목별 공제금액",
       "source_chunk_id": "표준약관_ch_005600",
-      "additional_source_refs": ["표준약관_ch_005604", "표준약관_ch_005628"],
+      "additional_source_refs": [
+        "표준약관_ch_005604",
+        "표준약관_ch_005628"
+      ],
       "source_status": "source_grounded",
       "approval_status": "active"
     },
@@ -357,9 +377,86 @@
       "source_page": "400-410",
       "source_clause": "특별약관2 통원항목별 공제금액",
       "source_chunk_id": "표준약관_ch_005600",
-      "additional_source_refs": ["표준약관_ch_005604", "표준약관_ch_005628"],
+      "additional_source_refs": [
+        "표준약관_ch_005604",
+        "표준약관_ch_005628"
+      ],
       "source_status": "legacy_fallback_with_broad_indexed_source",
       "approval_status": "active"
+    },
+    {
+      "additional_source_refs": [
+        "약관_ch_002440",
+        "약관_ch_002442",
+        "약관_ch_002443",
+        "약관_ch_002444"
+      ],
+      "annual_limit": "3500000",
+      "annual_visit_limit": 50,
+      "approval_status": "active",
+      "category": "3대비급여_도수",
+      "copay_ratio": "0.3",
+      "description": "4세대 3대비급여 도수치료·체외충격파치료·증식치료: 1회당 3만원과 보장대상의료비 30% 중 큰 금액을 공제하고, 각 상해·질병 치료행위를 합산해 연 350만원·50회 한도",
+      "facility_grade": "all",
+      "generation": "4th",
+      "min_deductible": "30000",
+      "min_deductible_by_facility": {
+        "clinic": "30000",
+        "general_hospital": "30000",
+        "hospital": "30000",
+        "tertiary_hospital": "30000"
+      },
+      "per_visit_limit": null,
+      "review_requirements": [
+        "상해 또는 질병의 치료 목적 및 진단서 또는 의사소견 확인 필요",
+        "누적 청구 이력 기준 도수치료·체외충격파치료·증식치료 합산 연간 3,500,000원·50회 한도 확인 필요",
+        "최초 10회 이후에는 증상 개선 또는 병변 호전의 객관적 증빙 확인 필요",
+        "동일 방문에서 2종류 이상 또는 동일 치료를 2회 이상 받은 경우 각 치료행위별 1회 공제·보상한도 적용 확인 필요"
+      ],
+      "rule_id": "deductible.4th.three_major_manual.hospitalization",
+      "source_chunk_id": "약관_ch_002441",
+      "source_clause": "제3조(보장종목별 보상내용) (3) 3대비급여",
+      "source_doc": "약관",
+      "source_page": "71-78",
+      "source_status": "source_grounded",
+      "visit_type": "hospitalization"
+    },
+    {
+      "additional_source_refs": [
+        "약관_ch_002440",
+        "약관_ch_002442",
+        "약관_ch_002443",
+        "약관_ch_002444"
+      ],
+      "annual_limit": "3500000",
+      "annual_visit_limit": 50,
+      "approval_status": "active",
+      "category": "3대비급여_도수",
+      "copay_ratio": "0.3",
+      "description": "4세대 3대비급여 도수치료·체외충격파치료·증식치료: 1회당 3만원과 보장대상의료비 30% 중 큰 금액을 공제하고, 각 상해·질병 치료행위를 합산해 연 350만원·50회 한도",
+      "facility_grade": "all",
+      "generation": "4th",
+      "min_deductible": "30000",
+      "min_deductible_by_facility": {
+        "clinic": "30000",
+        "general_hospital": "30000",
+        "hospital": "30000",
+        "tertiary_hospital": "30000"
+      },
+      "per_visit_limit": null,
+      "review_requirements": [
+        "상해 또는 질병의 치료 목적 및 진단서 또는 의사소견 확인 필요",
+        "누적 청구 이력 기준 도수치료·체외충격파치료·증식치료 합산 연간 3,500,000원·50회 한도 확인 필요",
+        "최초 10회 이후에는 증상 개선 또는 병변 호전의 객관적 증빙 확인 필요",
+        "동일 방문에서 2종류 이상 또는 동일 치료를 2회 이상 받은 경우 각 치료행위별 1회 공제·보상한도 적용 확인 필요"
+      ],
+      "rule_id": "deductible.4th.three_major_manual.outpatient",
+      "source_chunk_id": "약관_ch_002441",
+      "source_clause": "제3조(보장종목별 보상내용) (3) 3대비급여",
+      "source_doc": "약관",
+      "source_page": "71-78",
+      "source_status": "source_grounded",
+      "visit_type": "outpatient"
     }
   ],
   "prescription_rules": [

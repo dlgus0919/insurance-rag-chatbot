@@ -127,14 +127,79 @@ def test_find_target_lines_reports_ambiguous_substring_matches() -> None:
     assert [line["line_id"] for line in matches] == ["line-1", "line-2"]
 
 
-def test_select_claim_snapshot_requires_clarification_when_multiple_without_selector() -> None:
-    snapshots = [{"claim_id": "claim-1"}, {"claim_id": "claim-2"}]
+def test_select_claim_snapshot_defaults_to_latest_completed_without_selector() -> None:
+    snapshots = [
+        {"claim_id": "candidate", "state": "candidate_pending"},
+        {"claim_id": "claim-1", "state": "completed"},
+        {"claim_id": "claim-2", "state": "completed"},
+    ]
 
     selected, clarification = select_claim_snapshot(snapshots, "이 항목을 보상하지 않는다면?")
 
+    assert selected == snapshots[-1]
+    assert clarification == ""
+
+
+def test_select_claim_snapshot_uses_unique_older_target_when_latest_has_no_match() -> None:
+    snapshots = [
+        {
+            "claim_id": "claim-1",
+            "state": "completed",
+            "result": {"line_results": [{"input_name": "도수치료"}]},
+        },
+        {
+            "claim_id": "claim-2",
+            "state": "completed",
+            "result": {"line_results": [{"input_name": "비타민D 주사"}]},
+        },
+    ]
+
+    selected, clarification = select_claim_snapshot(snapshots, "도수치료를 보상하지 않는다면?")
+
+    assert selected == snapshots[0]
+    assert clarification == ""
+
+
+def test_select_claim_snapshot_asks_when_matching_line_results_differ() -> None:
+    snapshots = [
+        {
+            "claim_id": "claim-1",
+            "state": "completed",
+            "result": {
+                "line_results": [
+                    {
+                        "input_name": "비타민D 주사",
+                        "category": "미분류 비급여",
+                        "claimed_amount": "48000",
+                        "deductible": "0",
+                        "payable_amount": "0",
+                        "calculation_status": "human_task",
+                    }
+                ]
+            },
+        },
+        {
+            "claim_id": "claim-2",
+            "state": "completed",
+            "result": {
+                "line_results": [
+                    {
+                        "input_name": "비타민D 주사",
+                        "category": "미분류 비급여",
+                        "claimed_amount": "48000",
+                        "deductible": "14400",
+                        "payable_amount": "33600",
+                        "calculation_status": "calculated",
+                    }
+                ]
+            },
+        },
+    ]
+
+    selected, clarification = select_claim_snapshot(snapshots, "비타민D 주사를 비급여로 보상한다면?")
+
     assert selected is None
-    assert "여러 건" in clarification
-    assert "최근 계산" in clarification
+    assert "서로 다른 여러 계산" in clarification
 
 
 def test_select_claim_snapshot_uses_latest_when_query_says_recent() -> None:

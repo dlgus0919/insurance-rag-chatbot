@@ -39,6 +39,7 @@ class DeductibleRule:
     per_visit_limit: Decimal | None = None
     annual_limit: Decimal | None = None
     annual_visit_limit: int | None = None
+    review_requirements: tuple[str, ...] = ()
     description: str = ""
     source_doc: str = ""
     source_page: str | None = None
@@ -83,6 +84,7 @@ class SpecialRule:
 
 _NO_MIN = {grade: Decimal("0") for grade in FACILITY_GRADES}
 _4TH_NON_BENEFIT_ALIASES = {"3대비급여", "중증비급여", "비중증비급여"}
+_4TH_EXACT_ONLY_CATEGORIES = {"3대비급여_도수"}
 
 
 @lru_cache(maxsize=1)
@@ -117,6 +119,7 @@ def _rule_to_runtime(rule: ClaimDeductibleRule, facility_grade: str = "") -> Ded
         per_visit_limit=rule.per_visit_limit,
         annual_limit=rule.annual_limit,
         annual_visit_limit=rule.annual_visit_limit,
+        review_requirements=rule.review_requirements,
         description=rule.description,
         source_doc=rule.source_doc,
         source_page=rule.source_page,
@@ -171,9 +174,10 @@ def lookup_rule(
     registry = _load_registry()
 
     candidates = [category]
-    if gen == "4th" and category in _4TH_NON_BENEFIT_ALIASES:
-        candidates.append("비급여")
-    candidates.append("급여")
+    if not (gen == "4th" and category in _4TH_EXACT_ONLY_CATEGORIES):
+        if gen == "4th" and category in _4TH_NON_BENEFIT_ALIASES:
+            candidates.append("비급여")
+        candidates.append("급여")
 
     for candidate in dict.fromkeys(candidates):
         try:

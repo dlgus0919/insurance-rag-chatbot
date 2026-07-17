@@ -47,7 +47,9 @@ def _classify_claim_category(item: ClaimItemInput, match: StandardMatch | None) 
         return "비중증비급여"
     if "중증" in text:
         return "중증비급여"
-    if "3대" in text or "도수" in text or "체외충격파" in text or "증식" in text or "주사" in text or "mri" in text.lower() or "mra" in text.lower():
+    if any(keyword in text for keyword in ("도수", "체외충격파", "증식")):
+        return "3대비급여_도수"
+    if "3대" in text or "주사" in text or "mri" in text.lower() or "mra" in text.lower():
         return "3대비급여"
     if "비급여" in text:
         return "비급여"
@@ -70,7 +72,7 @@ def _is_mri_mra_item(item: ClaimItemInput, match: StandardMatch | None) -> bool:
 
 
 def _is_three_major_nonpay_item(category: str, item: ClaimItemInput, match: StandardMatch | None) -> bool:
-    if category == "3대비급여":
+    if category in {"3대비급여", "3대비급여_도수"}:
         return True
     if category in {"중증비급여", "비중증비급여"}:
         return False
@@ -170,6 +172,44 @@ def _line_amount_parts(item: ClaimItemInput) -> tuple[Decimal, Decimal, Decimal,
     if total <= 0:
         raise ValueError("급여 본인부담금 또는 비급여 금액 중 하나는 0원보다 커야 합니다.")
     return insured_copay, nonpay, total, True
+
+
+def _care_scope_for_item(item: ClaimItemInput) -> str:
+    """Return the receipt amount scope used to narrow name-based code matches."""
+
+    insured_copay, nonpay, _, split_mode = _line_amount_parts(item)
+    if not split_mode:
+        return "unknown"
+    if insured_copay > 0 and nonpay > 0:
+        return "mixed"
+    if nonpay > 0:
+        return "nonpay"
+    if insured_copay > 0:
+        return "benefit"
+    return "unknown"
+
+
+def _has_explicit_code_scope_mismatch(match: StandardMatch, care_scope: str) -> bool:
+    """Keep a user-entered code while flagging a receipt-scope contradiction."""
+
+    if care_scope != "nonpay":
+        return False
+    text = _standard_match_text(match)
+    compact = "".join(text.split())
+    return "비급여" not in compact or _is_nonpay_scope_restriction(match)
+
+
+def _needs_fourth_manual_rule_approval(
+    category: str,
+    generation: str,
+    context: ClaimCaseContext,
+    match: StandardMatch | None,
+) -> bool:
+    if generation != "4th" or category != "3대비급여_도수" or _is_exclusion_match(match):
+        return False
+    from src.claim_calculation.deductible_rules import has_exact_rule
+
+    return not has_exact_rule(generation, category, context.visit_type, context.facility_grade)
 
 
 def _format_decimal_won(value: Decimal) -> str:
@@ -278,6 +318,20 @@ def _line_deductible(
     min_deductible = rule_entry.get_min_deductible(facility_grade)
     rule_desc = rule_entry.description
 
+    # 승인된 룰이 누적 이력이나 증빙을 전제로 하면, 단건 계산은 금액을
+    # 추정하되 그 전제를 구조화된 검토 사유로 남긴다.
+    if rule_entry.review_requirements:
+        if rule_entry.annual_limit:
+            review_reasons.append(
+                f"누적 청구 이력이 없어 승인 룰의 연간 한도 {rule_entry.annual_limit:,.0f}원 확인이 필요합니다."
+            )
+        if rule_entry.annual_visit_limit:
+            review_reasons.append(
+                f"누적 청구 이력이 없어 승인 룰의 연간 횟수 한도 {rule_entry.annual_visit_limit}회 확인이 필요합니다."
+            )
+        for requirement in rule_entry.review_requirements:
+            _append_unique(review_reasons, requirement)
+
     # 5세대 비급여 미분류 경고
     if generation == "5th" and category == "비급여":
         review_reasons.append("5세대 비급여는 중증/비중증 구분에 따라 공제율이 달라질 수 있어 항목 분류 확인이 필요합니다.")
@@ -380,23 +434,25 @@ def _deductible_group_for_category(category: str) -> str:
         return "mri_mra_group"
     if category == "3대비급여":
         return "three_major_nonpay_group"
+    if category == "3대비급여_도수":
+        return "three_major_manual_group"
     if category in {"비급여", "비중증비급여", "중증비급여"}:
         return "general_nonpay_group"
     return ""
 
 
-def _line_is_group_eligible(line: dict[str, str | bool | list[str]]) -> bool:
+def _line_is_group_eligible(line: dict[str, Any]) -> bool:
     if not line.get("deductible_group"):
         return False
     if line.get("excluded_from_calculation") is True:
         return False
-    if line.get("calculation_status") in {"human_task", "partial_human_task"}:
+    if line.get("calculation_status") in {"human_task", "partial_human_task", "needs_code_selection", "needs_rule_approval"}:
         return False
     return Decimal(str(line.get("claimed_amount") or "0")) > 0
 
 
 def _deductible_group_key(
-    line: dict[str, str | bool | list[str]],
+    line: dict[str, Any],
     context: ClaimCaseContext,
 ) -> tuple[str, str, str, str, str, str]:
     return (
@@ -426,11 +482,11 @@ def _allocate_won(total: Decimal, amounts: list[Decimal]) -> list[Decimal]:
 
 
 def _apply_grouped_deductibles(
-    line_results: list[dict[str, str | bool | list[str]]],
+    line_results: list[dict[str, Any]],
     context: ClaimCaseContext,
 ) -> tuple[Decimal, Decimal, list[str]]:
     # 보험 지식값이 아니라 같은 공제 단위는 합산 후 1회 공제한다는 계산 엔진 규칙이다.
-    groups: dict[tuple[str, str, str, str, str, str], list[dict[str, str | bool | list[str]]]] = {}
+    groups: dict[tuple[str, str, str, str, str, str], list[dict[str, Any]]] = {}
     for line in line_results:
         if _line_is_group_eligible(line):
             groups.setdefault(_deductible_group_key(line, context), []).append(line)
@@ -479,13 +535,14 @@ def _calculate_line_items(
     items: list[ClaimItemInput],
     context: ClaimCaseContext,
     standard_matches: list[StandardMatch],
-) -> tuple[Decimal, Decimal, list[dict[str, str | bool | list[str]]], list[str]]:
+    code_candidates_by_line: dict[str, list[dict[str, str]]] | None = None,
+) -> tuple[Decimal, Decimal, list[dict[str, Any]], list[str]]:
     from src.claim_calculation.models import parse_quantity
 
     generation = _normalize_policy_generation(context.policy_generation)
     total_payable = Decimal("0")
     total_deductible = Decimal("0")
-    line_results: list[dict[str, str | bool | list[str]]] = []
+    line_results: list[dict[str, Any]] = []
     review_reasons: list[str] = []
 
     for idx, item in enumerate(items):
@@ -507,11 +564,60 @@ def _calculate_line_items(
             deductible = amount - payable
             rule = special_rule.description
         elif _is_ambiguous_match(match):
-            deductible = Decimal("0")
-            payable = Decimal("0")
-            rule = "표준모델 후보 모호성으로 계산 보류"
-            line_review = True
-            line_reasons.append("동일 항목명에 복수 표준모델 후보가 있어 임의 후보로 보험금을 산출하지 않았습니다. 정확한 수가/표준코드를 입력해야 합니다.")
+            line_reason = "동일 항목명에 복수 표준모델 후보가 있어 임의 후보로 보험금을 산출하지 않았습니다. 정확한 표준코드를 선택해야 합니다."
+            review_reasons.append(line_reason)
+            line_results.append(
+                {
+                    "line_id": item.line_id,
+                    "input_name": item.input_name,
+                    "input_code": item.input_code,
+                    "category": category,
+                    "claimed_amount": _format_decimal_won(amount),
+                    "insured_copay_amount": _format_decimal_won(insured_copay_amount),
+                    "nonpay_amount": _format_decimal_won(nonpay_amount),
+                    "deductible": None,
+                    "deductible_amount": None,
+                    "payable_amount": None,
+                    "policy_generation": generation,
+                    "rule_summary": "표준코드 선택 전 산정 보류",
+                    "extra_info": item.extra_info,
+                    "requires_review": True,
+                    "review_reasons": [line_reason],
+                    "calculation_status": "needs_code_selection",
+                    "excluded_from_calculation": True,
+                    "human_task_amount": _format_decimal_won(amount),
+                    "deductible_group": "",
+                    "candidates": (code_candidates_by_line or {}).get(item.line_id, [])[:6],
+                }
+            )
+            continue
+        elif _needs_fourth_manual_rule_approval(category, generation, context, match):
+            line_reason = "4세대 도수치료군 전용 승인 룰 없음: 실무자 승인 전에는 일반 비급여 규칙으로 대체 산정하지 않습니다."
+            review_reasons.append(line_reason)
+            line_results.append(
+                {
+                    "line_id": item.line_id,
+                    "input_name": item.input_name,
+                    "input_code": item.input_code,
+                    "category": category,
+                    "claimed_amount": _format_decimal_won(amount),
+                    "insured_copay_amount": _format_decimal_won(insured_copay_amount),
+                    "nonpay_amount": _format_decimal_won(nonpay_amount),
+                    "deductible": None,
+                    "deductible_amount": None,
+                    "payable_amount": None,
+                    "policy_generation": generation,
+                    "rule_summary": "4세대 도수치료군 전용 승인 룰 확인 전 산정 보류",
+                    "extra_info": item.extra_info,
+                    "requires_review": True,
+                    "review_reasons": [line_reason],
+                    "calculation_status": "needs_rule_approval",
+                    "excluded_from_calculation": True,
+                    "human_task_amount": _format_decimal_won(amount),
+                    "deductible_group": "",
+                }
+            )
+            continue
         elif split_mode:
             payable = Decimal("0")
             deductible = Decimal("0")
@@ -812,12 +918,14 @@ def run_claim_calculation(
     # 2. 비급여 표준모델 DB 매칭
     standard_matches: list[StandardMatch] = []
     disambiguation_required = False
-    disambiguation_candidates = []
+    disambiguation_candidates: list[dict[str, str]] = []
+    code_candidates_by_line: dict[str, list[dict[str, str]]] = {}
     db_review_required = False
     db_review_reasons = []
 
     for item in items:
-        matches = match_standard_code(item.input_name, item.input_code)
+        care_scope = _care_scope_for_item(item)
+        matches = match_standard_code(item.input_name, item.input_code, care_scope=care_scope)
         if not matches:
             # 매칭 없음 처리
             match_none = StandardMatch(
@@ -833,12 +941,22 @@ def run_claim_calculation(
             if len(matches) > 1 and not item.input_code.strip():
                 disambiguation_required = True
                 db_review_required = True
-                candidate_info = ", ".join([f"{m.std_cd}({m.std_cd_nm})" for m in matches])
                 db_review_reasons.append(
                     f"항목 '{item.input_name}'의 표준모델 매칭 후보가 2개 이상 존재하여 선택 모호성이 발생했습니다. "
-                    f"후보군: [{candidate_info}]. 정확한 코드를 입력해주십시오."
+                    "정확한 표준코드를 선택해 주십시오."
                 )
+                line_candidates = [
+                    {
+                        "code": m.std_cd,
+                        "name": m.std_cd_nm,
+                        "mid_category": m.mid_category_cd_nm or "",
+                    }
+                    for m in matches[:6]
+                ]
+                code_candidates_by_line[item.line_id] = line_candidates
                 for m in matches:
+                    if len(disambiguation_candidates) >= 6:
+                        break
                     disambiguation_candidates.append({
                         "code": m.std_cd,
                         "name": m.std_cd_nm,
@@ -858,6 +976,12 @@ def run_claim_calculation(
 
             # 첫 번째 결과를 대표 매치로 선택
             repr_match = matches[0]
+            if item.input_code.strip() and _has_explicit_code_scope_mismatch(repr_match, care_scope):
+                db_review_required = True
+                db_review_reasons.append(
+                    f"입력 표준코드 '{item.input_code}'가 영수증의 비급여 금액 범위와 다릅니다. "
+                    "정확코드는 유지하되 표준코드와 영수증 구분을 확인해야 합니다."
+                )
             if repr_match.requires_review:
                 db_review_required = True
                 opn = repr_match.pay_opn_cd_nm or "공란"
@@ -963,9 +1087,14 @@ def run_claim_calculation(
         items=items,
         context=context,
         standard_matches=standard_matches,
+        code_candidates_by_line=code_candidates_by_line,
     )
-    deterministic_line_results: list[dict[str, str | bool | list[str]]] = []
+    deterministic_line_results: list[dict[str, Any]] = []
     deterministic_review_reasons: list[str] = []
+    rule_approval_required = any(
+        line.get("calculation_status") == "needs_rule_approval"
+        for line in baseline_line_results
+    )
     has_exclusion = any(
         _is_exclusion_match(match) and (idx >= len(items) or not _has_split_amounts(items[idx]))
         for idx, match in enumerate(standard_matches)
@@ -976,7 +1105,17 @@ def run_claim_calculation(
         and (_is_exclusion_match(match) or _is_nonpay_scope_restriction(match))
         for idx, match in enumerate(standard_matches)
     )
-    if use_fake_planner or has_exclusion or has_split_scope_restriction:
+    if disambiguation_required or rule_approval_required:
+        plan = CalculationPlan(
+            decision="needs_more_info",
+            uncertainties=db_review_reasons + baseline_review_reasons,
+        )
+        payable_val = Decimal("0")
+        deductible_val = Decimal("0")
+        deterministic_line_results = baseline_line_results
+        deterministic_review_reasons = baseline_review_reasons
+        sandbox_code = ""
+    elif use_fake_planner or has_exclusion or has_split_scope_restriction:
         payable_val = baseline_payable_val
         deductible_val = baseline_deductible_val
         deterministic_line_results = baseline_line_results
@@ -991,14 +1130,6 @@ def run_claim_calculation(
         else:
             plan = CalculationPlan(decision="calculable", formula_intent=sandbox_code)
     # 4. LLM 계산 계획 수립
-    elif disambiguation_required:
-        plan = CalculationPlan(
-            decision="needs_more_info",
-            uncertainties=db_review_reasons
-        )
-        payable_val = Decimal("0")
-        deductible_val = Decimal("0")
-        sandbox_code = ""
     else:
         planner = FakePlanner() if use_fake_planner else LLMPlanner(model_id=model_id, provider=provider)
         plan: CalculationPlan = planner.plan(items, context, retrieved_evidences)
@@ -1230,7 +1361,7 @@ def run_claim_calculation(
     calculation_status = "auto_calculated"
     if confirmed_exclusion_path_found or plan.decision == "not_covered":
         calculation_status = "not_covered"
-    elif disambiguation_required or plan.decision == "needs_more_info":
+    elif disambiguation_required or rule_approval_required or plan.decision == "needs_more_info":
         calculation_status = "blocked_missing_info"
     elif review_required:
         calculation_status = "estimated_review_required"
@@ -1238,7 +1369,13 @@ def run_claim_calculation(
     notes_by_status = {
         "auto_calculated": "지급예상액 계산이 성공적으로 완료되었습니다.",
         "estimated_review_required": "추가 심사 검토가 필요합니다.",
-        "blocked_missing_info": "필수 정보 또는 표준코드 선택이 부족하여 자동 계산을 보류했습니다.",
+        "blocked_missing_info": (
+            "표준코드 선택 전 산정 보류"
+            if disambiguation_required
+            else "승인 룰 확인 전 자동 계산을 보류했습니다."
+            if rule_approval_required
+            else "필수 정보 또는 표준코드 선택이 부족하여 자동 계산을 보류했습니다."
+        ),
         "not_covered": "면책/보상제외 판단 근거가 확인되어 지급예상액을 0원으로 보수 처리했습니다.",
     }
 

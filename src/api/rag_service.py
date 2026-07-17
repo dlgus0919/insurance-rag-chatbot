@@ -10,6 +10,11 @@ from typing import Any
 
 from src import config
 from src.api.models import ChatMessage
+from src.claim_calculation.thread_context import (
+    build_claim_thread_context,
+    contextualize_claim_query,
+    extract_claim_snapshots,
+)
 from src.graph.context import build_graph_context
 from src.llm.factory import build_llm
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
@@ -298,7 +303,9 @@ async def prepare_retrieved_context(
     }
     if policy_generation:
         retrieval_kwargs["policy_generation"] = policy_generation
-    hits, debug = pipeline.retrieve_hits(question, **retrieval_kwargs)
+    claim_context = build_claim_thread_context(history, question)
+    retrieval_question = contextualize_claim_query(question, claim_context)
+    hits, debug = pipeline.retrieve_hits(retrieval_question, **retrieval_kwargs)
     if auto_params is not None:
         preserve_ids = {hit.id for hit in graph_hits}
         hits, cutoff = apply_adaptive_k_to_hits(
@@ -326,12 +333,22 @@ async def prepare_retrieved_context(
     sources = chunks_to_sources(chunks)
     prompt = pipeline.build_prompt(question, chunks, graph_context=graph_context)
     history_context = build_history_context(history)
+    if claim_context.references_claim and claim_context.prompt_context:
+        history_context = "\n\n".join(
+            part for part in (claim_context.prompt_context, history_context) if part
+        )
     if history_context:
         prompt = f"{history_context}\n\n{prompt}"
     deterministic_answer = (
         policy_decision.answer
         if policy_decision is not None
-        else _deterministic_guard_answer(question, chunks, graph_context=graph_context)
+        else _deterministic_guard_answer(
+            question,
+            chunks,
+            graph_context=graph_context,
+            graph_result=graph_result,
+            table_store=_TABLE_STORE,
+        )
     )
     if debug is not None:
         debug.graph_result = graph_result
@@ -372,20 +389,6 @@ def _format_table_row(row: dict, row_type: str) -> str:
             continue
         lines.append(f"| {key} | {value} |")
     return "\n".join(lines)
-
-
-def _extract_claim_snapshots(messages: list[ChatMessage]) -> list[dict]:
-    snapshots: list[dict] = []
-    for message in messages:
-        if message.role != "assistant":
-            continue
-        for source in message.sources or []:
-            if not isinstance(source, dict):
-                continue
-            snapshot = source.get("claim_snapshot")
-            if source.get("__kind") == "assistant_meta" and isinstance(snapshot, dict):
-                snapshots.append(snapshot)
-    return snapshots
 
 
 def _sanitize_claim_context_field(value: Any, max_chars: int = _CLAIM_CONTEXT_FIELD_MAX_CHARS) -> str:
@@ -494,7 +497,7 @@ def _truncate_claim_context(text: str, max_chars: int) -> str:
 
 
 def build_claim_snapshot_context(messages: list[ChatMessage], max_chars: int = 4000) -> str:
-    snapshots = _extract_claim_snapshots(messages)
+    snapshots = extract_claim_snapshots(messages)
     if not snapshots:
         return ""
 
@@ -527,13 +530,12 @@ def build_claim_snapshot_context(messages: list[ChatMessage], max_chars: int = 4
     return _truncate_claim_context(latest_only, max_chars)
 
 
-def build_history_context(messages: list[ChatMessage]) -> str:
+def build_history_context(messages: list[ChatMessage], claim_context: str = "") -> str:
     """Build compact chat history without replacing the current RAG prompt."""
 
     if not messages:
         return ""
     parts = []
-    claim_context = build_claim_snapshot_context(messages)
     if claim_context:
         parts.append(claim_context)
     recent = messages[-4:]

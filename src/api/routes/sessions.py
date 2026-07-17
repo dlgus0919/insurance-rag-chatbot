@@ -30,24 +30,34 @@ async def list_sessions(
     """Return only the authenticated user's chat sessions."""
 
     count_subquery = (
-        select(ChatMessage.session_id, func.count(ChatMessage.id).label("message_count"))
+        select(
+            ChatMessage.session_id,
+            func.count(ChatMessage.id).label("message_count"),
+            func.max(ChatMessage.created_at).label("last_message_at"),
+        )
         .group_by(ChatMessage.session_id)
         .subquery()
     )
+    last_activity = func.coalesce(count_subquery.c.last_message_at, ChatSession.created_at)
     result = await db.execute(
-        select(ChatSession, func.coalesce(count_subquery.c.message_count, 0))
+        select(
+            ChatSession,
+            func.coalesce(count_subquery.c.message_count, 0),
+            last_activity.label("last_activity_at"),
+        )
         .outerjoin(count_subquery, ChatSession.id == count_subquery.c.session_id)
         .where(ChatSession.user_id == user.username)
-        .order_by(ChatSession.created_at.desc())
+        .order_by(last_activity.desc(), ChatSession.created_at.desc(), ChatSession.id.desc())
     )
     return [
         SessionResponse(
             id=session.id,
             title=session.title,
             created_at=session.created_at,
+            last_activity_at=last_activity_at,
             message_count=int(message_count or 0),
         )
-        for session, message_count in result.all()
+        for session, message_count, last_activity_at in result.all()
     ]
 
 
@@ -68,6 +78,7 @@ async def create_session(
         id=chat_session.id,
         title=chat_session.title,
         created_at=chat_session.created_at,
+        last_activity_at=chat_session.created_at,
         message_count=0,
     )
 
@@ -82,7 +93,9 @@ async def list_messages(
 
     await _require_owned_session(db, user.username, session_id)
     result = await db.execute(
-        select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
     )
     return [
         MessageResponse(
@@ -127,7 +140,9 @@ async def export_session(
 
     chat_session = await _require_owned_session(db, user.username, session_id)
     result = await db.execute(
-        select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
     )
     messages = list(result.scalars())
     filename = f"chat_{session_id}.{fmt}"

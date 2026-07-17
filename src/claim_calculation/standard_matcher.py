@@ -2,19 +2,29 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 import re
 from src.claim_calculation.models import StandardMatch
 from src.db import standard_codes
 
 
-def match_standard_code(input_name: str, input_code: str = "") -> list[StandardMatch]:
+CareScope = Literal["benefit", "nonpay", "mixed", "unknown"]
+
+
+def match_standard_code(
+    input_name: str,
+    input_code: str = "",
+    *,
+    care_scope: CareScope = "unknown",
+    limit: int = 6,
+) -> list[StandardMatch]:
     """청구 항목명 및 표준코드를 기반으로 비급여 표준모델을 매칭한다.
 
     1. input_code가 주어진 경우 exact match를 우선 시도한다.
     2. exact match가 실패하거나 input_code가 없는 경우 input_name으로 fuzzy search를 수행한다.
-    3. 검색 결과가 2개 이상인 경우 모든 결과의 requires_user_disambiguation을 True로 설정한다.
-    4. pay_opn_cd_nm이 "추가확인", "면책"이거나 비어있으면 requires_review를 True로 설정한다.
+    3. 비급여 금액만 입력된 경우에는 급여/면책 전용 행을 후보에서 제외한다.
+    4. 검색 결과가 2개 이상인 경우 모든 결과의 requires_user_disambiguation을 True로 설정한다.
+    5. pay_opn_cd_nm이 "추가확인", "면책"이거나 비어있으면 requires_review를 True로 설정한다.
     """
     input_code = input_code.strip()
     input_name = input_name.strip()
@@ -34,9 +44,11 @@ def match_standard_code(input_name: str, input_code: str = "") -> list[StandardM
     if not rows:
         return []
 
-    rows = _filter_rows_for_query(input_name, rows)
+    rows = _filter_rows_for_query(input_name, rows, care_scope)
     if not rows:
         return []
+
+    bounded_limit = max(1, min(int(limit or 6), 6))
 
     matches = []
     # 2개 이상인 경우 모호성 표시 활성화
@@ -51,7 +63,7 @@ def match_standard_code(input_name: str, input_code: str = "") -> list[StandardM
 
     # 정렬: 면책이나 추가확인(requires_review=True)인 항목은 뒤로 밀려나도록 정렬
     matches.sort(key=lambda x: (x.requires_review, x.std_cd_nm))
-    return matches
+    return matches[:bounded_limit]
 
 
 def _normalize_text(value: str) -> str:
@@ -75,7 +87,11 @@ def _row_text(row: dict[str, Any]) -> str:
     )
 
 
-def _filter_rows_for_query(input_name: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _filter_rows_for_query(
+    input_name: str,
+    rows: list[dict[str, Any]],
+    care_scope: CareScope,
+) -> list[dict[str, Any]]:
     """Reduce known broad-name false positives before disambiguation.
 
     Short words such as MRI/MRA often match unrelated treatment materials. Keep
@@ -98,8 +114,25 @@ def _filter_rows_for_query(input_name: str, rows: list[dict[str, Any]]) -> list[
             )
         ]
         if imaging_rows:
-            return imaging_rows
+            rows = imaging_rows
+
+    if care_scope == "nonpay":
+        return [row for row in rows if _is_nonpay_row(row) and not _is_nonpay_restriction(row)]
     return rows
+
+
+def _is_nonpay_row(row: dict[str, Any]) -> bool:
+    return "비급여" in _normalize_text(_row_text(row))
+
+
+def _is_nonpay_restriction(row: dict[str, Any]) -> bool:
+    text = _normalize_text(_row_text(row))
+    return (
+        "면책" in text
+        or "보상제외" in text
+        or ("급여외" in text and "산정불가" in text)
+        or ("비급여" in text and "산정불가" in text)
+    )
 
 
 def _row_to_standard_match(row: dict[str, Any], match_confidence: str) -> StandardMatch:

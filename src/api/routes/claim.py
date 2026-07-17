@@ -250,10 +250,12 @@ def _claim_response_text(response: ClaimCalculationResponse) -> str:
 
 
 def _claim_snapshot_source(payload: ClaimCalculationRequest, response: ClaimCalculationResponse) -> dict:
+    candidates = list(response.candidates or [])
     return {
         "__kind": "assistant_meta",
         "claim_snapshot": {
-            "schema_version": 1,
+            "schema_version": 2,
+            "state": "candidate_pending" if candidates else "completed",
             "claim_id": str(uuid4()),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "input": {
@@ -268,6 +270,7 @@ def _claim_snapshot_source(payload: ClaimCalculationRequest, response: ClaimCalc
                 "special_calculation_status": response.special_calculation_status,
                 "calculation_status": response.calculation_status,
                 "line_results": [_claim_snapshot_line(line) for line in response.line_results],
+                "candidates": candidates,
                 "review_reasons": list(response.review_reasons or []),
                 "applied_basis": [_claim_basis_reference(basis) for basis in response.applied_basis],
                 "notes": response.notes,

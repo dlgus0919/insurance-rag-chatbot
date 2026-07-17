@@ -1,0 +1,46 @@
+[
+  {
+    "graph_refs": [
+      "source_chunk:약관_ch_002440",
+      "source_chunk:약관_ch_002441",
+      "source_chunk:약관_ch_002442",
+      "source_chunk:약관_ch_002443",
+      "source_chunk:약관_ch_002444"
+    ],
+    "link_status": "active",
+    "ontology_refs": [
+      "cov.indemnity_medical",
+      "cov.manual_therapy"
+    ],
+    "rule_id": "deductible.4th.three_major_manual.hospitalization",
+    "source_refs": [
+      "policy_chunk:약관_ch_002440",
+      "policy_chunk:약관_ch_002441",
+      "policy_chunk:약관_ch_002442",
+      "policy_chunk:약관_ch_002443",
+      "policy_chunk:약관_ch_002444"
+    ]
+  },
+  {
+    "graph_refs": [
+      "source_chunk:약관_ch_002440",
+      "source_chunk:약관_ch_002441",
+      "source_chunk:약관_ch_002442",
+      "source_chunk:약관_ch_002443",
+      "source_chunk:약관_ch_002444"
+    ],
+    "link_status": "active",
+    "ontology_refs": [
+      "cov.indemnity_medical",
+      "cov.manual_therapy"
+    ],
+    "rule_id": "deductible.4th.three_major_manual.outpatient",
+    "source_refs": [
+      "policy_chunk:약관_ch_002440",
+      "policy_chunk:약관_ch_002441",
+      "policy_chunk:약관_ch_002442",
+      "policy_chunk:약관_ch_002443",
+      "policy_chunk:약관_ch_002444"
+    ]
+  }
+]

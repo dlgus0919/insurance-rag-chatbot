@@ -74,7 +74,12 @@ async def test_claim_calculation_route_returns_payable_amount(monkeypatch) -> No
                     quantity="1",
                     user_category_hint="3대비급여",
                 )
-            ]
+            ],
+            context={
+                "policy_generation": "4th",
+                "visit_type": "outpatient",
+                "coverage_topic": "실손, 3대비급여",
+            },
         ),
         request=None,
         user=_employee(),
@@ -82,11 +87,14 @@ async def test_claim_calculation_route_returns_payable_amount(monkeypatch) -> No
     )
 
     assert response.claimed_amount == "150000"
-    assert response.deductible == "75000"
-    assert response.payable_amount == "75000"
-    assert response.policy_generation == "5th"
+    assert response.deductible == "45000"
+    assert response.payable_amount == "105000"
+    assert response.policy_generation == "4th"
     assert response.line_results[0]["input_name"] == "도수치료"
     assert response.requires_review is True
+    assert response.line_results[0]["requires_review"] is True
+    assert any("누적 청구 이력이 없어 승인 룰의 연간 한도" in reason for reason in response.review_reasons)
+    assert any("상해 또는 질병의 치료 목적" in reason for reason in response.line_results[0]["review_reasons"])
 
 
 @pytest.mark.anyio

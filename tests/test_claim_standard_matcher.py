@@ -104,3 +104,45 @@ def test_match_standard_code_requires_review():
         # 두 번째 호출: 보상의견 공란
         res2 = match_standard_code(input_name="시술", input_code="SC0004")
         assert res2[0].requires_review
+
+
+def _manual_therapy_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "std_cd": "51040",
+            "std_cd_nm": "도수치료",
+            "mid_category_cd_nm": "물리치료",
+            "ins_care_type_cd_nm": "급여",
+            "pay_opn_cd_nm": "면책",
+            "notes": "급여외 산정불가",
+        },
+        {
+            "std_cd": "MX122",
+            "std_cd_nm": "도수치료 [1일당]",
+            "mid_category_cd_nm": "물리치료",
+            "ins_care_type_cd_nm": "비급여_특약1",
+            "pay_opn_cd_nm": "추가확인",
+        },
+    ]
+
+
+def test_nonpay_manual_therapy_prefers_mx122():
+    with patch("src.db.standard_codes.search_by_name", return_value=_manual_therapy_rows()):
+        matches = match_standard_code("도수치료", care_scope="nonpay")
+
+    assert [match.std_cd for match in matches] == ["MX122"]
+
+
+def test_unknown_scope_keeps_bounded_disambiguation():
+    with patch("src.db.standard_codes.search_by_name", return_value=_manual_therapy_rows()):
+        matches = match_standard_code("도수치료", care_scope="unknown", limit=6)
+
+    assert {match.std_cd for match in matches} == {"51040", "MX122"}
+    assert all(match.requires_user_disambiguation for match in matches)
+
+
+def test_explicit_code_still_wins_for_nonpay_scope():
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=_manual_therapy_rows()[0]):
+        match = match_standard_code("도수치료", "51040", care_scope="nonpay")[0]
+
+    assert match.std_cd == "51040"

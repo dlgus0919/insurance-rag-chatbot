@@ -25,6 +25,7 @@ from src.rag.pipeline import (
     _merge_hits_preserving_order,
     _needs_doc_coverage,
 )
+from src.rag.table_store import TableStore
 from src.parser.chunker import Chunk
 from src.retrieval import Hit
 
@@ -125,6 +126,41 @@ def test_hira_fee_context_requires_explicit_fee_intent_from_user_question(monkey
     assert fee_context is not None
     assert "Q2861" in fee_context
     assert "Q2862" in fee_context
+
+
+def test_deterministic_guard_prefers_confirmed_surgery_grade_before_hira(monkeypatch) -> None:
+    class StubTableStore:
+        def is_available(self) -> bool:
+            return True
+
+        def lookup_surgery_grade_exact(self, surgery_name: str):
+            assert surgery_name == "결장폴립절제술"
+            return {
+                "수술명": surgery_name,
+                "종_1_3": "2",
+                "종_1_5": "4",
+                "종_신1_5": "4",
+                "source_page_label": "110",
+            }
+
+        def search_surgery_grade_candidates(self, surgery_name: str, *, limit: int = 3):
+            return []
+
+    def fail_hira(*args, **kwargs):
+        raise AssertionError("수술종수 질의는 HIRA 수가 조회로 진행하면 안 됩니다.")
+
+    monkeypatch.setattr(pipeline_module, "_build_hira_fee_context", fail_hira)
+
+    answer = _deterministic_guard_answer(
+        "결장폴립절제술은 1~5종에서 몇종으로 줘?",
+        [],
+        graph_context="코드나 약관 판단은 원문 근거를 우선합니다.",
+        table_store=StubTableStore(),
+    )
+
+    assert answer is not None
+    assert "1-5종 기준 4종" in answer
+    assert "p.110" in answer
 
 
 @pytest.mark.parametrize("question", ["N39.3 보상 가능 여부", "N39.3 진단코드가 무엇인가요?"])

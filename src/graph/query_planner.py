@@ -47,13 +47,14 @@ class GraphQueryPlanner:
     def __init__(self, ontology_registry: OntologyRegistry | None = None) -> None:
         self.ontology_registry = ontology_registry or get_default_ontology_registry()
         # 등급 시스템 정규식 (예: 신1-5종, 1-5종, 1-3종)
-        self.grade_system_rx = re.compile(r"(신\s*1[-~]5종|1[-~]5종|1[-~]3종)")
+        self.grade_system_rx = re.compile(r"(신\s*1[-~∼]5종|1[-~∼]5종|1[-~∼]3종)")
         # 등급 값 정규식 (예: 4종, 5종 등)
         self.grade_value_rx = re.compile(r"([1-5])\s*종")
+        self.grade_intent_rx = re.compile(r"몇\s*종|어떤\s*종|종수|등급")
         # 카테고리 목록
         self.categories = ["소화기계", "호흡기계", "흉부", "비뇨기계", "신경계", "순환기계", "근골격계"]
         # 수가코드 정규식
-        self.hira_code_rx = re.compile(r"\b([A-Z]{1,2}\d{3,4})\b")
+        self.hira_code_rx = re.compile(r"(?<![A-Z0-9.])([A-Z]{1,2}\d{3,4})(?![A-Z0-9.])")
         # 약관/상품 키워드
         self.products = ["SOL", "처음건강보험", "이지로운", "실손의료보험", "운전자보험", "자사_SOL건강"]
         self.appendices = ["별표7", "별표15", "별표"]
@@ -86,6 +87,19 @@ class GraphQueryPlanner:
     def _append_unique(values: list[str], value: str) -> None:
         if value and value not in values:
             values.append(value)
+
+    def _extract_grade_request(self, query: str) -> tuple[str | None, str | None]:
+        """등급 체계를 먼저 제외해 독립적으로 지정한 종수만 읽는다."""
+
+        system_match = self.grade_system_rx.search(query)
+        grade_system = None
+        value_source = query
+        if system_match:
+            grade_system = re.sub(r"\s+", "", system_match.group(1)).replace("~", "-").replace("∼", "-")
+            value_source = f"{query[:system_match.start()]} {query[system_match.end():]}"
+
+        value_match = self.grade_value_rx.search(value_source)
+        return grade_system, value_match.group(1) if value_match else None
 
     def _append_candidate(
         self,
@@ -264,14 +278,7 @@ class GraphQueryPlanner:
 
         # 1. Entity Extraction
         # 1.1 Grade System
-        gs_match = self.grade_system_rx.search(query)
-        if gs_match:
-            plan.grade_system = gs_match.group(1).replace(" ", "")
-
-        # 1.2 Grade Value
-        gv_match = self.grade_value_rx.search(query)
-        if gv_match:
-            plan.grade_value = gv_match.group(1)
+        plan.grade_system, plan.grade_value = self._extract_grade_request(query)
 
         # 1.3 Category
         for cat in self.categories:
@@ -446,7 +453,7 @@ class GraphQueryPlanner:
         intents = []
 
         # 2.1 surgery_grade_lookup: 수술명과 등급 시스템이 질문에 있고 등급을 조회하는 뉘앙스
-        if plan.procedure_name and ("종수" in query or "등급" in query or "몇 종" in query or "어떤 종" in query or "종은" in query):
+        if plan.procedure_name and self.grade_intent_rx.search(query):
             intents.append("surgery_grade_lookup")
 
         # 2.2 same_grade_surgery_list: 동일한 종, 동일한 등급, 다른 수술 목록을 묻는 경우

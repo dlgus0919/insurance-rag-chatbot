@@ -115,7 +115,7 @@ class CalculationResult:
     candidates: list[dict[str, str]] = field(default_factory=list)
     policy_generation: str = "5th"
     special_calculation_status: str = SPECIAL_CALCULATION_UNKNOWN
-    line_results: list[dict[str, str | bool | list[str]]] = field(default_factory=list)
+    line_results: list[dict[str, Any]] = field(default_factory=list)
     applied_limits: dict[str, str] = field(default_factory=dict)
     calculation_status: str = "auto_calculated"
     missing_evidence: list[str] = field(default_factory=list)

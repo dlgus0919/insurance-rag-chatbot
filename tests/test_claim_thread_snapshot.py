@@ -109,7 +109,8 @@ def test_claim_snapshot_source_persists_input_and_result_without_raw_text() -> N
 
     assert source["__kind"] == "assistant_meta"
     snapshot = source["claim_snapshot"]
-    assert snapshot["schema_version"] == 1
+    assert snapshot["schema_version"] == 2
+    assert snapshot["state"] == "completed"
     assert snapshot["input"]["items"][0]["input_name"] == "도수치료"
     assert snapshot["input"]["context"]["treatment_date"] == "2026-06-29"
     assert snapshot["input"]["context"]["diagnosis_code"] == "M25.5"
@@ -124,6 +125,21 @@ def test_claim_snapshot_source_persists_input_and_result_without_raw_text() -> N
     assert "SITUATION_NOTE_SHOULD_NOT_BE_IN_SNAPSHOT" not in dumped
     assert "도수치료는 3대비급여 기준으로 산정합니다." not in dumped
     assert snapshot["result"]["applied_basis"][0]["source"] == "비급여 표준모델"
+
+
+def test_claim_snapshot_source_persists_candidates_as_pending() -> None:
+    response = _claim_response()
+    response.candidates = [{"code": "MX122", "name": "도수치료"}]
+
+    source = claim._claim_snapshot_source(
+        ClaimCalculationRequest(items=[ClaimItemRequest(input_name="도수치료", claimed_amount="150000")]),
+        response,
+    )
+
+    snapshot = source["claim_snapshot"]
+    assert snapshot["schema_version"] == 2
+    assert snapshot["state"] == "candidate_pending"
+    assert snapshot["result"]["candidates"] == [{"code": "MX122", "name": "도수치료"}]
 
 
 def test_build_claim_snapshot_context_includes_all_thread_calculations() -> None:
@@ -209,7 +225,7 @@ def test_build_claim_snapshot_context_includes_all_thread_calculations() -> None
     assert "미분류 비급여 항목은 급여/비급여 구분 확인 필요" in context
 
 
-def test_build_history_context_prepends_claim_snapshot_context() -> None:
+def test_build_history_context_includes_only_explicit_claim_context() -> None:
     messages = [
         ChatMessage(
             role="assistant",
@@ -233,7 +249,10 @@ def test_build_history_context_prepends_claim_snapshot_context() -> None:
         ChatMessage(role="user", content="그 금액을 다시 설명해줘", sources=None),
     ]
 
-    context = build_history_context(messages)
+    context = build_history_context(
+        messages,
+        claim_context="[이 스레드의 보험금 계산 내역]\n- 예상 지급금액: 105000원",
+    )
 
     assert context.startswith("[이 스레드의 보험금 계산 내역]")
     assert context.index("[이 스레드의 보험금 계산 내역]") < context.index("[최근 대화 참고]")

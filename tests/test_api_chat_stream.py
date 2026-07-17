@@ -81,6 +81,7 @@ class FakePipeline:
         self.last_doc_filter = None
 
     def retrieve_hits(self, question, top_k=None, doc_filter=None, return_debug=False, graph_hits=None):
+        self.last_retrieval_question = question
         self.last_doc_filter = doc_filter
         hits = [
             type(
@@ -459,6 +460,7 @@ async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkey
     assert response.media_type == "text/event-stream"
     assert stream.index("event: status") < stream.index("event: sources") < stream.index("event: token")
     assert "event: done" in stream
+    assert '"persisted": true' in stream
     assert messages[0].role == "user"
     assert messages[0].content == "도수치료 보상돼?"
     assert messages[1].role == "assistant"
@@ -473,6 +475,29 @@ async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkey
     assert audit_entry.detail["index_mode"] == "v2_only"
     assert audit_entry.detail["effective_index_mode"] == "v2_only"
     assert audit_entry.detail["rag_diagnostics"]["steps"][-1]["label"] == "LLM 답변 생성"
+
+
+@pytest.mark.anyio
+async def test_chat_stream_does_not_emit_done_when_turn_persistence_fails(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
+
+    async def fail_persist(*_args, **_kwargs) -> None:
+        raise RuntimeError("simulated persistence failure")
+
+    monkeypatch.setattr(chat, "_persist_turn", fail_persist)
+    created = await sessions.create_session(SessionCreateRequest(title="저장 실패"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(query="도수치료 보상돼?", session_id=created.id, model="gemma3:4b"),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+
+    assert "event: final" in stream
+    assert "event: done" not in stream
+    assert "CHAT_HISTORY_PERSIST_FAILED" in stream
 
 
 @pytest.mark.anyio
@@ -1051,6 +1076,38 @@ async def test_prepare_retrieved_context_applies_requested_doc_filter() -> None:
     assert pipeline.last_doc_filter == ["약관", "표준약관"]
 
 
+@pytest.mark.anyio
+async def test_prepare_retrieved_context_uses_claim_terms_only_for_claim_references() -> None:
+    pipeline = FakePipeline()
+    history = [
+        ChatMessage(
+            role="assistant",
+            content="보험금 계산 결과",
+            sources=[_claim_snapshot_source_for_chat()],
+        )
+    ]
+
+    _chunks, _sources, prompt, _graph, _warnings, _answer, _debug = await prepare_retrieved_context(
+        pipeline,
+        "그 계산의 공제금액이 나온 이유를 설명해 주세요",
+        6,
+        history,
+    )
+
+    assert "도수치료" in pipeline.last_retrieval_question
+    assert "[보험금 계산 문맥 검색어]" in pipeline.last_retrieval_question
+    assert "질문: 그 계산의 공제금액이 나온 이유를 설명해 주세요" in prompt
+
+    await prepare_retrieved_context(
+        pipeline,
+        "N39.3 진단코드 보상 가능 여부를 알려줘",
+        6,
+        history,
+    )
+
+    assert pipeline.last_retrieval_question == "N39.3 진단코드 보상 가능 여부를 알려줘"
+
+
 
 def test_rag_diagnostics_include_clarification_and_normalized_terms() -> None:
     debug = chat.DebugInfo(dense_hits=[], bm25_hits=[], rrf_hits=[], final_hits=[])
@@ -1138,7 +1195,23 @@ async def test_chat_stream_asks_clarification_when_multiple_claim_snapshots_are_
                 session_id=created.id,
                 role="assistant",
                 content="둘째 계산",
-                sources=[_claim_snapshot_source_for_chat(claim_id="claim-2")],
+                sources=[
+                    _claim_snapshot_source_for_chat(
+                        claim_id="claim-2",
+                        payable_amount="33600",
+                        line_results=[
+                            {
+                                "line_id": "line-2",
+                                "input_name": "비타민D 주사",
+                                "category": "미분류 비급여",
+                                "claimed_amount": "48000",
+                                "deductible": "14400",
+                                "payable_amount": "33600",
+                                "calculation_status": "calculated",
+                            }
+                        ],
+                    )
+                ],
             ),
         ]
     )
@@ -1156,8 +1229,8 @@ async def test_chat_stream_asks_clarification_when_multiple_claim_snapshots_are_
     )
     messages = list(result.scalars())
 
-    assert "여러 건" in stream
-    assert "최근 계산" in stream
+    assert "서로 다른 여러 계산" in stream
+    assert "기준이 될 계산" in stream
     assert messages[-2].content == "비타민D 주사를 비급여로 보상한다면?"
     assert messages[-1].role == "assistant"
 
@@ -1556,6 +1629,7 @@ async def test_chat_stream_not_covered_follow_up_persists_conditional_snapshot(d
 
     assert "예상 지급금액은 0원" in stream
     assert snapshot["follow_up"]["kind"] == "conditional_not_covered"
+    assert snapshot["state"] == "conditional"
     assert snapshot["result"]["payable_amount"] == "0"
     assert snapshot["result"]["calculation_status"] == "conditional_follow_up"
     assert snapshot["result"]["line_results"][0]["payable_amount"] == "0"

@@ -1,6 +1,7 @@
 import { SESSION_KEYS, STORAGE_KEYS } from '../config.js';
 import { createConfirmModal } from '../modules/modal.js';
 import { compactClaimBasisItems } from '../modules/claim-result.js';
+import { createChatThreadState } from '../modules/chat-thread-state.js';
 import { getCurrentSessionId, setCurrentSession } from '../modules/session.js';
 import { setupMenuHandlers } from '../modules/sidebar.js';
 import { toast } from '../modules/ui.js';
@@ -18,6 +19,7 @@ let msgs = [];
 let currentMode = 'general';
 let currentSession = null;
 let activeAbort = null;
+const chatThreadState = createChatThreadState();
 
 export async function initChatPage({ currentUser, onGoAdmin, onLogout } = {}) {
   me = currentUser || null;
@@ -34,7 +36,8 @@ export async function initChatPage({ currentUser, onGoAdmin, onLogout } = {}) {
   syncCurrentSessionFromActiveHistory();
 
   await loadDocumentScopeOptions();
-  await loadSessions();
+  const sessions = await loadSessions();
+  await restoreRequestedSession(sessions);
 }
 
 export function abortActiveChat() {
@@ -50,6 +53,8 @@ export function resetChatState() {
   msgs = [];
   currentMode = 'general';
   currentSession = null;
+  chatThreadState.clear();
+  chatThreadState.setInputMode('general');
   setCurrentSession(null);
 }
 
@@ -389,15 +394,29 @@ async function loadSessions() {
         <div class="h-title">${escapeHTML(session.title)}</div>
         <button class="hist-del-btn" type="button" title="삭제"><svg width="11" height="11" fill="none" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
       </div>`).join('');
+    return sessions;
   } catch (error) {
     toast(error.message, 'error');
+    return [];
   }
+}
+
+async function restoreRequestedSession(sessions) {
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('new')) return;
+
+  const requestedSessionId = params.get('session');
+  if (!requestedSessionId || !sessions.some((session) => session.id === requestedSessionId)) return;
+  const element = [...document.querySelectorAll('.history-item[data-session-id]')]
+    .find((item) => item.dataset.sessionId === requestedSessionId);
+  if (element) await loadHist(element, requestedSessionId);
 }
 
 async function newChat() {
   abortActiveChat();
   msgs = [];
   currentSession = null;
+  chatThreadState.clear();
   setCurrentSession(null);
   try {
     window.sessionStorage.setItem(SESSION_KEYS.FRESH_CHAT_NOTICE, '1');
@@ -408,17 +427,24 @@ async function newChat() {
 }
 
 async function loadHist(element, sessionId) {
-  document.querySelectorAll('.history-item').forEach((item) => item.classList.remove('active'));
-  element.classList.add('active');
-  msgs = [];
-  currentSession = sessionId;
-  setCurrentSession(sessionId);
-  renderWelcome();
+  abortActiveChat();
+  const token = chatThreadState.beginLoad(sessionId);
+  const container = document.getElementById('chat-msgs');
+  container?.setAttribute('aria-busy', 'true');
 
   try {
-    const response = await apiFetch(`/sessions/${encodeURIComponent(sessionId)}/messages`);
+    const response = await apiFetch(`/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      signal: token.signal,
+    });
     const history = await response.json();
-    const container = document.getElementById('chat-msgs');
+    if (!chatThreadState.commitLoad(token)) return;
+
+    msgs = [];
+    currentSession = sessionId;
+    setCurrentSession(sessionId);
+    document.querySelectorAll('.history-item').forEach((item) => {
+      item.classList.toggle('active', item.dataset.sessionId === sessionId);
+    });
     container.innerHTML = '';
     history.forEach((message) => {
       const uiPayload = message.role === 'assistant'
@@ -434,8 +460,16 @@ async function loadHist(element, sessionId) {
       );
     });
     if (!history.length) renderWelcome();
+    const url = new URL(window.location.href);
+    url.searchParams.set('session', sessionId);
+    url.searchParams.delete('new');
+    window.history.replaceState({}, '', `${url.pathname}?${url.searchParams}`);
   } catch (error) {
-    toast(error.message, 'error');
+    if (error.name !== 'AbortError' && chatThreadState.canCommit(token)) {
+      toast(error.message, 'error');
+    }
+  } finally {
+    if (chatThreadState.canCommit(token)) container?.removeAttribute('aria-busy');
   }
 }
 
@@ -455,6 +489,7 @@ async function deleteHist(event, button) {
   if (item.classList.contains('active')) {
     msgs = [];
     currentSession = null;
+    chatThreadState.clear();
     setCurrentSession(null);
     renderWelcome();
   }
@@ -464,7 +499,7 @@ async function deleteHist(event, button) {
 function appendMsg(role, text, sources, track = true, uiPayload = null) {
   document.querySelector('.chat-welcome')?.remove();
   const container = document.getElementById('chat-msgs');
-  if (!container) return;
+  if (!container) return null;
 
   const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   const isUser = role === 'user';
@@ -493,12 +528,13 @@ function appendMsg(role, text, sources, track = true, uiPayload = null) {
   container.appendChild(row);
   container.scrollTop = container.scrollHeight;
   if (track) msgs.push({ role, text: messageText, time, sources: sources || [], graphResult, warnings });
+  return row;
 }
 
 function showTyping() {
   document.querySelector('.chat-welcome')?.remove();
   const container = document.getElementById('chat-msgs');
-  if (!container) return;
+  if (!container) return null;
 
   const row = document.createElement('div');
   row.className = 'msg-row bot';
@@ -506,10 +542,11 @@ function showTyping() {
   row.innerHTML = `<div class="msg-av bot"><img src="${getBotLogoSrc()}" alt="AI"></div><div><div class="msg-bubble" style="padding:12px 15px;"><span class="typing-dot"></span><span class="typing-dot"></span><span class="typing-dot"></span></div></div>`;
   container.appendChild(row);
   container.scrollTop = container.scrollHeight;
+  return row;
 }
 
-function removeTyping() {
-  document.getElementById('typing')?.remove();
+function removeTyping(row = null) {
+  (row || document.getElementById('typing'))?.remove();
 }
 
 function fillSug(text) {
@@ -524,11 +561,11 @@ async function sendMsg() {
   const text = input?.value.trim();
   if (!text) return;
 
-  appendMsg('user', text);
+  const optimisticRow = appendMsg('user', text);
   input.value = '';
   input.style.height = 'auto';
   const mode = currentMode === 'claim' ? 'general' : currentMode;
-  await streamChat(text, mode, getActiveScopeFilters());
+  await streamChat(text, mode, getActiveScopeFilters(), '', optimisticRow);
 }
 
 async function sendClaim(options = {}) {
@@ -550,9 +587,9 @@ async function sendClaim(options = {}) {
     const nonpay = item.nonpay_amount || '0';
     return `${item.input_name} 급여본인부담 ${insured}원 / 비급여 ${nonpay}원 x ${item.quantity}`;
   }).join(', ');
-  if (!suppressUserMessage) {
-    appendMsg('user', `[보험금 계산/${policyGeneration === '5th' ? '5세대' : '4세대'}/${specialCalculationLabel(specialCalculationStatus)}] ${itemSummary}`);
-  }
+  const optimisticRow = suppressUserMessage
+    ? null
+    : appendMsg('user', `[보험금 계산/${policyGeneration === '5th' ? '5세대' : '4세대'}/${specialCalculationLabel(specialCalculationStatus)}] ${itemSummary}`);
   await calculateClaim({
     session_id: currentSession,
     save_to_history: saveToHistory,
@@ -568,7 +605,7 @@ async function sendClaim(options = {}) {
     model: getSelectedModel(),
     top_k: getTopK(),
     index_mode: getIndexMode(),
-  });
+  }, optimisticRow);
 }
 
 function collectClaimItems() {
@@ -689,40 +726,54 @@ function syncClaimLineLabels() {
   });
 }
 
-async function calculateClaim(payload) {
+async function calculateClaim(payload, optimisticRow = null) {
   abortActiveChat();
-  activeAbort = new AbortController();
-  showTyping();
+  let requestSessionId = payload.session_id || currentSession || null;
+  const requestRevision = chatThreadState.currentRevision();
+  const requestAbort = new AbortController();
+  activeAbort = requestAbort;
+  const typingRow = showTyping();
   try {
     const response = await apiFetch('/claim/calculate', {
       method: 'POST',
       body: JSON.stringify(payload),
-      signal: activeAbort.signal,
+      signal: requestAbort.signal,
     });
     const result = await response.json();
-    removeTyping();
+    if (!isCurrentRequest(requestRevision, requestAbort)) return;
+    removeTyping(typingRow);
     if (result.session_id) {
+      if (!requestSessionId) requestSessionId = result.session_id;
       currentSession = result.session_id;
       setCurrentSession(currentSession);
     }
     appendClaimResult(result);
     if (result.session_id) await loadSessions();
   } catch (error) {
-    removeTyping();
-    if (error.name !== 'AbortError') appendMsg('bot', '오류: ' + error.message, []);
+    removeTyping(typingRow);
+    if (error.name !== 'AbortError' && isCurrentRequest(requestRevision, requestAbort)) {
+      markMessageSendFailed(
+        optimisticRow,
+        requestSessionId,
+        () => calculateClaim({ ...payload, session_id: requestSessionId }, optimisticRow),
+      );
+    }
   } finally {
-    activeAbort = null;
+    if (activeAbort === requestAbort) activeAbort = null;
   }
 }
 
-async function streamChat(query, mode = 'general', filters = {}, memo = '') {
+async function streamChat(query, mode = 'general', filters = {}, memo = '', optimisticRow = null) {
   abortActiveChat();
-  activeAbort = new AbortController();
+  let requestSessionId = currentSession;
+  const requestRevision = chatThreadState.currentRevision();
+  const requestAbort = new AbortController();
+  activeAbort = requestAbort;
   const chatInput = document.getElementById('chat-input');
   const sendButton = document.querySelector('.send-btn');
   if (chatInput) chatInput.disabled = true;
   if (sendButton) sendButton.disabled = true;
-  showTyping();
+  const typingRow = showTyping();
 
   let botRow = null;
   let bubble = null;
@@ -730,11 +781,12 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
   let sources = [];
   let graphResult = null;
   let warnings = [];
+  let persisted = false;
 
   try {
     const payload = {
       query,
-      session_id: currentSession,
+      session_id: requestSessionId,
       mode,
       model: getSelectedModel(),
       reasoning_mode: getReasoningMode(),
@@ -750,13 +802,15 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
     const response = await apiFetch('/chat/stream', {
       method: 'POST',
       body: JSON.stringify(payload),
-      signal: activeAbort.signal,
+      signal: requestAbort.signal,
     });
 
-    removeTyping();
+    if (!isCurrentRequest(requestRevision, requestAbort)) return;
+    removeTyping(typingRow);
     botRow = createBotStreamRow();
     bubble = botRow.querySelector('.msg-bubble');
     await readSse(response.body.getReader(), (event) => {
+      if (!isCurrentRequest(requestRevision, requestAbort)) return;
       if (event.event === 'sources') sources = event.data || [];
       if (event.event === 'graph') graphResult = event.data || null;
       if (event.event === 'warning') warnings.push(event.data || {});
@@ -769,12 +823,19 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
         bubble.innerHTML = renderAssistantContent(answer);
       }
       if (event.event === 'done' && event.data.session_id) {
+        if (event.data.persisted !== true) {
+          throw new Error('대화 저장 확인이 완료되지 않았습니다. 다시 시도해 주세요.');
+        }
+        persisted = true;
+        if (!requestSessionId) requestSessionId = event.data.session_id;
         currentSession = event.data.session_id;
         setCurrentSession(currentSession);
         if (event.data.answer) answer = event.data.answer;
       }
       if (event.event === 'error') throw new Error(event.data.message || '응답 생성 중 오류가 발생했습니다.');
     });
+    if (!isCurrentRequest(requestRevision, requestAbort)) return;
+    if (!persisted) throw new Error('대화 저장 확인이 완료되지 않았습니다. 다시 시도해 주세요.');
     if (!answer) answer = '응답이 비어 있습니다.';
     answer = sanitizeAssistantAnswer(answer, graphResult);
     bubble.innerHTML = renderAssistantContent(answer)
@@ -794,16 +855,56 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '') {
     });
     await loadSessions();
   } catch (error) {
-    removeTyping();
-    if (error.name !== 'AbortError') appendMsg('bot', '오류: ' + error.message, []);
+    removeTyping(typingRow);
+    botRow?.remove();
+    if (error.name !== 'AbortError' && isCurrentRequest(requestRevision, requestAbort)) {
+      markMessageSendFailed(
+        optimisticRow,
+        requestSessionId,
+        () => streamChat(query, mode, filters, memo, optimisticRow),
+      );
+    }
   } finally {
-    activeAbort = null;
-    if (chatInput) {
+    const requestIsActive = activeAbort === requestAbort;
+    if (requestIsActive) activeAbort = null;
+    if (chatInput && requestIsActive) {
       chatInput.disabled = false;
       chatInput.focus();
     }
-    if (sendButton) sendButton.disabled = false;
+    if (sendButton && requestIsActive) sendButton.disabled = false;
   }
+}
+
+function isCurrentRequest(requestRevision, requestAbort) {
+  return activeAbort === requestAbort
+    && chatThreadState.currentRevision() === requestRevision;
+}
+
+function markMessageSendFailed(row, requestSessionId, retry) {
+  if (!row) {
+    toast('전송에 실패했습니다. 다시 시도해 주세요.', 'error');
+    return;
+  }
+  row.classList.add('send-failed');
+  const meta = row.querySelector('.msg-meta');
+  if (!meta) return;
+  const timestamp = meta.dataset.timestamp || meta.textContent;
+  meta.dataset.timestamp = timestamp;
+  meta.replaceChildren(document.createTextNode(`${timestamp} · 전송 실패 `));
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'msg-retry-btn';
+  button.textContent = '재시도';
+  button.addEventListener('click', async () => {
+    if (String(currentSession || '') !== String(requestSessionId || '')) {
+      toast('원래 대화를 다시 연 뒤 재시도해 주세요.', 'error');
+      return;
+    }
+    row.classList.remove('send-failed');
+    meta.textContent = timestamp;
+    await retry();
+  });
+  meta.appendChild(button);
 }
 
 function appendClaimResult(result) {
@@ -1313,14 +1414,12 @@ function syncModeChrome(mode) {
 
 function setMode(mode, element) {
   syncModeChrome(mode);
-  if (mode === currentMode) return;
-  currentMode = mode;
+  currentMode = mode === 'claim' ? 'claim' : 'general';
+  chatThreadState.setInputMode(currentMode);
   document.querySelectorAll('.mode-tab').forEach((tab) => tab.classList.remove('active'));
   element.classList.add('active');
   document.getElementById('panel-claim')?.classList.remove('visible');
-  if (mode === 'claim') document.getElementById('panel-claim')?.classList.add('visible');
-  msgs = [];
-  renderWelcome();
+  if (currentMode === 'claim') document.getElementById('panel-claim')?.classList.add('visible');
 }
 
 function autoH(element) {

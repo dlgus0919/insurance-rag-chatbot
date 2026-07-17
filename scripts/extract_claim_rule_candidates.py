@@ -8,6 +8,7 @@ import hashlib
 import json
 import re
 import sys
+from decimal import Decimal, InvalidOperation
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,38 @@ KOREAN_AMOUNT_VALUES = {
     "20만원": "200000",
     "5천만원": "50000000",
 }
+FOURTH_MANUAL_THERAPY_CHUNK_IDS = (
+    "약관_ch_002441",
+    "약관_ch_002442",
+    "약관_ch_002443",
+)
+_PAYOUT_SIGNAL_RE = re.compile(r"(보상|지급)")
+_COPAY_SIGNAL_RE = re.compile(r"(공제|본인부담)")
+_MONEY_RE = re.compile(r"(?P<number>\d+(?:,\d{3})*(?:\.\d+)?)\s*(?P<unit>억원|천만원|백만원|만원|천원|원)")
+_MONEY_UNITS = {
+    "억원": Decimal("100000000"),
+    "천만원": Decimal("10000000"),
+    "백만원": Decimal("1000000"),
+    "만원": Decimal("10000"),
+    "천원": Decimal("1000"),
+    "원": Decimal("1"),
+}
+
+
+def _decimal_text(value: Decimal) -> str:
+    return format(value.normalize(), "f")
+
+
+def _ratio_as_copay(text: str, ratio_match: re.Match[str]) -> Decimal | None:
+    """Resolve percentage semantics only when the nearby wording is explicit."""
+
+    window = text[max(0, ratio_match.start() - 48) : min(len(text), ratio_match.end() + 48)]
+    percent = Decimal(ratio_match.group("percent")) / Decimal("100")
+    if _PAYOUT_SIGNAL_RE.search(window):
+        return Decimal("1") - percent
+    if _COPAY_SIGNAL_RE.search(window):
+        return percent
+    return None
 
 
 def extract_candidates_from_text(
@@ -49,6 +82,9 @@ def extract_candidates_from_text(
     percent = int(ratio_match.group("percent"))
     if percent <= 0 or percent > 100:
         return []
+    copay_ratio = _ratio_as_copay(text, ratio_match)
+    if copay_ratio is None:
+        return []
     generation = f"{generation_match.group('generation')}th"
     category = "급여" if "급여" in text and "비급여" not in text else "비급여" if "비급여" in text else "unknown"
     visit_type = "outpatient" if "통원" in text else "hospitalization" if "입원" in text else "unknown"
@@ -58,7 +94,6 @@ def extract_candidates_from_text(
         risk_flags.append("category_scope_unclear")
     if visit_type == "unknown":
         risk_flags.append("visit_scope_unclear")
-    copay_ratio = round(1 - (percent / 100), 4)
     digest = hashlib.sha1(f"{generation}|{category}|{visit_type}|{percent}|{chunk_id}".encode("utf-8")).hexdigest()[:12]
     rule_id = f"deductible.{generation}.{category_key}.{visit_type}.{digest}"
     source_key = f"policy_chunk:{chunk_id}"
@@ -73,7 +108,7 @@ def extract_candidates_from_text(
             "category": category,
             "visit_type": visit_type,
             "facility_grade": "all",
-            "copay_ratio": str(copay_ratio),
+            "copay_ratio": _decimal_text(copay_ratio),
             "min_deductible": "0",
             "min_deductible_by_facility": {"clinic": "0", "hospital": "0", "general_hospital": "0", "tertiary_hospital": "0"},
             "per_visit_limit": None,
@@ -264,6 +299,143 @@ def extract_special_case_5th_candidates(chunks: list[dict[str, Any]]) -> list[di
     return candidates
 
 
+def _chunk_map(chunks: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(chunk.get("chunk_id") or ""): chunk for chunk in chunks if chunk.get("chunk_id")}
+
+
+def _money_values(text: str) -> list[int]:
+    values: list[int] = []
+    for match in _MONEY_RE.finditer(text):
+        try:
+            amount = Decimal(match.group("number").replace(",", "")) * _MONEY_UNITS[match.group("unit")]
+        except (InvalidOperation, KeyError):
+            continue
+        if amount > 0 and amount == amount.to_integral_value():
+            values.append(int(amount))
+    return values
+
+
+def _manual_therapy_review_requirements(supporting_chunks: list[dict[str, Any]]) -> list[str] | None:
+    support_text = " ".join(str(chunk.get("text") or "") for chunk in supporting_chunks)
+    compact = _compact(support_text)
+    requirements: list[str] = []
+    if "최초" in compact and "10회" in compact and ("호전" in compact or "증상" in compact):
+        requirements.append("최초 10회 이후 증상 호전 증빙 확인 필요")
+    if ("동일" in compact or "당일" in compact) and "1회" in compact:
+        requirements.append("동일 방문 복수 치료 횟수 확인 필요")
+    return requirements if len(requirements) == 2 else None
+
+
+def extract_fourth_manual_therapy_candidates(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Create pending 4th-generation manual-therapy candidates from fixed evidence handles.
+
+    The function only proposes rules when every required source chunk is present and
+    the financial values can be read from the primary source. It never writes an
+    active manifest or invents a rule from a partial match.
+    """
+
+    by_chunk_id = _chunk_map(chunks)
+    if any(chunk_id not in by_chunk_id for chunk_id in FOURTH_MANUAL_THERAPY_CHUNK_IDS):
+        return []
+
+    primary = by_chunk_id[FOURTH_MANUAL_THERAPY_CHUNK_IDS[0]]
+    supporting_chunks = [by_chunk_id[chunk_id] for chunk_id in FOURTH_MANUAL_THERAPY_CHUNK_IDS[1:]]
+    primary_text = str(primary.get("text") or "")
+    source_set_text = "\n".join(str(chunk.get("text") or "") for chunk in [primary, *supporting_chunks])
+    compact_primary = _compact(primary_text)
+    if not all(term in compact_primary for term in ("도수", "체외충격파", "증식")):
+        return []
+
+    ratio_match = next(
+        (
+            match
+            for match in RATIO_RE.finditer(source_set_text)
+            if _ratio_as_copay(source_set_text, match) is not None
+        ),
+        None,
+    )
+    if ratio_match is None:
+        return []
+    copay_ratio = _ratio_as_copay(source_set_text, ratio_match)
+    if copay_ratio is None:
+        return []
+    # OCR chunk boundaries can split a date-like number and a currency unit.
+    # Parse each source separately so adjacent chunks cannot form a false amount.
+    money_values = [
+        value
+        for chunk in [primary, *supporting_chunks]
+        for value in _money_values(str(chunk.get("text") or ""))
+    ]
+    if len(money_values) < 2:
+        return []
+    minimum = min(money_values)
+    annual_limit = max(money_values)
+    annual_visit_counts = [
+        int(match.group("count"))
+        for match in re.finditer(r"(?P<count>\d+)\s*회", source_set_text)
+    ]
+    if not annual_visit_counts or "한도" not in _compact(source_set_text):
+        return []
+    annual_visit_limit = max(annual_visit_counts)
+    review_requirements = _manual_therapy_review_requirements(supporting_chunks)
+    if review_requirements is None:
+        return []
+
+    additional_source_refs = list(FOURTH_MANUAL_THERAPY_CHUNK_IDS[1:])
+    source_refs = [
+        {
+            "kind": "policy_chunk",
+            "doc_short": str(chunk.get("doc_short") or "unknown"),
+            "chunk_id": str(chunk["chunk_id"]),
+            "page": chunk.get("page"),
+            "article": chunk.get("article"),
+        }
+        for chunk in supporting_chunks
+    ]
+    evidence_text = "\n\n".join(str(chunk.get("text") or "").strip() for chunk in [primary, *supporting_chunks])
+    candidates: list[dict[str, Any]] = []
+    for visit_type in ("hospitalization", "outpatient"):
+        rule_id = f"deductible.4th.three_major_manual.{visit_type}"
+        rule = {
+            "rule_id": rule_id,
+            "generation": "4th",
+            "category": "3대비급여_도수",
+            "visit_type": visit_type,
+            "facility_grade": "all",
+            "copay_ratio": _decimal_text(copay_ratio),
+            "min_deductible": str(minimum),
+            "min_deductible_by_facility": {
+                "clinic": str(minimum),
+                "hospital": str(minimum),
+                "general_hospital": str(minimum),
+                "tertiary_hospital": str(minimum),
+            },
+            "per_visit_limit": None,
+            "annual_limit": str(annual_limit),
+            "annual_visit_limit": annual_visit_limit,
+            "review_requirements": review_requirements,
+            "description": (
+                f"4세대 3대비급여 도수치료군: 1회당 {minimum:,}원과 "
+                f"보장대상의료비 {int(copay_ratio * 100)}% 중 큰 금액, 연 {annual_limit:,}원·{annual_visit_limit}회"
+            ),
+            "source_doc": str(primary.get("doc_short") or "unknown"),
+            "source_page": str(primary.get("page") or "unknown"),
+            "source_clause": str(primary.get("article") or f"source_chunk_id:{primary['chunk_id']}"),
+            "source_chunk_id": str(primary["chunk_id"]),
+            "additional_source_refs": additional_source_refs,
+            "source_status": "source_grounded",
+            "approval_status": "candidate",
+        }
+        candidate = _candidate_base(f"rulecand.add.{rule_id}", rule, primary, evidence_text)
+        candidate["source_refs"].extend(source_refs)
+        candidate["proposed_links"]["source_refs"].extend(f"policy_chunk:{chunk_id}" for chunk_id in additional_source_refs)
+        candidate["proposed_links"]["graph_refs"].extend(f"source_chunk:{chunk_id}" for chunk_id in additional_source_refs)
+        candidate["extraction_reason"] = "4세대 도수치료군의 공제율, 최소공제, 연간 한도와 추가 증빙 조건을 원문 근거에서 분리 추출함"
+        validate_candidate_record(candidate)
+        candidates.append(candidate)
+    return candidates
+
+
 def iter_policy_chunks(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -277,7 +449,14 @@ def iter_policy_chunks(path: Path) -> list[dict[str, Any]]:
             {
                 "text": str(row.get("text") or row.get("content") or ""),
                 "doc_short": str(row.get("doc_short") or metadata.get("doc_short") or row.get("source") or metadata.get("source") or "unknown"),
-                "chunk_id": str(row.get("chunk_id") or row.get("id") or metadata.get("chunk_id") or ""),
+                "chunk_id": str(
+                    row.get("chunk_id")
+                    or metadata.get("source_chunk_id")
+                    or metadata.get("canonical_chunk_id")
+                    or metadata.get("chunk_id")
+                    or row.get("id")
+                    or ""
+                ),
                 "page": row.get("page") or metadata.get("page") or metadata.get("page_start"),
                 "article": row.get("article") or row.get("heading") or metadata.get("article") or metadata.get("heading"),
             }
@@ -292,12 +471,16 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--replace-existing", action="store_true")
-    parser.add_argument("--scope", choices=["generic", "special-case-5th"], default="generic")
+    parser.add_argument("--scope", choices=["generic", "special-case-5th", "fourth-manual-therapy"], default="generic")
     args = parser.parse_args()
 
     chunks = iter_policy_chunks(args.index_jsonl)
     if args.scope == "special-case-5th":
         candidates = extract_special_case_5th_candidates(chunks)
+        if args.limit:
+            candidates = candidates[: args.limit]
+    elif args.scope == "fourth-manual-therapy":
+        candidates = extract_fourth_manual_therapy_candidates(chunks)
         if args.limit:
             candidates = candidates[: args.limit]
     else:

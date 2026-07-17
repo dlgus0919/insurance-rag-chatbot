@@ -1007,10 +1007,132 @@ def test_pipeline_multiple_candidates_populate():
         assert result.requires_review
         assert result.payable_amount == "0"
         assert result.deductible == "0"
+        assert result.calculation_status == "blocked_missing_info"
+        assert result.notes == "표준코드 선택 전 산정 보류"
         assert len(result.candidates) == 2
         assert result.candidates[0]["code"] == "SC0001"
         assert result.candidates[1]["code"] == "MX122"
-        assert result.line_results[0]["rule_summary"] == "표준모델 후보 모호성으로 계산 보류"
+        assert result.line_results[0]["rule_summary"] == "표준코드 선택 전 산정 보류"
+        assert result.line_results[0]["calculation_status"] == "needs_code_selection"
+        assert result.line_results[0]["excluded_from_calculation"] is True
+        assert result.line_results[0]["deductible"] is None
+        assert result.line_results[0]["deductible_amount"] is None
+        assert result.line_results[0]["payable_amount"] is None
+        assert len(result.line_results[0]["candidates"]) == 2
+
+
+def _manual_therapy_standard_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "std_cd": "51040",
+            "std_cd_nm": "도수치료",
+            "mid_category_cd_nm": "물리치료",
+            "ins_care_type_cd_nm": "급여",
+            "pay_opn_cd_nm": "면책",
+            "notes": "급여외 산정불가",
+        },
+        {
+            "std_cd": "MX122",
+            "std_cd_nm": "도수치료 [1일당]",
+            "mid_category_cd_nm": "물리치료",
+            "ins_care_type_cd_nm": "비급여_특약1",
+            "pay_opn_cd_nm": "추가확인",
+        },
+    ]
+
+
+def test_fourth_nonpay_manual_therapy_uses_mx122_with_active_exact_rule():
+    """비급여 금액 범위는 MX122를 선택하고 승인된 전용 룰로 산정한다."""
+    items = [
+        ClaimItemInput(
+            line_id="manual-nonpay",
+            input_name="도수치료",
+            insured_copay_amount="0",
+            nonpay_amount="500000",
+        )
+    ]
+    context = ClaimCaseContext(policy_generation="4th", visit_type="outpatient")
+
+    with patch("src.db.standard_codes.search_by_name", return_value=_manual_therapy_standard_rows()):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.calculation_status == "estimated_review_required"
+    assert result.deductible == "150000"
+    assert result.payable_amount == "350000"
+    assert result.line_results[0]["category"] == "3대비급여_도수"
+    assert result.line_results[0]["excluded_from_calculation"] is False
+    assert any("누적 청구 이력이 없어 승인 룰의 연간 한도" in reason for reason in result.line_results[0]["review_reasons"])
+    assert any("최초 10회 이후" in reason for reason in result.line_results[0]["review_reasons"])
+    assert any("MX122" in basis["source"] for basis in result.applied_basis)
+
+
+def test_fourth_nonpay_manual_therapy_explicit_51040_keeps_exclusion_outcome():
+    """직접 입력한 급여/면책 표준코드는 범위와 다르더라도 정확코드 근거를 보존한다."""
+    items = [
+        ClaimItemInput(
+            line_id="manual-explicit",
+            input_name="도수치료",
+            input_code="51040",
+            insured_copay_amount="0",
+            nonpay_amount="500000",
+        )
+    ]
+    context = ClaimCaseContext(policy_generation="4th", visit_type="outpatient")
+
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=_manual_therapy_standard_rows()[0]):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.payable_amount == "0"
+    assert result.deductible == "500000"
+    assert any("입력 표준코드" in reason for reason in result.review_reasons)
+
+
+def test_fourth_manual_therapy_approved_temp_rule_estimates_350k(monkeypatch, tmp_path):
+    """승인된 전용 manifest에서만 50만원 비급여 도수치료를 계산한다."""
+    from src.claim_calculation import deductible_rules
+
+    manifest = tmp_path / "claim_deductible_rules.active.json"
+    manifest.write_text(
+        '''{
+          "version": 1,
+          "rules": [{
+            "rule_id": "deductible.4th.three_major_manual.outpatient",
+            "generation": "4th", "category": "3대비급여_도수", "visit_type": "outpatient",
+            "facility_grade": "all", "copay_ratio": "0.3", "min_deductible": "30000",
+            "min_deductible_by_facility": {"clinic": "30000", "hospital": "30000", "general_hospital": "30000", "tertiary_hospital": "30000"},
+            "per_visit_limit": null, "annual_limit": "3500000", "annual_visit_limit": 50,
+            "review_requirements": ["최초 10회 이후 증상 호전 증빙 확인 필요"],
+            "description": "4세대 도수치료군: 1회당 3만원과 보장대상의료비 30% 중 큰 금액, 연 350만원·50회",
+            "source_doc": "약관", "source_page": "71-78", "source_clause": "제3조 보장종목별 보상내용 / 3대비급여 특별약관",
+            "source_chunk_id": "약관_ch_002441", "approval_status": "active", "source_status": "source_grounded"
+          }],
+          "prescription_rules": [], "special_rules": []
+        }''',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(deductible_rules, "CLAIM_RULES_PATH", manifest)
+    deductible_rules._load_registry.cache_clear()
+    items = [
+        ClaimItemInput(
+            line_id="manual-approved",
+            input_name="도수치료",
+            input_code="MX122",
+            insured_copay_amount="0",
+            nonpay_amount="500000",
+        )
+    ]
+    context = ClaimCaseContext(policy_generation="4th", visit_type="outpatient")
+    try:
+        with patch("src.db.standard_codes.lookup_by_std_cd", return_value=_manual_therapy_standard_rows()[1]):
+            result = run_claim_calculation(None, items, context, use_fake_planner=True)
+    finally:
+        deductible_rules._load_registry.cache_clear()
+
+    assert result.deductible == "150000"
+    assert result.payable_amount == "350000"
+    assert result.calculation_status == "estimated_review_required"
+    assert any("3500000" in reason.replace(",", "") or "350만원" in reason for reason in result.review_reasons)
+    assert any("최초 10회 이후" in reason for reason in result.review_reasons)
 
 
 def test_pipeline_mri_does_not_match_unrelated_treatment_material():

@@ -500,6 +500,9 @@
   }
   .msg-meta{font-size:10px;color:var(--gray);margin-top:3px;}
   .msg-row.user .msg-meta{text-align:right;}
+  .msg-row.user.send-failed .msg-bubble{background:#fff1f1;color:#9b1c1c;border:1px solid #efb4b4;}
+  .msg-row.user.send-failed .msg-meta{color:#9b1c1c;}
+  .msg-retry-btn{margin-left:4px;padding:0;border:0;background:transparent;color:var(--primary);font:inherit;font-weight:700;cursor:pointer;text-decoration:underline;}
   .msg-sources{
     margin-top:9px;padding-top:9px;border-top:1px solid var(--border);
     font-size:11px;color:var(--gray);

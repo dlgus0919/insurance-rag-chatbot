@@ -5,6 +5,26 @@ import pytest
 from src.graph.query_planner import GraphQueryPlanner, GraphQueryPlan
 
 
+@pytest.mark.parametrize(
+    ("query", "procedure", "grade_system"),
+    [
+        ("결장폴립절제술은 1~5종에서 몇종으로 줘?", "결장폴립절제술", "1-5종"),
+        ("결장경하 폴립절제술 종수를 알려줘", "결장경하 폴립절제술", None),
+    ],
+)
+def test_surgery_grade_query_normalizes_compact_korean_forms(
+    query: str,
+    procedure: str,
+    grade_system: str | None,
+) -> None:
+    plan = GraphQueryPlanner().plan(query)
+
+    assert plan.procedure_name == procedure
+    assert plan.grade_system == grade_system
+    assert plan.grade_value is None
+    assert "surgery_grade_lookup" in plan.intents
+
+
 def test_query_planner_hard_query_1() -> None:
     planner = GraphQueryPlanner()
     query = (

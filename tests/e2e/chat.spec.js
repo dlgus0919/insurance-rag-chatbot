@@ -24,7 +24,7 @@ async function mockChatStream(page, graphPayload = null, extraTokens = "테스�
       'data: {"t":"재검색 결과 정답입니다."}',
       '',
       'event: done',
-      'data: {"session_id":"e2e-session"}',
+      'data: {"session_id":"e2e-session","persisted":true}',
       '',
       '',
     ] : [
@@ -43,7 +43,7 @@ async function mockChatStream(page, graphPayload = null, extraTokens = "테스�
       `data: {"t":"${extraTokens}"}`,
       '',
       'event: done',
-      'data: {"session_id":"e2e-session"}',
+      'data: {"session_id":"e2e-session","persisted":true}',
       '',
       '',
     ];
@@ -117,6 +117,43 @@ test.describe('채팅 플로우', () => {
     await expect(page.locator('#typing')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('#typing')).toBeHidden({ timeout: 30000 });
     await expect(page.locator('#chat-input')).toBeEnabled();
+  });
+
+  test('저장 실패한 사용자 메시지는 원래 대화에서 재시도할 수 있음', async ({ page }) => {
+    let calls = 0;
+    await page.route('**/api/chat/stream', async (route) => {
+      calls += 1;
+      const body = calls === 1
+        ? [
+            'event: final',
+            'data: {"answer":"임시 답변"}',
+            '',
+            'event: error',
+            'data: {"code":"CHAT_HISTORY_PERSIST_FAILED","message":"대화 저장 중 오류가 발생했습니다."}',
+            '',
+            '',
+          ].join('\n')
+        : [
+            'event: token',
+            'data: {"t":"재시도 답변"}',
+            '',
+            'event: done',
+            'data: {"session_id":"e2e-session","persisted":true}',
+            '',
+            '',
+          ].join('\n');
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body });
+    });
+
+    await page.fill('#chat-input', '저장 실패 재시도 테스트');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.msg-row.user.send-failed')).toContainText('저장 실패 재시도 테스트');
+    await expect(page.locator('.msg-retry-btn')).toBeVisible();
+
+    await page.click('.msg-retry-btn');
+    await expect.poll(() => calls).toBe(2);
+    await expect(page.locator('.msg-row.user.send-failed')).toHaveCount(0);
+    await expect(page.locator('.msg-row.bot').last()).toContainText('재시도 답변');
   });
 
   test('GraphDB 구조화 검토 경로와 근거를 렌더링', async ({ page }) => {

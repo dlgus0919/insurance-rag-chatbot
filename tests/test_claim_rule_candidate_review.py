@@ -263,3 +263,107 @@ def test_special_case_5th_extractor_builds_practitioner_named_candidates() -> No
     assert any("산정특례 적용" in summary for summary in summaries)
     assert any("비급여 MRI/MRA" in summary for summary in summaries)
     assert all("unknown" not in summary for summary in summaries)
+
+
+def test_generic_extractor_distinguishes_copay_and_payout_semantics() -> None:
+    from scripts.extract_claim_rule_candidates import extract_candidates_from_text
+
+    copay_candidate = extract_candidates_from_text(
+        text="4세대 비급여 통원 본인부담금 30%를 공제합니다.",
+        doc_short="약관",
+        chunk_id="약관_ch_test_copay",
+        page=1,
+        article="제3조",
+    )[0]
+    payout_candidate = extract_candidates_from_text(
+        text="4세대 비급여 통원 의료비의 80%를 보상합니다.",
+        doc_short="약관",
+        chunk_id="약관_ch_test_payout",
+        page=1,
+        article="제3조",
+    )[0]
+
+    assert copay_candidate["proposed_rule"]["copay_ratio"] == "0.3"
+    assert payout_candidate["proposed_rule"]["copay_ratio"] == "0.2"
+
+
+def test_generic_extractor_skips_ambiguous_percentage_meaning() -> None:
+    from scripts.extract_claim_rule_candidates import extract_candidates_from_text
+
+    candidates = extract_candidates_from_text(
+        text="4세대 비급여 통원 관련 비율은 30%입니다.",
+        doc_short="약관",
+        chunk_id="약관_ch_test_ambiguous",
+        page=1,
+        article="제3조",
+    )
+
+    assert candidates == []
+
+
+def test_fourth_manual_therapy_extractor_creates_review_only_candidates() -> None:
+    from scripts.extract_claim_rule_candidates import extract_fourth_manual_therapy_candidates
+
+    chunks = [
+        {
+            "text": "도수치료, 체외충격파치료 및 증식치료는 보장대상의료비의 30%와 3만원 중 큰 금액을 공제합니다. 2022.4",
+            "doc_short": "약관",
+            "chunk_id": "약관_ch_002441",
+            "page": "71-78",
+            "article": "제3조 보장종목별 보상내용 / 3대비급여 특별약관",
+        },
+        {
+            "text": "만원 최초 10회부터 증상 호전 여부를 확인할 수 있는 증빙이 필요하며 연간 350만원, 50회를 한도로 합니다.",
+            "doc_short": "약관",
+            "chunk_id": "약관_ch_002442",
+            "page": "71-78",
+            "article": "제3조",
+        },
+        {
+            "text": "동일한 날 여러 번 시행한 치료는 1회로 봅니다.",
+            "doc_short": "약관",
+            "chunk_id": "약관_ch_002443",
+            "page": "71-78",
+            "article": "제3조",
+        },
+    ]
+
+    candidates = extract_fourth_manual_therapy_candidates(chunks)
+
+    assert {candidate["proposed_rule"]["rule_id"] for candidate in candidates} == {
+        "deductible.4th.three_major_manual.hospitalization",
+        "deductible.4th.three_major_manual.outpatient",
+    }
+    assert all(candidate["status"] == "pending" for candidate in candidates)
+    assert all(candidate["proposed_rule"]["approval_status"] == "candidate" for candidate in candidates)
+    assert all(candidate["proposed_rule"]["copay_ratio"] == "0.3" for candidate in candidates)
+    assert all(candidate["proposed_rule"]["annual_limit"] == "3500000" for candidate in candidates)
+    assert all(candidate["proposed_rule"]["annual_visit_limit"] == 50 for candidate in candidates)
+    assert all(candidate["proposed_rule"]["additional_source_refs"] == ["약관_ch_002442", "약관_ch_002443"] for candidate in candidates)
+
+
+def test_iter_policy_chunks_prefers_source_chunk_id_for_canonical_provenance(tmp_path: Path) -> None:
+    from scripts.extract_claim_rule_candidates import iter_policy_chunks
+
+    index = tmp_path / "chunks.jsonl"
+    index.write_text(
+        json.dumps(
+            {
+                "id": "약관_v1_ch_002441",
+                "text": "4세대 도수치료 근거",
+                "metadata": {
+                    "source_chunk_id": "약관_ch_002441",
+                    "doc_short": "약관",
+                    "page_start": 71,
+                },
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    chunks = iter_policy_chunks(index)
+
+    assert chunks[0]["chunk_id"] == "약관_ch_002441"
+    assert chunks[0]["page"] == 71

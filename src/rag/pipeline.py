@@ -24,6 +24,7 @@ from src.rag.source_grounded_answers import (
     build_hira_fee_answer,
     build_policy_clause_decision,
 )
+from src.rag.procedure_grade import format_procedure_grade_answer, resolve_procedure_grade
 from src.rag.table_store import TableStore
 from src.retrieval import Hit
 from src.retrieval.chunk_lookup import graph_chunk_fallback_ids
@@ -1527,7 +1528,17 @@ def _deterministic_guard_answer(
     chunks: list[Chunk],
     graph_context: str | None = None,
     clause_detail_rows: list[ClauseDetailEvidenceRow] | None = None,
+    graph_result: Any | None = None,
+    table_store: TableStore | None = None,
 ) -> str | None:
+    procedure_grade = resolve_procedure_grade(
+        question,
+        table_store=table_store,
+        graph_result=graph_result,
+    )
+    if procedure_grade is not None:
+        return format_procedure_grade_answer(procedure_grade)
+
     absent_code_answer = build_absent_code_guard_answer(question, chunks)
     if absent_code_answer:
         return absent_code_answer
@@ -2337,6 +2348,8 @@ class RagPipeline:
                 chunks,
                 graph_context=graph_context,
                 clause_detail_rows=clause_detail_rows,
+                graph_result=graph_result,
+                table_store=self._table_store,
             )
         )
         if deterministic_answer:

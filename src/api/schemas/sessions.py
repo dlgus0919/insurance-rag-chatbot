@@ -15,6 +15,7 @@ class SessionResponse(BaseModel):
     id: str
     title: str
     created_at: datetime
+    last_activity_at: datetime
     message_count: int = 0
 
 

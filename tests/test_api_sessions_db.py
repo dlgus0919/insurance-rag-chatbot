@@ -3,7 +3,7 @@ from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from src.api.db import Base
-from src.api.models import ChatMessage
+from src.api.models import ChatMessage, ChatSession
 from src.api.routes import sessions
 from src.api.schemas.sessions import SessionCreateRequest
 from src.auth.users import User
@@ -77,3 +77,27 @@ async def test_session_crud_user_isolation_and_json_sources(db_session) -> None:
     await sessions.delete_session(created.id, user, db_session)
     remaining = await db_session.scalar(select(func.count(ChatMessage.id)).where(ChatMessage.session_id == created.id))
     assert remaining == 0
+
+
+@pytest.mark.anyio
+async def test_sessions_sort_by_last_activity_and_messages_have_stable_tie_breaker(db_session) -> None:
+    user = _user("employee01")
+    older = ChatSession(user_id=user.username, title="오래된 세션")
+    newer = ChatSession(user_id=user.username, title="새 세션")
+    db_session.add_all([older, newer])
+    await db_session.commit()
+
+    db_session.add_all(
+        [
+            ChatMessage(session_id=older.id, role="user", content="오래된 첫 질문"),
+            ChatMessage(session_id=older.id, role="assistant", content="오래된 최신 답변"),
+        ]
+    )
+    await db_session.commit()
+
+    listed = await sessions.list_sessions(user, db_session)
+    messages = await sessions.list_messages(older.id, user, db_session)
+
+    assert listed[0].id == older.id
+    assert listed[0].last_activity_at >= listed[1].last_activity_at
+    assert [message.content for message in messages] == ["오래된 첫 질문", "오래된 최신 답변"]

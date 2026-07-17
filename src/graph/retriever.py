@@ -1203,21 +1203,37 @@ class GraphRetriever:
             # INTENT 1: surgery_grade_lookup / same_grade_surgery_list
             if plan.procedure_name:
                 norm_proc = normalize_name(plan.procedure_name)
-                # 수술 노드 조회
+                # 표준코드 자동 별칭은 수술종수 확정 근거가 될 수 없다. 정확 수술명과
+                # 온톨로지에 등록된 별칭만 확정 경로로 사용하고, 나머지는 후보로 남긴다.
                 proc_nodes = store.query(
                     """
                     SELECT * FROM graph_nodes
                     WHERE node_type = 'SurgeryProcedure'
-                      AND (normalized_name = ? OR node_id IN (
-                          SELECT node_id FROM graph_aliases WHERE normalized_alias = ?
-                      ))
+                      AND normalized_name = ?
                     """,
-                    (norm_proc, norm_proc)
+                    (norm_proc,)
                 )
+
+                procedure_match_kind = "exact" if proc_nodes else ""
+                if not proc_nodes:
+                    proc_nodes = store.query(
+                        """
+                        SELECT * FROM graph_nodes
+                        WHERE node_type = 'SurgeryProcedure'
+                          AND node_id IN (
+                              SELECT node_id
+                              FROM graph_aliases
+                              WHERE normalized_alias = ? AND source = 'ontology_registry'
+                          )
+                        """,
+                        (norm_proc,),
+                    )
+                    if proc_nodes:
+                        procedure_match_kind = "approved_alias"
 
                 is_fuzzy = False
                 if not proc_nodes:
-                    # exact/alias lookup 실패 시 fuzzy lookup fallback
+                    # 위 확정 경로가 모두 실패한 경우만 후보 조회를 수행한다.
                     fuzzy_param = f"%{norm_proc}%"
                     proc_nodes = store.query(
                         """
@@ -1229,6 +1245,7 @@ class GraphRetriever:
                     )
                     if proc_nodes:
                         is_fuzzy = True
+                        procedure_match_kind = "candidate"
 
                 if not proc_nodes:
                     # Missing 수술 노드
@@ -1246,6 +1263,7 @@ class GraphRetriever:
                     proc_canonical = proc_node["canonical_name"]
                     debug_info["matched_proc_node"] = dict(proc_node)
                     debug_info["is_fuzzy_match"] = is_fuzzy
+                    debug_info["procedure_match_kind"] = procedure_match_kind
 
                     # 수술 등급 조회
                     grade_prefix = _grade_prefix_for_system(plan.grade_system)

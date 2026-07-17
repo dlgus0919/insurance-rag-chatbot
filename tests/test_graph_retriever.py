@@ -109,6 +109,24 @@ def populated_db() -> str:
 
     for n in [proc1, proc2, proc_liver, proc_pancreas, grade4, grade5, cat_resp, cat_dig, fee_liver, fee_pancreas_1, fee_pancreas_2, rule18]:
         store.upsert_node(n)
+    store.add_alias(
+        Alias(
+            alias_id="alias_unapproved_bronchial",
+            node_id="proc_bronchial",
+            alias="기관지신규폐쇄술",
+            normalized_alias=normalize_name("기관지신규폐쇄술"),
+            source="standard_codes",
+        )
+    )
+    store.add_alias(
+        Alias(
+            alias_id="alias_approved_bronchial",
+            node_id="proc_bronchial",
+            alias="기관지승인폐쇄술",
+            normalized_alias=normalize_name("기관지승인폐쇄술"),
+            source="ontology_registry",
+        )
+    )
 
     # 2. Evidence
     ev1 = Evidence(
@@ -260,6 +278,24 @@ def test_retriever_hard_query_1(populated_db: str) -> None:
     assert len(policy_facts) == 1
     assert policy_facts[0].status == "candidate"  # POLICY_COVERS_PROCEDURE must be candidate
     assert policy_facts[0].properties.get("appendix_number") == "18"
+
+
+def test_retriever_requires_ontology_registry_alias_for_confirmed_grade(populated_db: str) -> None:
+    retriever = GraphRetriever(populated_db)
+
+    unapproved = retriever.retrieve("기관지신규폐쇄술의 신1-5종 수술종수는?")
+    assert unapproved.debug.get("procedure_match_kind") is None
+    assert not any(
+        fact.relation == "HAS_GRADE" and fact.status == "confirmed"
+        for fact in unapproved.facts
+    )
+
+    approved = retriever.retrieve("기관지승인폐쇄술의 신1-5종 수술종수는?")
+    assert approved.debug.get("procedure_match_kind") == "approved_alias"
+    assert any(
+        fact.relation == "HAS_GRADE" and fact.status == "confirmed"
+        for fact in approved.facts
+    )
 
 
 def test_retriever_hard_query_2(populated_db: str) -> None:

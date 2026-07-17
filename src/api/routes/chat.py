@@ -41,6 +41,7 @@ from src.rag.pipeline import DebugInfo
 from src.rag.query_router import resolve_query_route
 from src.claim_calculation.models import ClaimCaseContext, ClaimItemInput
 from src.claim_calculation.pipeline import run_claim_calculation
+from src.claim_calculation.thread_context import extract_claim_snapshots
 from src.claim_calculation.thread_recalculation import (
     apply_special_status_override,
     build_recalculation_payload,
@@ -120,7 +121,7 @@ async def _handle_claim_follow_up(
     if intent is None:
         return None
 
-    snapshots = _claim_snapshots_from_history(history)
+    snapshots = extract_claim_snapshots(history)
     snapshot, clarification = select_claim_snapshot(snapshots, query)
     if snapshot is None:
         return _ClaimFollowUpResult(clarification, action=intent.action, status="clarification")
@@ -221,19 +222,6 @@ async def _handle_claim_follow_up(
     )
 
 
-def _claim_snapshots_from_history(history: list[ChatMessage]) -> list[dict]:
-    snapshots: list[dict] = []
-    for message in history:
-        if message.role != "assistant":
-            continue
-        for source in message.sources or []:
-            if isinstance(source, dict) and source.get("__kind") == "assistant_meta":
-                snapshot = source.get("claim_snapshot")
-                if isinstance(snapshot, dict):
-                    snapshots.append(snapshot)
-    return snapshots
-
-
 def _recalculation_context_data(payload: ClaimCalculationRequest, payload_data: dict) -> dict:
     context_data = payload.context.model_dump()
     original_context = payload_data.get("context") or {}
@@ -281,6 +269,8 @@ def _claim_follow_up_snapshot_source(
     answer: str,
 ) -> dict:
     updated_snapshot = deepcopy(snapshot)
+    updated_snapshot["schema_version"] = 2
+    updated_snapshot["state"] = "conditional"
     updated_snapshot["claim_id"] = str(uuid4())
     updated_snapshot["created_at"] = datetime.now(timezone.utc).isoformat()
     updated_snapshot["follow_up"] = {
@@ -381,13 +371,28 @@ async def chat_stream(
             if claim_follow_up is not None:
                 yield _sse("sources", claim_follow_up.sources)
                 yield _sse("final", {"answer": claim_follow_up.answer})
-                yield _sse("done", {"session_id": chat_session.id, "answer": claim_follow_up.answer})
-                await _persist_turn(
-                    db,
-                    chat_session.id,
-                    chat_request.query,
-                    claim_follow_up.answer,
-                    claim_follow_up.sources,
+                try:
+                    await _persist_turn(
+                        db,
+                        chat_session.id,
+                        chat_request.query,
+                        claim_follow_up.answer,
+                        claim_follow_up.sources,
+                    )
+                except Exception:
+                    logger.exception("failed to persist claim follow-up session_id=%s", chat_session.id)
+                    await db.rollback()
+                    yield _sse(
+                        "error",
+                        {
+                            "code": "CHAT_HISTORY_PERSIST_FAILED",
+                            "message": "대화 저장 중 오류가 발생했습니다. 같은 대화에서 다시 시도해 주세요.",
+                        },
+                    )
+                    return
+                yield _sse(
+                    "done",
+                    {"session_id": chat_session.id, "answer": claim_follow_up.answer, "persisted": True},
                 )
                 await log_audit_event(
                     db,
@@ -529,16 +534,28 @@ async def chat_stream(
             else:
                 answer = finalize_answer_for_question(chat_request.query, raw_answer, chunks, graph_payload)
             yield _sse("final", {"answer": answer})
-            yield _sse("done", {"session_id": chat_session.id, "answer": answer})
-            await _persist_turn(
-                db,
-                chat_session.id,
-                chat_request.query,
-                answer,
-                sources,
-                graph_payload=graph_payload,
-                warnings=warnings,
-            )
+            try:
+                await _persist_turn(
+                    db,
+                    chat_session.id,
+                    chat_request.query,
+                    answer,
+                    sources,
+                    graph_payload=graph_payload,
+                    warnings=warnings,
+                )
+            except Exception:
+                logger.exception("failed to persist chat session_id=%s", chat_session.id)
+                await db.rollback()
+                yield _sse(
+                    "error",
+                    {
+                        "code": "CHAT_HISTORY_PERSIST_FAILED",
+                        "message": "대화 저장 중 오류가 발생했습니다. 같은 대화에서 다시 시도해 주세요.",
+                    },
+                )
+                return
+            yield _sse("done", {"session_id": chat_session.id, "answer": answer, "persisted": True})
             await log_audit_event(
                 db,
                 "CHAT_QUERY",
@@ -898,7 +915,9 @@ async def _create_session(db: AsyncSession, username: str, query: str) -> ChatSe
 
 async def _load_history(db: AsyncSession, session_id: str) -> list[ChatMessage]:
     result = await db.execute(
-        select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at.asc())
+        select(ChatMessage)
+        .where(ChatMessage.session_id == session_id)
+        .order_by(ChatMessage.created_at.asc(), ChatMessage.id.asc())
     )
     return list(result.scalars())
 

@@ -32,6 +32,7 @@ class ClaimDeductibleRule:
     per_visit_limit: Decimal | None = None
     annual_limit: Decimal | None = None
     annual_visit_limit: int | None = None
+    review_requirements: tuple[str, ...] = ()
     description: str = ""
     source_doc: str = ""
     source_page: str = ""
@@ -61,6 +62,7 @@ class ClaimDeductibleRule:
             per_visit_limit=_optional_decimal(payload.get("per_visit_limit"), "per_visit_limit"),
             annual_limit=_optional_decimal(payload.get("annual_limit"), "annual_limit"),
             annual_visit_limit=_optional_int(payload.get("annual_visit_limit"), "annual_visit_limit"),
+            review_requirements=_optional_text_list(payload.get("review_requirements"), "review_requirements"),
             description=str(payload.get("description") or ""),
             source_doc=_required_text(payload, "source_doc"),
             source_page=_required_text(payload, "source_page"),
@@ -255,3 +257,11 @@ def _optional_int(value: Any, field_name: str) -> int | None:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise ClaimRuleValidationError(f"{field_name} must be integer") from exc
+
+
+def _optional_text_list(value: Any, field_name: str) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ClaimRuleValidationError(f"{field_name} must be a list of text")
+    return tuple(item.strip() for item in value if item.strip())

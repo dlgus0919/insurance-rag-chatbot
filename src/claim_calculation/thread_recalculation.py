@@ -8,6 +8,7 @@ from src.claim_calculation.models import (
     SPECIAL_CALCULATION_APPLIED,
     SPECIAL_CALCULATION_NOT_APPLIED,
 )
+from src.claim_calculation.thread_context import snapshot_state
 
 
 _GENERIC_CATEGORY_TARGETS = {"비급여", "3대비급여", "급여", "급여 본인부담"}
@@ -109,19 +110,49 @@ def find_target_lines(snapshot: dict, target_text: str) -> list[dict]:
 
 
 def select_claim_snapshot(snapshots: list[dict], query: str) -> tuple[dict | None, str]:
-    if not snapshots:
+    completed = [snapshot for snapshot in snapshots if snapshot_state(snapshot) == "completed"]
+    if not completed:
         return None, "이 스레드에는 기준이 되는 보험금 계산 내역이 없습니다. 먼저 보험금 계산 기능으로 계산을 저장한 뒤 다시 질문해 주세요."
-    if len(snapshots) == 1:
-        return snapshots[0], ""
-
     normalized = " ".join(query.split())
-    if any(marker in normalized for marker in ("최근 계산", "마지막 계산", "직전 계산")):
-        return snapshots[-1], ""
 
-    return (
-        None,
-        "이 스레드에 보험금 계산 내역이 여러 건 있습니다. 어떤 계산을 기준으로 바꿀지 명확하지 않습니다. 예: '최근 계산 기준으로 비타민D 주사를 비급여로 보상한다면 다시 계산해 주세요.'",
+    explicit = _select_explicit_snapshot(completed, normalized)
+    if explicit is not None:
+        return explicit, ""
+    if any(marker in normalized for marker in ("최근 계산", "마지막 계산", "직전 계산", "방금 계산")):
+        return completed[-1], ""
+
+    intent = detect_recalculation_intent(normalized)
+    if intent is not None:
+        latest = completed[-1]
+        matching = [snapshot for snapshot in completed if find_target_lines(snapshot, intent.target_text)]
+        if len(matching) > 1 and _matching_target_results_differ(matching, intent.target_text):
+            return (
+                None,
+                "요청한 항목의 결과가 서로 다른 여러 계산에 있습니다. 기준이 될 계산을 '최근 계산', '첫 번째 계산'처럼 지정해 다시 질문해 주세요.",
+            )
+        if find_target_lines(latest, intent.target_text):
+            return latest, ""
+        if len(matching) == 1:
+            return matching[0], ""
+        if len(matching) > 1:
+            return matching[-1], ""
+    return completed[-1], ""
+
+
+def _select_explicit_snapshot(snapshots: list[dict], query: str) -> dict | None:
+    for snapshot in snapshots:
+        claim_id = str(snapshot.get("claim_id") or "").strip()
+        if claim_id and claim_id in query:
+            return snapshot
+    ordinal_markers = (
+        (0, ("첫 번째 계산", "첫번째 계산", "1번째 계산", "1번 계산")),
+        (1, ("두 번째 계산", "두번째 계산", "2번째 계산", "2번 계산")),
+        (2, ("세 번째 계산", "세번째 계산", "3번째 계산", "3번 계산")),
     )
+    for index, markers in ordinal_markers:
+        if any(marker in query for marker in markers):
+            return snapshots[index] if index < len(snapshots) else None
+    return None
 
 
 def build_recalculation_payload(snapshot: dict, intent: RecalculationIntent, target_line: dict) -> dict:
@@ -188,6 +219,27 @@ def _unique_lines(lines: list[dict]) -> list[dict]:
         seen.add(key)
         unique.append(line)
     return unique
+
+
+def _matching_target_results_differ(snapshots: list[dict], target_text: str) -> bool:
+    signatures = {
+        tuple(
+            sorted(
+                (
+                    str(line.get("input_name") or ""),
+                    str(line.get("category") or ""),
+                    str(line.get("claimed_amount") or ""),
+                    str(line.get("deductible") or ""),
+                    str(line.get("payable_amount") or ""),
+                    str(line.get("human_task_amount") or ""),
+                    str(line.get("calculation_status") or ""),
+                )
+                for line in find_target_lines(snapshot, target_text)
+            )
+        )
+        for snapshot in snapshots
+    }
+    return len(signatures) > 1
 
 
 def _safe_item_payload(item: dict, index: int) -> dict:

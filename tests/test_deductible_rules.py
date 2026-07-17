@@ -1,9 +1,12 @@
 """deductible_rules 모듈 단위 테스트."""
 
+import json
+
 from decimal import Decimal
 
 import pytest
 
+from src.claim_calculation import deductible_rules
 from src.claim_calculation.deductible_rules import (
     DeductibleRule,
     PrescriptionRule,
@@ -50,10 +53,72 @@ class TestLookupRule:
         assert rule.get_min_deductible(FACILITY_CLINIC) == Decimal("30000")
         assert rule.per_visit_limit == Decimal("250000")
 
-    def test_4th_3major_alias(self):
-        """4세대 3대비급여는 비급여와 동일 규칙."""
-        rule = lookup_rule("4th", "3대비급여", "outpatient")
+    def test_4th_manual_therapy_does_not_fallback_to_general_nonpay_rule(self, tmp_path, monkeypatch):
+        """4세대 도수치료군은 승인된 전용 rule 없이는 generic fallback을 쓰지 않는다."""
+        manifest = tmp_path / "claim_deductible_rules.active.json"
+        payload = json.loads(deductible_rules.CLAIM_RULES_PATH.read_text(encoding="utf-8"))
+        payload["rules"] = [
+            row
+            for row in payload["rules"]
+            if row.get("rule_id") != "deductible.4th.three_major_manual.outpatient"
+        ]
+        manifest.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+        monkeypatch.setattr(deductible_rules, "CLAIM_RULES_PATH", manifest)
+        deductible_rules._load_registry.cache_clear()
+        try:
+            with pytest.raises(KeyError):
+                lookup_rule("4th", "3대비급여_도수", "outpatient")
+        finally:
+            deductible_rules._load_registry.cache_clear()
+
+    def test_4th_manual_therapy_uses_exact_approved_rule(self, tmp_path, monkeypatch):
+        manifest = tmp_path / "claim_deductible_rules.active.json"
+        manifest.write_text(
+            '''{
+              "version": 1,
+              "rules": [{
+                "rule_id": "deductible.4th.three_major_manual.outpatient",
+                "generation": "4th",
+                "category": "3대비급여_도수",
+                "visit_type": "outpatient",
+                "facility_grade": "all",
+                "copay_ratio": "0.3",
+                "min_deductible": "30000",
+                "min_deductible_by_facility": {
+                  "clinic": "30000", "hospital": "30000",
+                  "general_hospital": "30000", "tertiary_hospital": "30000"
+                },
+                "per_visit_limit": null,
+                "annual_limit": "3500000",
+                "annual_visit_limit": 50,
+                "review_requirements": ["최초 10회 이후 증상 호전 증빙 확인 필요"],
+                "description": "4세대 도수치료군 승인 테스트 rule",
+                "source_doc": "약관",
+                "source_page": "71-78",
+                "source_clause": "제3조",
+                "source_chunk_id": "약관_ch_002441",
+                "approval_status": "active",
+                "source_status": "source_grounded"
+              }],
+              "prescription_rules": [],
+              "special_rules": []
+            }''',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(deductible_rules, "CLAIM_RULES_PATH", manifest)
+        deductible_rules._load_registry.cache_clear()
+        try:
+            rule = lookup_rule("4th", "3대비급여_도수", "outpatient")
+        finally:
+            deductible_rules._load_registry.cache_clear()
+
         assert rule.copay_ratio == Decimal("0.3")
+        assert rule.get_min_deductible(FACILITY_CLINIC) == Decimal("30000")
+        assert rule.per_visit_limit is None
+        assert rule.annual_limit == Decimal("3500000")
+        assert rule.annual_visit_limit == 50
+        assert rule.review_requirements == ("최초 10회 이후 증상 호전 증빙 확인 필요",)
+        assert rule.source_chunk_id == "약관_ch_002441"
 
     def test_4th_serious_alias(self):
         """4세대 중증비급여는 비급여와 동일 규칙."""
