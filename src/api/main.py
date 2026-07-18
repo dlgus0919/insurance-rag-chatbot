@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.api.db import init_db
 from src.api.exceptions import AppException, error_response
+from src.api.isolated_e2e import is_isolated_e2e_run, validate_isolated_e2e_environment
 from src.api.middleware import request_id_middleware
 from src.api.rate_limit import RateLimitExceeded, limiter
 from src.api.rag_service import get_rag_pipeline
@@ -62,8 +63,16 @@ async def _warm_primary_rag_pipelines() -> None:
 async def lifespan(_: FastAPI):
     """Initialize API-owned resources."""
 
+    isolated_e2e = is_isolated_e2e_run()
+    if isolated_e2e:
+        validate_isolated_e2e_environment(
+            project_root=Path(__file__).resolve().parent.parent.parent,
+        )
     await init_db()
-    await _warm_primary_rag_pipelines()
+    if isolated_e2e:
+        logger.info("Skipped RAG warmup for explicitly isolated browser E2E.")
+    else:
+        await _warm_primary_rag_pipelines()
     yield
 
 

@@ -17,6 +17,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from src.claim_calculation.rule_candidate_evidence import (
+    RuleCandidateEvidenceSpec,
+    load_rule_candidate_evidence_spec,
+)
 from src.claim_calculation.rule_candidates import validate_candidate_record, write_jsonl
 
 
@@ -31,11 +35,6 @@ KOREAN_AMOUNT_VALUES = {
     "20만원": "200000",
     "5천만원": "50000000",
 }
-FOURTH_MANUAL_THERAPY_CHUNK_IDS = (
-    "약관_ch_002441",
-    "약관_ch_002442",
-    "약관_ch_002443",
-)
 _PAYOUT_SIGNAL_RE = re.compile(r"(보상|지급)")
 _COPAY_SIGNAL_RE = re.compile(r"(공제|본인부담)")
 _MONEY_RE = re.compile(r"(?P<number>\d+(?:,\d{3})*(?:\.\d+)?)\s*(?P<unit>억원|천만원|백만원|만원|천원|원)")
@@ -172,7 +171,7 @@ def _candidate_base(
                 "doc_short": chunk["doc_short"],
                 "chunk_id": chunk["chunk_id"],
                 "page": chunk["page"],
-                "article": chunk["article"],
+                "article": chunk.get("article"),
             }
         ],
         "evidence_text": evidence_text.strip(),
@@ -221,7 +220,7 @@ def _deductible_rule(
         "special_calculation_status": special_calculation_status,
         "source_doc": chunk["doc_short"],
         "source_page": str(chunk["page"] or "unknown"),
-        "source_clause": chunk["article"] or f"source_chunk_id:{chunk['chunk_id']}",
+        "source_clause": chunk.get("article") or f"source_chunk_id:{chunk['chunk_id']}",
         "source_chunk_id": chunk["chunk_id"],
         "additional_source_refs": [],
         "source_status": "source_grounded",
@@ -315,35 +314,41 @@ def _money_values(text: str) -> list[int]:
     return values
 
 
-def _manual_therapy_review_requirements(supporting_chunks: list[dict[str, Any]]) -> list[str] | None:
+def _manual_therapy_review_requirements(
+    supporting_chunks: list[dict[str, Any]],
+    evidence_spec: RuleCandidateEvidenceSpec,
+) -> list[str] | None:
     support_text = " ".join(str(chunk.get("text") or "") for chunk in supporting_chunks)
     compact = _compact(support_text)
     requirements: list[str] = []
-    if "최초" in compact and "10회" in compact and ("호전" in compact or "증상" in compact):
-        requirements.append("최초 10회 이후 증상 호전 증빙 확인 필요")
-    if ("동일" in compact or "당일" in compact) and "1회" in compact:
-        requirements.append("동일 방문 복수 치료 횟수 확인 필요")
-    return requirements if len(requirements) == 2 else None
+    for requirement in evidence_spec.review_requirements:
+        if not all(term in compact for term in requirement.required_all):
+            return None
+        if not any(term in compact for term in requirement.required_any):
+            return None
+        requirements.append(requirement.message)
+    return requirements
 
 
-def extract_fourth_manual_therapy_candidates(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Create pending 4th-generation manual-therapy candidates from fixed evidence handles.
+def extract_fourth_manual_therapy_candidates(
+    chunks: list[dict[str, Any]],
+    *,
+    evidence_spec: RuleCandidateEvidenceSpec | None = None,
+) -> list[dict[str, Any]]:
+    """Create pending candidates from a versioned source-evidence review input."""
 
-    The function only proposes rules when every required source chunk is present and
-    the financial values can be read from the primary source. It never writes an
-    active manifest or invents a rule from a partial match.
-    """
-
+    evidence_spec = evidence_spec or load_rule_candidate_evidence_spec("fourth-manual-therapy")
     by_chunk_id = _chunk_map(chunks)
-    if any(chunk_id not in by_chunk_id for chunk_id in FOURTH_MANUAL_THERAPY_CHUNK_IDS):
+    required_chunk_ids = (evidence_spec.primary_chunk_id, *evidence_spec.supporting_chunk_ids)
+    if any(chunk_id not in by_chunk_id for chunk_id in required_chunk_ids):
         return []
 
-    primary = by_chunk_id[FOURTH_MANUAL_THERAPY_CHUNK_IDS[0]]
-    supporting_chunks = [by_chunk_id[chunk_id] for chunk_id in FOURTH_MANUAL_THERAPY_CHUNK_IDS[1:]]
+    primary = by_chunk_id[evidence_spec.primary_chunk_id]
+    supporting_chunks = [by_chunk_id[chunk_id] for chunk_id in evidence_spec.supporting_chunk_ids]
     primary_text = str(primary.get("text") or "")
     source_set_text = "\n".join(str(chunk.get("text") or "") for chunk in [primary, *supporting_chunks])
     compact_primary = _compact(primary_text)
-    if not all(term in compact_primary for term in ("도수", "체외충격파", "증식")):
+    if not all(term in compact_primary for term in evidence_spec.primary_required_terms):
         return []
 
     ratio_match = next(
@@ -377,11 +382,11 @@ def extract_fourth_manual_therapy_candidates(chunks: list[dict[str, Any]]) -> li
     if not annual_visit_counts or "한도" not in _compact(source_set_text):
         return []
     annual_visit_limit = max(annual_visit_counts)
-    review_requirements = _manual_therapy_review_requirements(supporting_chunks)
+    review_requirements = _manual_therapy_review_requirements(supporting_chunks, evidence_spec)
     if review_requirements is None:
         return []
 
-    additional_source_refs = list(FOURTH_MANUAL_THERAPY_CHUNK_IDS[1:])
+    additional_source_refs = list(evidence_spec.supporting_chunk_ids)
     source_refs = [
         {
             "kind": "policy_chunk",
@@ -394,12 +399,15 @@ def extract_fourth_manual_therapy_candidates(chunks: list[dict[str, Any]]) -> li
     ]
     evidence_text = "\n\n".join(str(chunk.get("text") or "").strip() for chunk in [primary, *supporting_chunks])
     candidates: list[dict[str, Any]] = []
-    for visit_type in ("hospitalization", "outpatient"):
-        rule_id = f"deductible.4th.three_major_manual.{visit_type}"
+    for visit_type in evidence_spec.visit_types:
+        rule_id = evidence_spec.rule_id_template.format(
+            generation=evidence_spec.generation,
+            visit_type=visit_type,
+        )
         rule = {
             "rule_id": rule_id,
-            "generation": "4th",
-            "category": "3대비급여_도수",
+            "generation": evidence_spec.generation,
+            "category": evidence_spec.category,
             "visit_type": visit_type,
             "facility_grade": "all",
             "copay_ratio": _decimal_text(copay_ratio),
@@ -414,9 +422,13 @@ def extract_fourth_manual_therapy_candidates(chunks: list[dict[str, Any]]) -> li
             "annual_limit": str(annual_limit),
             "annual_visit_limit": annual_visit_limit,
             "review_requirements": review_requirements,
-            "description": (
-                f"4세대 3대비급여 도수치료군: 1회당 {minimum:,}원과 "
-                f"보장대상의료비 {int(copay_ratio * 100)}% 중 큰 금액, 연 {annual_limit:,}원·{annual_visit_limit}회"
+            "description": evidence_spec.description_template.format(
+                generation_label=evidence_spec.generation_label,
+                treatment_label=evidence_spec.treatment_label,
+                minimum_won=f"{minimum:,}",
+                copay_percent=int(copay_ratio * 100),
+                annual_limit_won=f"{annual_limit:,}",
+                annual_visit_limit=annual_visit_limit,
             ),
             "source_doc": str(primary.get("doc_short") or "unknown"),
             "source_page": str(primary.get("page") or "unknown"),
@@ -426,15 +438,15 @@ def extract_fourth_manual_therapy_candidates(chunks: list[dict[str, Any]]) -> li
             "source_status": "source_grounded",
             "approval_status": "candidate",
         }
-        candidate = _candidate_base(f"rulecand.add.{rule_id}", rule, primary, evidence_text)
+        candidate_id = evidence_spec.candidate_id_template.format(rule_id=rule_id)
+        candidate = _candidate_base(candidate_id, rule, primary, evidence_text)
         candidate["source_refs"].extend(source_refs)
         candidate["proposed_links"]["source_refs"].extend(f"policy_chunk:{chunk_id}" for chunk_id in additional_source_refs)
         candidate["proposed_links"]["graph_refs"].extend(f"source_chunk:{chunk_id}" for chunk_id in additional_source_refs)
-        candidate["extraction_reason"] = "4세대 도수치료군의 공제율, 최소공제, 연간 한도와 추가 증빙 조건을 원문 근거에서 분리 추출함"
+        candidate["extraction_reason"] = evidence_spec.extraction_reason
         validate_candidate_record(candidate)
         candidates.append(candidate)
     return candidates
-
 
 def iter_policy_chunks(path: Path) -> list[dict[str, Any]]:
     if not path.exists():

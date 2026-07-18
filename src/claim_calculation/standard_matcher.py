@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Literal
 import re
 from src.claim_calculation.models import StandardMatch
+from src.claim_calculation.processing_policy import standard_match_constraint_for_query
 from src.db import standard_codes
 
 
@@ -99,22 +100,17 @@ def _filter_rows_for_query(
     preserving all original rows for ordinary fuzzy queries.
     """
 
-    normalized = _normalize_text(input_name)
-    if normalized in {"mri", "mra", "mri검사", "mra검사", "자기공명영상", "자기공명영상진단"}:
-        imaging_rows = [
+    constraint = standard_match_constraint_for_query(input_name)
+    if constraint:
+        constrained_rows = [
             row for row in rows
             if any(
                 keyword in _row_text(row)
-                for keyword in (
-                    "자기공명영상진단",
-                    "자기공명혈관조영술",
-                    "방사선특수영상진단료",
-                    "비급여_특약3",
-                )
+                for keyword in constraint.row_required_any
             )
         ]
-        if imaging_rows:
-            rows = imaging_rows
+        if constrained_rows:
+            rows = constrained_rows
 
     if care_scope == "nonpay":
         return [row for row in rows if _is_nonpay_row(row) and not _is_nonpay_restriction(row)]

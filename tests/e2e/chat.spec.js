@@ -435,6 +435,7 @@ test.describe('채팅 플로우', () => {
     await expect.poll(() => claimPayloads.length).toBe(2);
     expect(claimPayloads[0].save_to_history).toBe(true);
     expect(claimPayloads[1].save_to_history).toBe(true);
+    expect(claimPayloads[1].items[0].input_code).toBe('MX122');
   });
 });
 

@@ -67,8 +67,8 @@ class ClaimCalculationResponse(BaseModel):
 
     session_id: str | None = None
     claimed_amount: str
-    payable_amount: str
-    deductible: str
+    payable_amount: str | None
+    deductible: str | None
     formula_intent: str
     executed_code: str
     applied_basis: list[dict[str, str]]

@@ -427,6 +427,12 @@ def _has_human_task_amount(value: Any) -> bool:
     return normalized not in {"0", "0.0", "0.00"}
 
 
+def _claim_snapshot_money_label(value: object) -> str:
+    if value is None or not str(value).strip():
+        return "산정 보류"
+    return f"{_sanitize_claim_context_field(value, 60)}원"
+
+
 def _claim_snapshot_lines(snapshot: dict, index: int) -> list[str]:
     result = snapshot.get("result") or {}
     if not isinstance(result, dict):
@@ -434,9 +440,11 @@ def _claim_snapshot_lines(snapshot: dict, index: int) -> list[str]:
 
     lines = [
         f"계산 {index}:",
-        f"- 예상 지급금액: {_sanitize_claim_context_field(result.get('payable_amount', '0'), 60)}원",
-        f"- 예상 공제금액: {_sanitize_claim_context_field(result.get('deductible', '0'), 60)}원",
+        f"- 예상 지급금액: {_claim_snapshot_money_label(result.get('payable_amount'))}",
+        f"- 예상 공제금액: {_claim_snapshot_money_label(result.get('deductible'))}",
     ]
+    if result.get("calculation_status") == "blocked_missing_info":
+        lines.append("- 현재 상태: 표준코드 선택 대기")
     special_status = _claim_special_status_label(result.get("special_calculation_status"))
     if special_status:
         lines.append(f"- 산정특례 상태: {special_status}")

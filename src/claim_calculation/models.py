@@ -104,8 +104,8 @@ class CalculationResult:
     """최종 보험금 계산 결과."""
 
     claimed_amount: str = "0"
-    payable_amount: str = "0"
-    deductible: str = "0"
+    payable_amount: str | None = "0"
+    deductible: str | None = "0"
     formula_intent: str = ""
     executed_code: str = ""
     applied_basis: list[dict[str, str]] = field(default_factory=list)

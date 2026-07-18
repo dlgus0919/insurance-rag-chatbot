@@ -15,6 +15,7 @@ from src import config
 from src.api.db import get_db
 from src.api.deps import log_audit_event, require_permission
 from src.api.exceptions import ValidationException
+from src.api.isolated_e2e import is_isolated_e2e_run
 from src.api.models import ChatMessage, ChatSession
 from src.api.rag_service import get_rag_pipeline
 from src.api.schemas.claim import ClaimCalculationRequest, ClaimCalculationResponse, ClaimItemRequest
@@ -58,12 +59,15 @@ async def calculate_claim(
     selected_model = _select_model(payload)
     index_mode = _resolve_claim_index_mode(payload.index_mode)
     warnings: list[str] = []
-    try:
-        pipeline = get_rag_pipeline(selected_model, CLAIM_RAG_TOP_K, index_mode)
-    except Exception as exc:
+    if is_isolated_e2e_run():
         pipeline = None
-        warnings.append("RAG 근거 초기화에 실패하여 구조화 계산만 수행했습니다.")
-        logger.warning("Claim calculation RAG initialization failed: %s", exc)
+    else:
+        try:
+            pipeline = get_rag_pipeline(selected_model, CLAIM_RAG_TOP_K, index_mode)
+        except Exception as exc:
+            pipeline = None
+            warnings.append("RAG 근거 초기화에 실패하여 구조화 계산만 수행했습니다.")
+            logger.warning("Claim calculation RAG initialization failed: %s", exc)
 
     items = [
         ClaimItemInput(
@@ -178,13 +182,23 @@ def _claim_user_text(payload: ClaimCalculationRequest) -> str:
     return f"[보험금 계산/{generation}/{special_status}] " + ", ".join(lines)
 
 
+def _claim_money_label(value: str | None) -> str:
+    return "산정 보류" if value is None else f"{value}원"
+
+
 def _claim_response_text(response: ClaimCalculationResponse) -> str:
-    status = "검토 필요" if response.requires_review else "계산 완료"
+    status = (
+        "표준코드 선택 필요"
+        if response.calculation_status == "blocked_missing_info" and response.candidates
+        else "검토 필요"
+        if response.requires_review
+        else "계산 완료"
+    )
     lines = [
         f"보험금 계산 결과: {status}",
         f"- 총 청구금액: {response.claimed_amount}원",
-        f"- 예상 공제금액: {response.deductible}원",
-        f"- 예상 지급금액: {response.payable_amount}원",
+        f"- 예상 공제금액: {_claim_money_label(response.deductible)}",
+        f"- 예상 지급금액: {_claim_money_label(response.payable_amount)}",
         f"- 산정 상태: {response.calculation_status}",
         f"- 보험 세대: {response.policy_generation}",
         f"- 산정특례 상태: {_special_calculation_label(response.special_calculation_status)}",
@@ -199,8 +213,8 @@ def _claim_response_text(response: ClaimCalculationResponse) -> str:
                 f"{idx}. {line.get('input_name', '항목명 없음')} - "
                 f"분류: {line.get('category', '미분류')}, "
                 f"청구금액: {line.get('claimed_amount', '0')}원, "
-                f"공제금액: {line.get('deductible', '0')}원, "
-                f"예상 지급금액: {line.get('payable_amount', '0')}원, "
+                f"공제금액: {_claim_money_label(line.get('deductible'))}, "
+                f"예상 지급금액: {_claim_money_label(line.get('payable_amount'))}, "
                 f"상태: {line.get('calculation_status', 'unknown')}"
             )
             if line.get("rule_summary"):
@@ -214,6 +228,7 @@ def _claim_response_text(response: ClaimCalculationResponse) -> str:
         line
         for line in response.line_results
         if line.get("requires_review")
+        or line.get("calculation_status") == "needs_code_selection"
         or line.get("calculation_status") in {"human_task", "partial_human_task"}
         or line.get("review_reasons")
     ]

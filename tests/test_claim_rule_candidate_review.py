@@ -265,6 +265,37 @@ def test_special_case_5th_extractor_builds_practitioner_named_candidates() -> No
     assert all("unknown" not in summary for summary in summaries)
 
 
+def test_special_case_5th_extractor_uses_chunk_id_when_article_missing() -> None:
+    from scripts.extract_claim_rule_candidates import extract_special_case_5th_candidates
+
+    chunk_id = "표준약관_ch_missing_article"
+    candidates = extract_special_case_5th_candidates(
+        [
+            {
+                "text": (
+                    "5세대 산정특례 적용 대상자의 3대비급여는 본인부담금 30%를 공제한다. "
+                    "입원은 연간 5천만원 한도이며 통원은 3만원 공제 후 20만원 한도입니다."
+                ),
+                "doc_short": "표준약관",
+                "chunk_id": chunk_id,
+                "page": 296,
+            }
+        ]
+    )
+
+    assert len(candidates) == 2
+    assert all(candidate["status"] == "pending" for candidate in candidates)
+    rules = {candidate["proposed_rule"]["visit_type"]: candidate["proposed_rule"] for candidate in candidates}
+    assert set(rules) == {"hospitalization", "outpatient"}
+    assert all(rule["approval_status"] == "candidate" for rule in rules.values())
+    assert all(rule["source_chunk_id"] == chunk_id for rule in rules.values())
+    assert all(rule["source_clause"] == f"source_chunk_id:{chunk_id}" for rule in rules.values())
+    assert rules["hospitalization"]["copay_ratio"] == "0.3"
+    assert rules["hospitalization"]["annual_limit"] == "50000000"
+    assert rules["outpatient"]["min_deductible"] == "30000"
+    assert rules["outpatient"]["per_visit_limit"] == "200000"
+
+
 def test_generic_extractor_distinguishes_copay_and_payout_semantics() -> None:
     from scripts.extract_claim_rule_candidates import extract_candidates_from_text
 
@@ -340,6 +371,41 @@ def test_fourth_manual_therapy_extractor_creates_review_only_candidates() -> Non
     assert all(candidate["proposed_rule"]["annual_limit"] == "3500000" for candidate in candidates)
     assert all(candidate["proposed_rule"]["annual_visit_limit"] == 50 for candidate in candidates)
     assert all(candidate["proposed_rule"]["additional_source_refs"] == ["약관_ch_002442", "약관_ch_002443"] for candidate in candidates)
+
+
+def test_fourth_manual_therapy_extractor_uses_chunk_id_when_primary_article_missing() -> None:
+    from scripts.extract_claim_rule_candidates import extract_fourth_manual_therapy_candidates
+
+    chunks = [
+        {
+            "text": "도수치료, 체외충격파치료 및 증식치료는 보장대상의료비의 30%와 3만원 중 큰 금액을 공제합니다. 2022.4",
+            "doc_short": "약관",
+            "chunk_id": "약관_ch_002441",
+            "page": "71-78",
+        },
+        {
+            "text": "만원 최초 10회부터 증상 호전 여부를 확인할 수 있는 증빙이 필요하며 연간 350만원, 50회를 한도로 합니다.",
+            "doc_short": "약관",
+            "chunk_id": "약관_ch_002442",
+            "page": "71-78",
+            "article": "제3조",
+        },
+        {
+            "text": "동일한 날 여러 번 시행한 치료는 1회로 봅니다.",
+            "doc_short": "약관",
+            "chunk_id": "약관_ch_002443",
+            "page": "71-78",
+            "article": "제3조",
+        },
+    ]
+
+    candidates = extract_fourth_manual_therapy_candidates(chunks)
+
+    assert len(candidates) == 2
+    assert all(
+        candidate["proposed_rule"]["source_clause"] == "source_chunk_id:약관_ch_002441"
+        for candidate in candidates
+    )
 
 
 def test_iter_policy_chunks_prefers_source_chunk_id_for_canonical_provenance(tmp_path: Path) -> None:

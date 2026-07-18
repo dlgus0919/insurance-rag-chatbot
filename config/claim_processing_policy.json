@@ -1,0 +1,96 @@
+{
+  "schema_version": "1.1",
+  "standard_match_constraints": [
+    {
+      "id": "mri_mra",
+      "query_aliases": [
+        "mri",
+        "mra",
+        "mri검사",
+        "mra검사",
+        "자기공명영상",
+        "자기공명영상진단"
+      ],
+      "row_required_any": [
+        "자기공명영상진단",
+        "자기공명혈관조영술",
+        "방사선특수영상진단료",
+        "비급여_특약3"
+      ]
+    }
+  ],
+  "named_text_rules": [
+    {
+      "id": "mri_mra",
+      "terms_any": [
+        "mri",
+        "mra",
+        "자기공명영상"
+      ]
+    },
+    {
+      "id": "three_major_nonpay",
+      "terms_any": [
+        "도수",
+        "체외충격파",
+        "증식",
+        "주사"
+      ]
+    }
+  ],
+  "category_text_rules": [
+    {
+      "id": "nonsevere_nonpay",
+      "category": "비중증비급여",
+      "terms_any": [
+        "비중증"
+      ]
+    },
+    {
+      "id": "severe_nonpay",
+      "category": "중증비급여",
+      "terms_any": [
+        "중증"
+      ]
+    },
+    {
+      "id": "three_major_manual",
+      "category": "3대비급여_도수",
+      "terms_any": [
+        "도수",
+        "체외충격파",
+        "증식"
+      ]
+    },
+    {
+      "id": "three_major_nonpay",
+      "category": "3대비급여",
+      "terms_any": [
+        "3대",
+        "주사",
+        "mri",
+        "mra"
+      ]
+    },
+    {
+      "id": "nonpay",
+      "category": "비급여",
+      "terms_any": [
+        "비급여"
+      ]
+    },
+    {
+      "id": "benefit",
+      "category": "급여",
+      "terms_any": [
+        "급여"
+      ]
+    }
+  ],
+  "default_category": "미분류",
+  "explicit_code_required_categories": [
+    "3대비급여",
+    "3대비급여_도수",
+    "비급여자기공명영상진단"
+  ]
+}

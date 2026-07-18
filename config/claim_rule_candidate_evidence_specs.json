@@ -1,0 +1,53 @@
+{
+  "schema_version": "1.0",
+  "review_specs": [
+    {
+      "scope": "fourth-manual-therapy",
+      "generation": "4th",
+      "generation_label": "4세대",
+      "category": "3대비급여_도수",
+      "treatment_label": "도수치료군",
+      "rule_id_template": "deductible.{generation}.three_major_manual.{visit_type}",
+      "candidate_id_template": "rulecand.add.{rule_id}",
+      "description_template": "{generation_label} {treatment_label}: 1회당 {minimum_won}원과 보장대상의료비 {copay_percent}% 중 큰 금액, 연 {annual_limit_won}원·{annual_visit_limit}회",
+      "extraction_reason": "원문 근거에서 분리 추출",
+      "primary_chunk_id": "약관_ch_002441",
+      "supporting_chunk_ids": [
+        "약관_ch_002442",
+        "약관_ch_002443"
+      ],
+      "primary_required_terms": [
+        "도수",
+        "체외충격파",
+        "증식"
+      ],
+      "visit_types": [
+        "hospitalization",
+        "outpatient"
+      ],
+      "review_requirements": [
+        {
+          "required_all": [
+            "최초",
+            "10회"
+          ],
+          "required_any": [
+            "호전",
+            "증상"
+          ],
+          "message": "최초 10회 이후 증상 호전 증빙 확인 필요"
+        },
+        {
+          "required_all": [
+            "1회"
+          ],
+          "required_any": [
+            "동일",
+            "당일"
+          ],
+          "message": "동일 방문 복수 치료 횟수 확인 필요"
+        }
+      ]
+    }
+  ]
+}

@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import config
 from src.api.db import get_db
+from src.api.isolated_e2e import is_isolated_e2e_run
 from src.api.deps import log_audit_event, require_permission
 from src.api.models import ChatMessage, ChatSession
 from src.api.rate_limit import limiter
@@ -181,12 +182,15 @@ async def _handle_claim_follow_up(
     )
     context_data = _recalculation_context_data(payload, payload_data)
     warnings: list[str] = []
-    try:
-        pipeline = _get_pipeline(selected_model, config.CLAIM_RAG_TOP_K, payload.index_mode)
-    except Exception as exc:
+    if is_isolated_e2e_run():
         pipeline = None
-        warnings.append("RAG 근거 초기화에 실패하여 구조화 계산만 수행했습니다.")
-        logger.warning("Claim follow-up RAG initialization failed: %s", exc)
+    else:
+        try:
+            pipeline = _get_pipeline(selected_model, config.CLAIM_RAG_TOP_K, payload.index_mode)
+        except Exception as exc:
+            pipeline = None
+            warnings.append("RAG 근거 초기화에 실패하여 구조화 계산만 수행했습니다.")
+            logger.warning("Claim follow-up RAG initialization failed: %s", exc)
     result = run_claim_calculation(
         rag_pipeline=pipeline,
         items=[

@@ -1,0 +1,116 @@
+{
+  "candidate_id": "practitioner.cov.hair_loss.full-payload-correction.20260718",
+  "concept_id": "cov.hair_loss",
+  "canonical_name": "탈모",
+  "node_type": "CoverageItem",
+  "aliases": [
+    "탈모",
+    "노화성 탈모",
+    "노화현상으로 인한 탈모",
+    "질병성 탈모",
+    "치료 부작용 탈모",
+    "약물 부작용 탈모"
+  ],
+  "candidate_aliases": [],
+  "evidence_tags": [],
+  "planner": {
+    "coverage_topics": [
+      "탈모"
+    ],
+    "clarification_questions": [
+      "탈모의 원인이 노화현상인지, 의사 진단을 받은 질병성 탈모인지, 치료·약물 부작용인지 확인해 주세요.",
+      "진단명 또는 진단코드, 의사소견, 치료 목적과 급여/비급여 구분을 확인할 수 있는 자료가 있는지 확인해 주세요."
+    ],
+    "required_evidence": [
+      "진단명 또는 진단코드",
+      "의사소견",
+      "치료 목적 확인",
+      "급여/비급여 구분",
+      "업무 또는 일상생활 지장 여부"
+    ]
+  },
+  "retrieval": {
+    "lexical_priority_terms": [
+      "노화현상으로 인한 탈모",
+      "탈모"
+    ],
+    "expansion_rules": [
+      {
+        "match_any": [
+          "탈모"
+        ],
+        "expansion_terms": [
+          "노화현상으로 인한 탈모",
+          "업무 또는 일상생활에 지장이 없는 경우",
+          "비급여 의료비",
+          "의사 진단",
+          "치료 부작용"
+        ]
+      }
+    ]
+  },
+  "properties": {
+    "candidate_type": "source_grounded_decision_correction",
+    "target_concept_id": "cov.hair_loss",
+    "correction_reason": "과거 후보가 출처 태그만 보유한 상태에서 전체 payload가 base ontology에 직접 반영된 이력을, 실무자 승인 가능한 전체 교정 후보로 보완합니다.",
+    "apply_mode": "update_existing_concept_after_practitioner_approval",
+    "source_grounded_decision": {
+      "question_terms": [
+        "탈모"
+      ],
+      "age_related_terms": [
+        "노화현상으로 인한 탈모",
+        "노화성 탈모"
+      ],
+      "disease_or_side_effect_terms": [
+        "질병성 탈모",
+        "질병 진단으로 인한 탈모",
+        "치료 부작용 탈모",
+        "약물 부작용 탈모"
+      ],
+      "evidence_terms": [
+        "노화현상으로 인한 탈모",
+        "비급여 의료비"
+      ],
+      "direct_source_chunk_ids": {
+        "4th": [
+          "약관_ch_002457"
+        ],
+        "5th": [
+          "표준약관_ch_005453"
+        ]
+      },
+      "conditions": [
+        "노화현상으로 인한 탈모",
+        "업무 또는 일상생활 지장 여부",
+        "급여/비급여 구분"
+      ],
+      "conditional_exclusion_summary": "노화현상으로 인한 탈모의 치료로 발생한 비급여 의료비는 업무 또는 일상생활에 지장이 없는 경우 보상하지 않는다는 조항이 확인됩니다.",
+      "general_scope_note": "일반적인 탈모만으로는 보상 여부를 확정할 수 없습니다. 노화현상에 따른 탈모인지와 조항의 적용 조건을 먼저 확인해야 합니다.",
+      "alternative_cause_note": "의사 진단을 받은 질병성 탈모 또는 치료·약물 부작용으로 인한 탈모에는 이 노화현상 조항을 자동 적용할 수 없습니다. 다만 보상 여부도 자동으로 확정하지 않으므로 진단·치료 사실과 약관 요건을 별도로 확인해야 합니다."
+    }
+  },
+  "source_evidence": [
+    {
+      "kind": "policy_chunk",
+      "doc_short": "약관",
+      "chunk_id": "약관_ch_002457",
+      "policy_generation": "4th"
+    },
+    {
+      "kind": "policy_chunk",
+      "doc_short": "표준약관",
+      "chunk_id": "표준약관_ch_005453",
+      "policy_generation": "5th"
+    }
+  ],
+  "status": "pending",
+  "risk_flags": [
+    "manual_review_required",
+    "coverage_decision_update",
+    "source_grounded_evidence"
+  ],
+  "test_candidate": false,
+  "created_at": "2026-07-18T00:00:00+00:00",
+  "extraction_run_id": "manual-000-guardrail-fixback-20260718"
+}

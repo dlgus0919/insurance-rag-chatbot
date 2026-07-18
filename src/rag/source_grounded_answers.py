@@ -87,17 +87,30 @@ def _matches_any_term(question: str, terms: list[str]) -> bool:
     return any(_compact(term) and _compact(term) in compact_question for term in terms)
 
 
+def _policy_source_authority(chunk: Chunk) -> str:
+    metadata = chunk.metadata or {}
+    if metadata.get("is_own_company") is True:
+        return "own"
+    if str(metadata.get("product_type") or "").strip() == "표준약관" or str(metadata.get("doc_short") or "").strip() == "표준약관":
+        return "standard"
+    return "other"
+
+
 def _authority_note(
     policy_generation: str,
     direct_chunks: list[Chunk],
-    profile: dict[str, Any],
 ) -> str:
-    if any((chunk.metadata or {}).get("is_own_company") is True for chunk in direct_chunks):
-        return f"현재 선택한 {policy_generation.replace('th', '세대')} 자사 약관의 직접 조항 근거입니다."
-    standard_note = str(profile.get("standard_reference_note") or "").strip()
-    if policy_generation == "5th" and standard_note:
-        return standard_note
-    return f"현재 선택한 {policy_generation.replace('th', '세대')} 기준 문서의 직접 조항 근거입니다."
+    generation_label = policy_generation.replace("th", "세대")
+    authorities = {_policy_source_authority(chunk) for chunk in direct_chunks}
+    has_own = "own" in authorities
+    has_standard = "standard" in authorities
+    if has_own and has_standard:
+        return f"현재 선택한 {generation_label} 자사 상품약관과 표준약관의 직접 조항을 함께 근거로 확인했습니다."
+    if has_own:
+        return f"현재 선택한 {generation_label} 자사 상품약관의 직접 조항 근거입니다."
+    if has_standard:
+        return f"{generation_label} 표준약관은 등록되어 있으며, 현재 답변은 해당 표준약관의 직접 조항을 근거로 합니다."
+    return f"현재 선택한 {generation_label} 기준 문서의 직접 조항 근거입니다."
 
 
 def _join_decision_answer(summary: str, authority_note: str, conditions: list[str]) -> str:
@@ -138,7 +151,7 @@ def build_policy_clause_decision(
     conditions = [str(item) for item in profile.get("conditions", []) if str(item).strip()]
     questions = list(concept.planner_clarification_questions)
     required_evidence = list(concept.planner_required_evidence)
-    authority_note = _authority_note(policy_generation, direct_chunks, profile)
+    authority_note = _authority_note(policy_generation, direct_chunks)
 
     if _matches_any_term(question, [str(term) for term in profile.get("disease_or_side_effect_terms", [])]):
         status = "clarification_required"

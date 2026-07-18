@@ -13,13 +13,21 @@ from src.claim_calculation.pipeline import run_claim_calculation
 def _matches_for(items: list[ClaimItemInput]) -> list[list[dict[str, str]]]:
     return [
         [{
-            "std_cd": f"STD{i + 1:03d}",
+            "std_cd": item.input_code or f"STD{i + 1:03d}",
             "std_cd_nm": item.input_name,
             "mid_category_cd_nm": item.user_category_hint or "급여",
             "pay_opn_cd_nm": "보상",
         }]
         for i, item in enumerate(items)
     ]
+
+
+def _lookup_rows_for(items: list[ClaimItemInput]) -> dict[str, dict[str, str]]:
+    return {
+        row["std_cd"]: row
+        for matches in _matches_for(items)
+        for row in matches
+    }
 
 
 def test_pipeline_dousu_unknown_special_status_requires_review():
@@ -33,6 +41,7 @@ def test_pipeline_dousu_unknown_special_status_requires_review():
         ClaimItemInput(
             line_id="item_1",
             input_name="도수치료",
+            input_code="SC0001",
             claimed_amount="150000",
             quantity="1"
         )
@@ -49,7 +58,7 @@ def test_pipeline_dousu_unknown_special_status_requires_review():
         "pay_opn_cd_nm": "보상",  # 보상 가능 의견
     }
 
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=mock_match):
         result: CalculationResult = run_claim_calculation(
             rag_pipeline=None,
             items=items,
@@ -160,10 +169,10 @@ def test_generation_difference_for_nonsevere_nonpay():
 
 def test_fifth_generation_unknown_three_major_nonpay_requires_special_status():
     """5세대 3대비급여는 산정특례 여부가 모호하면 자동 지급 산정하지 않는다."""
-    items = [ClaimItemInput(line_id="line_dosu", input_name="도수치료", claimed_amount="100000", user_category_hint="3대비급여")]
+    items = [ClaimItemInput(line_id="line_dosu", input_name="도수치료", input_code="STD001", claimed_amount="100000", user_category_hint="3대비급여")]
     context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", special_calculation_status="unknown")
 
-    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+    with patch("src.db.standard_codes.lookup_by_std_cd", side_effect=_lookup_rows_for(items).get):
         result = run_claim_calculation(None, items, context, use_fake_planner=True)
 
     assert result.deductible == "0"
@@ -176,10 +185,10 @@ def test_fifth_generation_unknown_three_major_nonpay_requires_special_status():
 
 def test_fifth_generation_not_applied_manual_therapy_is_not_auto_paid():
     """5세대 산정특례 미적용의 도수치료는 자동 지급 산정에서 제외한다."""
-    items = [ClaimItemInput(line_id="line_dosu", input_name="도수치료", claimed_amount="100000", user_category_hint="3대비급여")]
+    items = [ClaimItemInput(line_id="line_dosu", input_name="도수치료", input_code="STD001", claimed_amount="100000", user_category_hint="3대비급여")]
     context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", special_calculation_status="not_applied")
 
-    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+    with patch("src.db.standard_codes.lookup_by_std_cd", side_effect=_lookup_rows_for(items).get):
         result = run_claim_calculation(None, items, context, use_fake_planner=True)
 
     assert result.deductible == "0"
@@ -192,10 +201,10 @@ def test_fifth_generation_not_applied_manual_therapy_is_not_auto_paid():
 
 def test_fifth_generation_not_applied_mri_waits_for_approved_rule():
     """MRI/MRA 전용 active rule이 없으면 기존 급여 fallback으로 자동 계산하지 않는다."""
-    items = [ClaimItemInput(line_id="line_mri", input_name="MRI 자기공명영상진단", claimed_amount="100000", user_category_hint="3대비급여")]
+    items = [ClaimItemInput(line_id="line_mri", input_name="MRI 자기공명영상진단", input_code="STD001", claimed_amount="100000", user_category_hint="3대비급여")]
     context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", special_calculation_status="not_applied")
 
-    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+    with patch("src.db.standard_codes.lookup_by_std_cd", side_effect=_lookup_rows_for(items).get):
         result = run_claim_calculation(None, items, context, use_fake_planner=True)
 
     assert result.deductible == "0"
@@ -206,10 +215,10 @@ def test_fifth_generation_not_applied_mri_waits_for_approved_rule():
 
 def test_fifth_generation_applied_three_major_nonpay_uses_special_case_rule():
     """5세대 산정특례 적용 3대비급여는 승인된 중증비급여 rule 경로로 계산한다."""
-    items = [ClaimItemInput(line_id="line_dosu", input_name="도수치료", claimed_amount="100000", user_category_hint="3대비급여")]
+    items = [ClaimItemInput(line_id="line_dosu", input_name="도수치료", input_code="STD001", claimed_amount="100000", user_category_hint="3대비급여")]
     context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", special_calculation_status="applied")
 
-    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+    with patch("src.db.standard_codes.lookup_by_std_cd", side_effect=_lookup_rows_for(items).get):
         result = run_claim_calculation(None, items, context, use_fake_planner=True)
 
     assert result.deductible == "30000"
@@ -239,11 +248,14 @@ def test_grouped_deductible_excludes_human_task_lines_from_group_amount():
     """자동 산정 제외 항목은 동일 공제 그룹 합산에서 제외한다."""
     items = [
         ClaimItemInput(line_id="line_1", input_name="급여 외래진료비", claimed_amount="30000", user_category_hint="급여"),
-        ClaimItemInput(line_id="line_2", input_name="도수치료", claimed_amount="100000", user_category_hint="3대비급여"),
+        ClaimItemInput(line_id="line_2", input_name="도수치료", input_code="STD002", claimed_amount="100000", user_category_hint="3대비급여"),
     ]
     context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient", facility_grade="clinic", special_calculation_status="unknown")
 
-    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+    with patch("src.db.standard_codes.lookup_by_std_cd", side_effect=_lookup_rows_for(items).get), patch(
+        "src.db.standard_codes.search_by_name",
+        side_effect=_matches_for(items),
+    ):
         result = run_claim_calculation(None, items, context, use_fake_planner=True)
 
     assert result.deductible == "10000"
@@ -254,7 +266,7 @@ def test_grouped_deductible_excludes_human_task_lines_from_group_amount():
 
 def test_excluded_standard_opinion_forces_zero_payable():
     """표준모델 보상의견이 면책이면 일반 공제 산식 대신 지급예상액 0원으로 처리한다."""
-    items = [ClaimItemInput(line_id="line_excluded", input_name="도수치료", claimed_amount="100000")]
+    items = [ClaimItemInput(line_id="line_excluded", input_name="도수치료", input_code="51040", claimed_amount="100000")]
     context = ClaimCaseContext(policy_generation="5th", visit_type="outpatient")
     mock_match = {
         "std_cd": "51040",
@@ -264,7 +276,7 @@ def test_excluded_standard_opinion_forces_zero_payable():
         "pay_opn_cd_nm": "면책",
     }
 
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=mock_match):
         result = run_claim_calculation(None, items, context, use_fake_planner=True)
 
     assert result.deductible == "100000"
@@ -719,7 +731,7 @@ def test_mixed_receipt_line_items_total_like_medical_bill_detail():
     [
         (
             "4th_nonpay_outpatient",
-            [ClaimItemInput(line_id="line_nonpay_4th", input_name="비급여 주사료", claimed_amount="200000", user_category_hint="비급여")],
+            [ClaimItemInput(line_id="line_nonpay_4th", input_name="비급여 주사료", input_code="NP001", claimed_amount="200000", user_category_hint="비급여")],
             ClaimCaseContext(policy_generation="4th", visit_type="outpatient"),
             "claimed_amount = Decimal('200000')\n"
             "deductible = max(Decimal('30000'), claimed_amount * Decimal('0.3'))\n"
@@ -730,7 +742,7 @@ def test_mixed_receipt_line_items_total_like_medical_bill_detail():
         ),
         (
             "5th_nonsevere_nonpay_outpatient",
-            [ClaimItemInput(line_id="line_nonpay_5th", input_name="비중증 비급여 주사료", claimed_amount="200000", user_category_hint="비중증비급여")],
+            [ClaimItemInput(line_id="line_nonpay_5th", input_name="비중증 비급여 주사료", input_code="NP002", claimed_amount="200000", user_category_hint="비중증비급여")],
             ClaimCaseContext(policy_generation="5th", visit_type="outpatient"),
             "claimed_amount = Decimal('200000')\n"
             "deductible = max(Decimal('50000'), claimed_amount * Decimal('0.5'))\n"
@@ -795,7 +807,10 @@ def test_llm_generated_formula_variants_do_not_override_rule_layer(
 
     monkeypatch.setattr("src.claim_calculation.planner.build_llm", lambda *_args, **_kwargs: FormulaLLM())
 
-    with patch("src.db.standard_codes.search_by_name", side_effect=_matches_for(items)):
+    with patch("src.db.standard_codes.lookup_by_std_cd", side_effect=_lookup_rows_for(items).get), patch(
+        "src.db.standard_codes.search_by_name",
+        side_effect=_matches_for(items),
+    ):
         result = run_claim_calculation(None, items, context, use_fake_planner=False, provider="vllm", model_id="local-test")
 
     assert result.claimed_amount == expected_claimed
@@ -856,6 +871,7 @@ def test_pipeline_not_covered():
         ClaimItemInput(
             line_id="item_2",
             input_name="도수치료 제외",
+            input_code="SC0001",
             claimed_amount="150000"
         )
     ]
@@ -867,7 +883,7 @@ def test_pipeline_not_covered():
         "pay_opn_cd_nm": "보상",
     }
 
-    with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=mock_match):
         result = run_claim_calculation(
             rag_pipeline=None,
             items=items,
@@ -956,6 +972,7 @@ def test_pipeline_formatted_amount_parsing():
             ClaimItemInput(
                 line_id="item_format_test",
                 input_name="도수치료",
+                input_code="SC0001",
                 claimed_amount=claimed,
                 quantity="1"
             )
@@ -965,7 +982,7 @@ def test_pipeline_formatted_amount_parsing():
             visit_type="outpatient"
         )
 
-        with patch("src.db.standard_codes.search_by_name", return_value=[mock_match]):
+        with patch("src.db.standard_codes.lookup_by_std_cd", return_value=mock_match):
             result = run_claim_calculation(
                 rag_pipeline=None,
                 items=items,
@@ -1005,8 +1022,8 @@ def test_pipeline_multiple_candidates_populate():
         )
 
         assert result.requires_review
-        assert result.payable_amount == "0"
-        assert result.deductible == "0"
+        assert result.payable_amount is None
+        assert result.deductible is None
         assert result.calculation_status == "blocked_missing_info"
         assert result.notes == "표준코드 선택 전 산정 보류"
         assert len(result.candidates) == 2
@@ -1042,18 +1059,23 @@ def _manual_therapy_standard_rows() -> list[dict[str, str]]:
 
 
 def test_fourth_nonpay_manual_therapy_uses_mx122_with_active_exact_rule():
-    """비급여 금액 범위는 MX122를 선택하고 승인된 전용 룰로 산정한다."""
+    """사용자가 MX122를 선택하면 승인된 전용 룰로 산정한다."""
     items = [
         ClaimItemInput(
             line_id="manual-nonpay",
             input_name="도수치료",
+            input_code="MX122",
             insured_copay_amount="0",
             nonpay_amount="500000",
         )
     ]
-    context = ClaimCaseContext(policy_generation="4th", visit_type="outpatient")
+    context = ClaimCaseContext(
+        policy_generation="4th",
+        visit_type="outpatient",
+        special_calculation_status="unknown",
+    )
 
-    with patch("src.db.standard_codes.search_by_name", return_value=_manual_therapy_standard_rows()):
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=_manual_therapy_standard_rows()[1]):
         result = run_claim_calculation(None, items, context, use_fake_planner=True)
 
     assert result.calculation_status == "estimated_review_required"
@@ -1064,6 +1086,60 @@ def test_fourth_nonpay_manual_therapy_uses_mx122_with_active_exact_rule():
     assert any("누적 청구 이력이 없어 승인 룰의 연간 한도" in reason for reason in result.line_results[0]["review_reasons"])
     assert any("최초 10회 이후" in reason for reason in result.line_results[0]["review_reasons"])
     assert any("MX122" in basis["source"] for basis in result.applied_basis)
+
+
+def test_fourth_nonpay_manual_therapy_without_code_requires_selection():
+    """항목명만으로는 전용 룰을 적용하지 않고 표준코드 선택을 요구한다."""
+    items = [
+        ClaimItemInput(
+            line_id="manual-no-code",
+            input_name="도수치료",
+            insured_copay_amount="0",
+            nonpay_amount="500000",
+        )
+    ]
+    context = ClaimCaseContext(policy_generation="4th", visit_type="outpatient")
+
+    with patch("src.db.standard_codes.search_by_name", return_value=_manual_therapy_standard_rows()):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.calculation_status == "blocked_missing_info"
+    assert result.deductible is None
+    assert result.payable_amount is None
+    assert result.line_results[0]["calculation_status"] == "needs_code_selection"
+    assert result.line_results[0]["excluded_from_calculation"] is True
+    assert result.line_results[0]["deductible"] is None
+    assert result.line_results[0]["payable_amount"] is None
+    assert result.line_results[0]["candidates"][0]["code"] == "MX122"
+
+
+def test_fourth_nonpay_manual_therapy_without_code_and_no_match_fails_closed():
+    """고위험 항목은 후보가 없어도 원시 명칭만으로 산정하지 않는다."""
+    items = [
+        ClaimItemInput(
+            line_id="manual-no-match",
+            input_name="도수치료",
+            insured_copay_amount="0",
+            nonpay_amount="500000",
+        )
+    ]
+    context = ClaimCaseContext(
+        policy_generation="4th",
+        visit_type="outpatient",
+        special_calculation_status="unknown",
+    )
+
+    with patch("src.claim_calculation.pipeline.match_standard_code", return_value=[]):
+        result = run_claim_calculation(None, items, context, use_fake_planner=True)
+
+    assert result.calculation_status == "blocked_missing_info"
+    assert result.deductible is None
+    assert result.payable_amount is None
+    assert result.line_results[0]["calculation_status"] == "needs_code_selection"
+    assert result.line_results[0]["excluded_from_calculation"] is True
+    assert result.line_results[0]["deductible"] is None
+    assert result.line_results[0]["payable_amount"] is None
+    assert result.line_results[0]["candidates"] == []
 
 
 def test_fourth_nonpay_manual_therapy_explicit_51040_keeps_exclusion_outcome():
@@ -1141,6 +1217,7 @@ def test_pipeline_mri_does_not_match_unrelated_treatment_material():
         ClaimItemInput(
             line_id="item_mri",
             input_name="MRI",
+            input_code="HE115",
             claimed_amount="100000",
             quantity="1",
         )
@@ -1163,7 +1240,7 @@ def test_pipeline_mri_does_not_match_unrelated_treatment_material():
         },
     ]
 
-    with patch("src.db.standard_codes.search_by_name", return_value=mock_matches):
+    with patch("src.db.standard_codes.lookup_by_std_cd", return_value=mock_matches[1]):
         result = run_claim_calculation(
             rag_pipeline=None,
             items=items,

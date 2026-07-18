@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import sqlite3
 
@@ -14,7 +15,13 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
     selected_path = Path(db_path or DEFAULT_DB_PATH)
     if not selected_path.exists():
         raise FileNotFoundError(f"비급여 표준 코드 DB가 없습니다: {selected_path}")
-    connection = sqlite3.connect(selected_path)
+    if os.getenv("INSURANCE_RAG_ISOLATED_E2E") == "1":
+        connection = sqlite3.connect(
+            f"{selected_path.resolve().as_uri()}?mode=ro",
+            uri=True,
+        )
+    else:
+        connection = sqlite3.connect(selected_path)
     connection.row_factory = sqlite3.Row
     return connection
 

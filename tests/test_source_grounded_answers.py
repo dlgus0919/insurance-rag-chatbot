@@ -1,3 +1,5 @@
+from src.config import ROOT_DIR
+from src.ontology.registry import OntologyRegistry
 from src.parser.chunker import Chunk
 from src.rag.source_grounded_answers import (
     build_absent_code_guard_answer,
@@ -60,7 +62,13 @@ def test_absent_code_guard_is_generic_and_source_checked() -> None:
     assert "확인되지 않습니다" in answer
 
 
-def _hair_clause(*, generation: str, own_company: bool | None) -> Chunk:
+def _hair_clause(
+    *,
+    generation: str,
+    own_company: bool | None,
+    doc_short: str | None = None,
+    product_type: str | None = None,
+) -> Chunk:
     return Chunk(
         id=f"hair-{generation}",
         text=(
@@ -70,10 +78,94 @@ def _hair_clause(*, generation: str, own_company: bool | None) -> Chunk:
         metadata={
             "policy_generation": generation,
             "is_own_company": own_company,
-            "doc_short": "약관" if own_company else "표준약관",
+            "doc_short": doc_short if doc_short is not None else ("약관" if own_company else "표준약관"),
+            "product_type": product_type,
             "page_start": 78 if generation == "4th" else 296,
         },
     )
+
+def _registry_with_stale_authority_note() -> OntologyRegistry:
+    registry = OntologyRegistry(ROOT_DIR / "data" / "ontology" / "concepts.json")
+    for concept in registry.concepts:
+        profile = concept.properties.get("source_grounded_decision")
+        if isinstance(profile, dict):
+            profile["standard_reference_note"] = "STALE-AUTHORITY-NOTE"
+            return registry
+    raise AssertionError("source-grounded hair-loss profile is required for this test")
+
+
+def test_fifth_generation_standard_clause_reports_registered_direct_authority() -> None:
+    decision = build_policy_clause_decision(
+        "노화현상으로 인한 탈모는 보상 가능한가요?",
+        [
+            _hair_clause(
+                generation="5th",
+                own_company=None,
+                doc_short="표준약관",
+                product_type="표준약관",
+            )
+        ],
+        policy_generation="5th",
+    )
+
+    assert decision is not None
+    assert "5세대 표준약관은 등록되어 있으며" in decision.payload["authority_note"]
+    assert "등록된 5세대 자사 상품 약관이 없" not in decision.answer
+
+
+def test_policy_clause_authority_reports_own_product_clause() -> None:
+    decision = build_policy_clause_decision(
+        "노화현상으로 인한 탈모는 보상 가능한가요?",
+        [_hair_clause(generation="4th", own_company=True)],
+        policy_generation="4th",
+    )
+
+    assert decision is not None
+    assert "자사 상품약관의 직접 조항" in decision.payload["authority_note"]
+
+
+def test_policy_clause_authority_reports_mixed_own_and_standard_sources() -> None:
+    decision = build_policy_clause_decision(
+        "노화현상으로 인한 탈모는 보상 가능한가요?",
+        [
+            _hair_clause(generation="5th", own_company=True, doc_short="자사약관"),
+            _hair_clause(
+                generation="5th",
+                own_company=None,
+                doc_short="표준약관",
+                product_type="표준약관",
+            ),
+        ],
+        policy_generation="5th",
+    )
+
+    assert decision is not None
+    assert "자사 상품약관과 표준약관" in decision.payload["authority_note"]
+
+
+def test_policy_clause_authority_reports_generic_note_for_other_source() -> None:
+    decision = build_policy_clause_decision(
+        "노화현상으로 인한 탈모는 보상 가능한가요?",
+        [_hair_clause(generation="5th", own_company=None, doc_short="참고문서", product_type="안내문")],
+        policy_generation="5th",
+    )
+
+    assert decision is not None
+    assert "5세대 기준 문서의 직접 조항 근거" in decision.payload["authority_note"]
+
+
+def test_policy_clause_authority_ignores_stale_profile_note() -> None:
+    decision = build_policy_clause_decision(
+        "노화현상으로 인한 탈모는 보상 가능한가요?",
+        [_hair_clause(generation="5th", own_company=None, doc_short="표준약관", product_type="표준약관")],
+        policy_generation="5th",
+        registry=_registry_with_stale_authority_note(),
+    )
+
+    assert decision is not None
+    assert "STALE-AUTHORITY-NOTE" not in decision.answer
+    assert "STALE-AUTHORITY-NOTE" not in decision.payload["authority_note"]
+
 
 
 def test_generic_hair_loss_requires_cause_clarification_without_final_exclusion() -> None:
@@ -132,3 +224,32 @@ def test_disease_related_hair_loss_does_not_auto_apply_age_related_exclusion() -
     assert decision.payload["status"] == "clarification_required"
     assert "자동 적용할 수 없습니다" in decision.answer
     assert "보상 가능으로 확정" not in decision.answer
+
+
+def test_hair_loss_profile_keeps_direct_pins() -> None:
+    registry = OntologyRegistry(ROOT_DIR / "data" / "ontology" / "concepts.json")
+    profile = next(
+        concept.properties["source_grounded_decision"]
+        for concept in registry.concepts
+        if concept.concept_id == "cov.hair_loss"
+    )
+
+    direct_source_ids = profile["direct_source_chunk_ids"]
+    assert direct_source_ids["4th"] == ["약관_ch_002457"]
+    assert direct_source_ids["5th"] == ["표준약관_ch_005453"]
+
+
+def test_fifth_hair_loss_decision_prefers_manifested_standard_clause_source() -> None:
+    direct = _hair_clause(generation="5th", own_company=None, product_type="표준약관")
+    direct.id = "표준약관_ch_005453"
+    duplicate = _hair_clause(generation="5th", own_company=None, product_type="표준약관")
+    duplicate.id = "표준약관_ch_duplicate"
+
+    decision = build_policy_clause_decision(
+        "노화현상으로 인한 탈모는 보상 가능한가요?",
+        [duplicate, direct],
+        policy_generation="5th",
+    )
+
+    assert decision is not None
+    assert [chunk.id for chunk in decision.chunks] == ["표준약관_ch_005453"]

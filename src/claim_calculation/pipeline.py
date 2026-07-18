@@ -20,6 +20,11 @@ from src.claim_calculation.models import (
     normalize_special_calculation_status,
 )
 from src.claim_calculation.standard_matcher import match_standard_code
+from src.claim_calculation.processing_policy import (
+    category_for_text,
+    requires_explicit_code_for_category,
+    text_rule_matches,
+)
 from src.claim_calculation.basis_selector import select_basis_documents
 from src.claim_calculation.planner import LLMPlanner, FakePlanner
 
@@ -43,23 +48,7 @@ def _classify_claim_category(item: ClaimItemInput, match: StandardMatch | None) 
             match.mid_category_cd_nm if match else "",
         ]
     )
-    if "비중증" in text:
-        return "비중증비급여"
-    if "중증" in text:
-        return "중증비급여"
-    if any(keyword in text for keyword in ("도수", "체외충격파", "증식")):
-        return "3대비급여_도수"
-    if "3대" in text or "주사" in text or "mri" in text.lower() or "mra" in text.lower():
-        return "3대비급여"
-    if "비급여" in text:
-        return "비급여"
-    if "급여" in text:
-        return "급여"
-    return "미분류"
-
-
-THREE_MAJOR_BLOCK_KEYWORDS = ("도수", "체외충격파", "증식", "주사")
-MRI_MRA_KEYWORDS = ("mri", "mra", "자기공명영상")
+    return category_for_text(text)
 
 
 def _special_status(context: ClaimCaseContext) -> str:
@@ -67,8 +56,8 @@ def _special_status(context: ClaimCaseContext) -> str:
 
 
 def _is_mri_mra_item(item: ClaimItemInput, match: StandardMatch | None) -> bool:
-    text = " ".join([item.input_name or "", item.user_category_hint or "", _standard_match_text(match)]).lower()
-    return any(keyword in text for keyword in MRI_MRA_KEYWORDS)
+    text = " ".join([item.input_name or "", item.user_category_hint or "", _standard_match_text(match)])
+    return text_rule_matches("mri_mra", text)
 
 
 def _is_three_major_nonpay_item(category: str, item: ClaimItemInput, match: StandardMatch | None) -> bool:
@@ -76,8 +65,8 @@ def _is_three_major_nonpay_item(category: str, item: ClaimItemInput, match: Stan
         return True
     if category in {"중증비급여", "비중증비급여"}:
         return False
-    text = " ".join([item.input_name or "", item.user_category_hint or "", _standard_match_text(match)]).lower()
-    return any(keyword in text for keyword in THREE_MAJOR_BLOCK_KEYWORDS) or _is_mri_mra_item(item, match)
+    text = " ".join([item.input_name or "", item.user_category_hint or "", _standard_match_text(match)])
+    return text_rule_matches("three_major_nonpay", text) or _is_mri_mra_item(item, match)
 
 
 def _fifth_generation_special_category(
@@ -210,6 +199,18 @@ def _needs_fourth_manual_rule_approval(
     from src.claim_calculation.deductible_rules import has_exact_rule
 
     return not has_exact_rule(generation, category, context.visit_type, context.facility_grade)
+
+
+def _requires_explicit_standard_code_selection(
+    item: ClaimItemInput,
+    category: str,
+    match: StandardMatch | None,
+) -> bool:
+    """Raw names may find candidates but cannot authorize high-risk payout rules."""
+
+    if item.input_code.strip():
+        return False
+    return requires_explicit_code_for_category(category)
 
 
 def _format_decimal_won(value: Decimal) -> str:
@@ -564,7 +565,11 @@ def _calculate_line_items(
             deductible = amount - payable
             rule = special_rule.description
         elif _is_ambiguous_match(match):
-            line_reason = "동일 항목명에 복수 표준모델 후보가 있어 임의 후보로 보험금을 산출하지 않았습니다. 정확한 표준코드를 선택해야 합니다."
+            line_reason = (
+                "동일 항목명에 복수 표준모델 후보가 있어 임의 후보로 보험금을 산출하지 않았습니다. 정확한 표준코드를 선택해야 합니다."
+                if match.match_confidence == "ambiguous"
+                else "항목명 검색 결과는 후보 안내용입니다. 정확한 표준코드를 선택한 뒤 보험금을 산정할 수 있습니다."
+            )
             review_reasons.append(line_reason)
             line_results.append(
                 {
@@ -927,12 +932,33 @@ def run_claim_calculation(
         care_scope = _care_scope_for_item(item)
         matches = match_standard_code(item.input_name, item.input_code, care_scope=care_scope)
         if not matches:
-            # 매칭 없음 처리
+            # 매칭 없음 처리. 처리정책상 고위험 분류는 후보가 없더라도
+            # 원시 항목명만으로 지급 룰을 적용하지 않는다.
             match_none = StandardMatch(
                 std_cd_nm=item.input_name,
                 match_confidence="none",
-                requires_review=True
+                requires_review=True,
             )
+            category = _classify_claim_category(item, match_none)
+            if _requires_explicit_standard_code_selection(item, category, match_none):
+                disambiguation_required = True
+                db_review_required = True
+                db_review_reasons.append(
+                    f"항목 {item.input_name}은(는) 표준코드 확인 전에는 자동 지급 산정하지 않습니다. "
+                    "정확한 표준코드 또는 확인된 구조화 근거를 입력해 주십시오."
+                )
+                code_candidates_by_line[item.line_id] = []
+                standard_matches.append(
+                    StandardMatch(
+                        std_cd="",
+                        std_cd_nm=item.input_name,
+                        pay_opn_cd_nm="표준코드 확인 필요",
+                        match_confidence="code_selection_required",
+                        requires_user_disambiguation=True,
+                        requires_review=True,
+                    )
+                )
+                continue
             standard_matches.append(match_none)
             db_review_required = True
             db_review_reasons.append(f"항목 '{item.input_name}'에 매칭되는 비급여 표준모델 코드가 없습니다.")
@@ -974,8 +1000,42 @@ def run_claim_calculation(
                 )
                 continue
 
-            # 첫 번째 결과를 대표 매치로 선택
+            # 이름 검색은 후보 탐색만 수행한다. 비급여/지정 분류는 사용자가
+            # 표준코드를 선택하거나 직접 입력한 뒤에만 지급 규칙에 전달한다.
             repr_match = matches[0]
+            category = _classify_claim_category(item, repr_match)
+            if _requires_explicit_standard_code_selection(item, category, repr_match):
+                disambiguation_required = True
+                db_review_required = True
+                db_review_reasons.append(
+                    f"항목 '{item.input_name}'은(는) 표준코드 선택 전에는 자동 지급 산정하지 않습니다. "
+                    "표시된 표준코드를 선택해 주십시오."
+                )
+                line_candidates = [
+                    {
+                        "code": match.std_cd,
+                        "name": match.std_cd_nm,
+                        "mid_category": match.mid_category_cd_nm or "",
+                    }
+                    for match in matches[:6]
+                ]
+                code_candidates_by_line[item.line_id] = line_candidates
+                for candidate in line_candidates:
+                    if len(disambiguation_candidates) >= 6:
+                        break
+                    disambiguation_candidates.append(candidate)
+                standard_matches.append(
+                    StandardMatch(
+                        std_cd="",
+                        std_cd_nm=item.input_name,
+                        pay_opn_cd_nm="표준코드 선택 필요",
+                        match_confidence="code_selection_required",
+                        requires_user_disambiguation=True,
+                        requires_review=True,
+                    )
+                )
+                continue
+
             if item.input_code.strip() and _has_explicit_code_scope_mismatch(repr_match, care_scope):
                 db_review_required = True
                 db_review_reasons.append(
@@ -1204,8 +1264,11 @@ def run_claim_calculation(
         )
 
     # UI 및 결과 출력용으로 Decimal 값을 정수형 문자열 등으로 가공
-    payable_str = f"{payable_val:,.0f}".replace(",", "")
-    deductible_str = f"{deductible_val:,.0f}".replace(",", "")
+    payable_str: str | None = f"{payable_val:,.0f}".replace(",", "")
+    deductible_str: str | None = f"{deductible_val:,.0f}".replace(",", "")
+    if disambiguation_required:
+        payable_str = None
+        deductible_str = None
 
     # Graph candidate rule 검토 플래그 강제 적용
     if graph_result:

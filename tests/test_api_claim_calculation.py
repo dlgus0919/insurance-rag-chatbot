@@ -97,6 +97,57 @@ async def test_claim_calculation_route_returns_payable_amount(monkeypatch) -> No
     assert any("상해 또는 질병의 치료 목적" in reason for reason in response.line_results[0]["review_reasons"])
 
 
+
+@pytest.mark.anyio
+async def test_claim_calculation_route_requires_code_selection_before_manual_therapy_payout(monkeypatch) -> None:
+    """항목명만으로는 4세대 도수치료 전용 룰을 적용하지 않는다."""
+
+    monkeypatch.setattr("src.api.routes.claim.get_rag_pipeline", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "src.db.standard_codes.search_by_name",
+        lambda *_args, **_kwargs: [
+            {
+                "std_cd": "MX122",
+                "std_cd_nm": "도수치료",
+                "mid_category_cd_nm": "3대비급여",
+                "pay_opn_cd_nm": "보상",
+            }
+        ],
+    )
+
+    response = await claim.calculate_claim(
+        ClaimCalculationRequest(
+            items=[
+                ClaimItemRequest(
+                    input_name="도수치료",
+                    claimed_amount="500000",
+                    nonpay_amount="500000",
+                    user_category_hint="3대비급여",
+                )
+            ],
+            context={
+                "policy_generation": "4th",
+                "visit_type": "outpatient",
+                "special_calculation_status": "unknown",
+            },
+        ),
+        request=None,
+        user=_employee(),
+        db=None,
+    )
+
+    assert response.calculation_status == "blocked_missing_info"
+    assert response.deductible is None
+    assert response.payable_amount is None
+    assert response.candidates[0]["code"] == "MX122"
+    assert response.line_results[0]["calculation_status"] == "needs_code_selection"
+    assert response.line_results[0]["deductible"] is None
+    assert response.line_results[0]["payable_amount"] is None
+    rendered = claim._claim_response_text(response)
+    assert "예상 지급금액: 산정 보류" in rendered
+    assert "None원" not in rendered
+
+
 @pytest.mark.anyio
 async def test_claim_calculation_route_rejects_bad_amount(monkeypatch) -> None:
     monkeypatch.setattr("src.api.routes.claim.get_rag_pipeline", lambda *_args, **_kwargs: None)
@@ -276,3 +327,94 @@ async def test_claim_calculation_route_persists_history(monkeypatch, db_session)
     assert [message.role for message in messages] == ["user", "assistant"]
     assert "보험금 계산/5세대" in messages[0].content
     assert "예상 지급금액" in messages[1].content
+
+
+@pytest.mark.anyio
+async def test_claim_calculation_route_selected_mx122_allows_fourth_unknown_special_status(monkeypatch) -> None:
+    """선택된 MX122는 4세대 산정특례 미확인 상태에서도 전용 승인 룰로 계산한다."""
+
+    monkeypatch.setattr("src.api.routes.claim.get_rag_pipeline", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "src.db.standard_codes.lookup_by_std_cd",
+        lambda *_args, **_kwargs: {
+            "std_cd": "MX122",
+            "std_cd_nm": "도수치료",
+            "mid_category_cd_nm": "3대비급여",
+            "ins_care_type_cd_nm": "비급여_특약1",
+            "pay_opn_cd_nm": "추가확인",
+        },
+    )
+
+    response = await claim.calculate_claim(
+        ClaimCalculationRequest(
+            items=[
+                ClaimItemRequest(
+                    input_name="도수치료",
+                    input_code="MX122",
+                    nonpay_amount="500000",
+                    user_category_hint="3대비급여",
+                )
+            ],
+            context={
+                "policy_generation": "4th",
+                "visit_type": "outpatient",
+                "special_calculation_status": "unknown",
+            },
+        ),
+        request=None,
+        user=_employee(),
+        db=None,
+    )
+
+    assert response.special_calculation_status == "unknown"
+    assert response.calculation_status == "estimated_review_required"
+    assert response.deductible == "150000"
+    assert response.payable_amount == "350000"
+    assert response.line_results[0]["input_code"] == "MX122"
+    assert response.line_results[0]["calculation_status"] == "calculated"
+    assert any("연간 한도" in reason for reason in response.review_reasons)
+    assert any("최초 10회 이후" in reason for reason in response.review_reasons)
+@pytest.mark.anyio
+async def test_claim_calculation_route_skips_rag_in_explicit_isolated_e2e_mode(monkeypatch) -> None:
+    calls: list[tuple[object, ...]] = []
+
+    def fake_get_rag_pipeline(*args, **_kwargs):
+        calls.append(args)
+        return None
+
+    monkeypatch.setenv("INSURANCE_RAG_ISOLATED_E2E", "1")
+    monkeypatch.setattr("src.api.routes.claim.get_rag_pipeline", fake_get_rag_pipeline)
+    monkeypatch.setattr(
+        "src.db.standard_codes.lookup_by_std_cd",
+        lambda *_args, **_kwargs: {
+            "std_cd": "MX122",
+            "std_cd_nm": "도수치료",
+            "mid_category_cd_nm": "3대비급여",
+            "ins_care_type_cd_nm": "비급여_특약1",
+            "pay_opn_cd_nm": "추가확인",
+        },
+    )
+
+    response = await claim.calculate_claim(
+        ClaimCalculationRequest(
+            items=[
+                ClaimItemRequest(
+                    input_name="도수치료",
+                    input_code="MX122",
+                    nonpay_amount="500000",
+                )
+            ],
+            context={
+                "policy_generation": "4th",
+                "visit_type": "outpatient",
+                "special_calculation_status": "unknown",
+            },
+        ),
+        request=None,
+        user=_employee(),
+        db=None,
+    )
+
+    assert calls == []
+    assert response.deductible == "150000"
+    assert response.payable_amount == "350000"

@@ -39,6 +39,7 @@ class PdfSource:
     effective_date: str | None = None
     version: str | None = None
     requires_ocr: bool = False
+    policy_generation: str | None = None
 
 
 @dataclass
@@ -72,6 +73,7 @@ PDF_SOURCES: list[PdfSource] = [
         product_name="신한 이지로운 실손의료보험(무배당)",
         product_type="실손",
         effective_date="2026-04-01",
+        policy_generation="4th",
     ),
     PdfSource(
         path=ROOT_DIR / "보상가이드북.pdf",
@@ -111,7 +113,9 @@ PDF_SOURCES: list[PdfSource] = [
         doc_name="표준약관(제5-13조제1항관련)",
         doc_short="표준약관",
         cloud_safe=True,
+        is_own_company=False,
         product_type="표준약관",
+        policy_generation="5th",
     ),
     PdfSource(
         path=ROOT_DIR / "Claim 실무종합가이드.pdf",
@@ -162,7 +166,9 @@ DIGITAL_PDF_TABLES_DIR: Path = ROOT_DIR / "data" / "extracted_digital_pdf"
 CHROMA_DIR: Path = ROOT_DIR / "data" / "index" / "chroma"
 BM25_PATH: Path = ROOT_DIR / "data" / "index" / "bm25.pkl"
 RELATIONAL_INDEX_DIR: Path = ROOT_DIR / "data" / "index" / "relational"
-STANDARD_CODES_DB_PATH: Path = RELATIONAL_INDEX_DIR / "standard_codes.sqlite"
+STANDARD_CODES_DB_PATH: Path = Path(
+    os.getenv("STANDARD_CODES_DB_PATH", str(RELATIONAL_INDEX_DIR / "standard_codes.sqlite"))
+)
 
 OFFLINE_MODE: bool = os.getenv("OFFLINE_MODE", "false").lower() == "true"
 EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
@@ -191,6 +197,15 @@ AUTO_RAG_RERANK_DROP_ABS: float = float(os.getenv("AUTO_RAG_RERANK_DROP_ABS", "0
 AUTO_RAG_RERANK_DROP_RATIO: float = float(os.getenv("AUTO_RAG_RERANK_DROP_RATIO", "0.30"))
 CLAUSE_DETAIL_POLICY_PATH: Path = Path(
     os.getenv("CLAUSE_DETAIL_POLICY_PATH", str(ROOT_DIR / "config" / "clause_detail_lookup_policy.json"))
+)
+CLAIM_PROCESSING_POLICY_PATH: Path = Path(
+    os.getenv("CLAIM_PROCESSING_POLICY_PATH", str(ROOT_DIR / "config" / "claim_processing_policy.json"))
+)
+CLAIM_RULE_CANDIDATE_EVIDENCE_SPECS_PATH: Path = Path(
+    os.getenv(
+        "CLAIM_RULE_CANDIDATE_EVIDENCE_SPECS_PATH",
+        str(ROOT_DIR / "config" / "claim_rule_candidate_evidence_specs.json"),
+    )
 )
 OLLAMA_HOST: str = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL: str = os.getenv("OLLAMA_MODEL", "exaone3.5:7.8b")

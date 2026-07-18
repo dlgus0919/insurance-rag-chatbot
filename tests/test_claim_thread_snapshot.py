@@ -142,6 +142,39 @@ def test_claim_snapshot_source_persists_candidates_as_pending() -> None:
     assert snapshot["result"]["candidates"] == [{"code": "MX122", "name": "도수치료"}]
 
 
+
+def test_claim_snapshot_context_marks_code_selection_as_pending() -> None:
+    messages = [
+        ChatMessage(
+            role="assistant",
+            content="표준코드 선택 필요",
+            sources=[
+                {
+                    "__kind": "assistant_meta",
+                    "claim_snapshot": {
+                        "schema_version": 2,
+                        "state": "candidate_pending",
+                        "result": {
+                            "payable_amount": None,
+                            "deductible": None,
+                            "calculation_status": "blocked_missing_info",
+                            "line_results": [],
+                            "review_reasons": ["표준코드를 선택한 뒤 다시 산정해야 합니다."],
+                        },
+                    },
+                }
+            ],
+        )
+    ]
+
+    context = build_claim_snapshot_context(messages)
+
+    assert "예상 지급금액: 산정 보류" in context
+    assert "예상 공제금액: 산정 보류" in context
+    assert "현재 상태: 표준코드 선택 대기" in context
+    assert "None원" not in context
+
+
 def test_build_claim_snapshot_context_includes_all_thread_calculations() -> None:
     messages = [
         ChatMessage(

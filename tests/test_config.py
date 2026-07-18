@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src.config import PdfSource, indexed_pdf_sources
+from src.config import PDF_SOURCES, PdfSource, indexed_pdf_sources
 
 
 def test_indexed_pdf_sources_use_cloud_safe_not_file_existence() -> None:
@@ -32,3 +32,14 @@ def test_indexed_pdf_sources_use_cloud_safe_not_file_existence() -> None:
     indexed = indexed_pdf_sources(sources)
 
     assert [source.doc_short for source in indexed] == ["심평원"]
+
+
+def test_indemnity_policy_sources_declare_generation_and_authority() -> None:
+    own_policy = next(source for source in PDF_SOURCES if source.doc_short == "약관")
+    standard_policy = next(source for source in PDF_SOURCES if source.doc_short == "표준약관")
+
+    assert own_policy.is_own_company is True
+    assert own_policy.policy_generation == "4th"
+
+    assert standard_policy.is_own_company is False
+    assert standard_policy.policy_generation == "5th"

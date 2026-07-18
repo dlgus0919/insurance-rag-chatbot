@@ -1634,3 +1634,131 @@ async def test_chat_stream_not_covered_follow_up_persists_conditional_snapshot(d
     assert snapshot["result"]["calculation_status"] == "conditional_follow_up"
     assert snapshot["result"]["line_results"][0]["payable_amount"] == "0"
     assert snapshot["result"]["line_results"][0]["calculation_status"] == "conditional_not_covered"
+
+
+@pytest.mark.anyio
+async def test_chat_stream_recalculation_skips_rag_in_explicit_isolated_e2e_mode(db_session, monkeypatch) -> None:
+    """격리 브라우저 E2E의 후속 재계산은 RAG/LLM을 초기화하지 않는다."""
+
+    captured: dict[str, object] = {}
+    calls: list[tuple[object, ...]] = []
+
+    def unexpected_pipeline(*args, **_kwargs):
+        calls.append(args)
+        return object()
+
+    def fake_run_claim_calculation(**kwargs):
+        captured["pipeline"] = kwargs["rag_pipeline"]
+        from src.claim_calculation.models import CalculationResult
+
+        return CalculationResult(
+            claimed_amount="198000",
+            payable_amount="143400",
+            deductible="54600",
+            formula_intent="thread_recalculation",
+            executed_code="",
+            applied_basis=[],
+            requires_review=False,
+            review_reasons=[],
+            notes="구조화 계산만 수행",
+            candidates=[],
+            policy_generation="4th",
+            line_results=[
+                {
+                    "line_id": "line-1",
+                    "input_name": "도수치료",
+                    "category": "3대비급여",
+                    "claimed_amount": "150000",
+                    "deductible": "45000",
+                    "payable_amount": "105000",
+                    "calculation_status": "calculated",
+                    "human_task_amount": "0",
+                },
+                {
+                    "line_id": "line-2",
+                    "input_name": "비타민D 주사",
+                    "category": "비급여",
+                    "claimed_amount": "48000",
+                    "deductible": "9600",
+                    "payable_amount": "38400",
+                    "calculation_status": "calculated",
+                    "human_task_amount": "0",
+                },
+            ],
+            calculation_status="auto_calculated",
+        )
+
+    monkeypatch.setenv("INSURANCE_RAG_ISOLATED_E2E", "1")
+    monkeypatch.setattr(chat, "get_rag_pipeline", unexpected_pipeline)
+    monkeypatch.setattr(chat, "run_claim_calculation", fake_run_claim_calculation)
+    created = await sessions.create_session(SessionCreateRequest(title="격리 재계산"), _user(), db_session)
+    db_session.add(
+        ChatMessage(
+            session_id=created.id,
+            role="assistant",
+            content="보험금 계산 결과",
+            sources=[_claim_snapshot_source_for_chat()],
+        )
+    )
+    await db_session.commit()
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="비타민D 주사를 비급여로 보상한다면 다시 계산해 주세요",
+            session_id=created.id,
+            model="gemma3:4b",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+
+    assert calls == []
+    assert captured["pipeline"] is None
+    assert "예상 지급금액: 143400원" in stream
+
+
+@pytest.mark.anyio
+async def test_fifth_standard_authority_reply_persists_without_mutating_history(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
+    captured: dict[str, object] = {}
+    authority_answer = "5세대 표준약관은 등록되어 있으며, 현재 답변은 해당 표준약관의 직접 조항을 근거로 합니다."
+
+    async def fake_prepare(*_args, **kwargs):
+        captured["policy_generation"] = kwargs.get("policy_generation")
+        return [], [], "prompt", {"graph_review_paths": [], "facts": [], "plan": {}}, [], authority_answer, None
+
+    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_prepare)
+    created = await sessions.create_session(SessionCreateRequest(title="5세대 표준약관"), _user(), db_session)
+    prior_content = "과거 저장 답변은 감사 보존을 위해 변경하지 않습니다."
+    db_session.add(
+        ChatMessage(
+            session_id=created.id,
+            role="assistant",
+            content=prior_content,
+            sources=[],
+        )
+    )
+    await db_session.commit()
+
+    response = await chat.chat_stream(
+        ChatRequest(
+            query="노화현상으로 인한 탈모는 보상 가능한가요?",
+            session_id=created.id,
+            model="gemma3:4b",
+            policy_generation="5th",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert captured["policy_generation"] == "5th"
+    assert messages[0].content == prior_content
+    assert messages[-1].content == authority_answer

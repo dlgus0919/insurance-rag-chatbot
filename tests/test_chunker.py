@@ -161,6 +161,26 @@ def test_extended_metadata_defaults_and_source_fields() -> None:
     assert metadata["linked_std_cds"] is None
 
 
+def test_chunker_preserves_false_authority_and_policy_generation_metadata() -> None:
+    sample = [(1, "제1조(보장)\\n표준약관 직접 조항입니다.")]
+    standard_source = PdfSource(
+        path=Path("standard.pdf"),
+        doc_type="insurance_policy",
+        doc_name="표준약관",
+        doc_short="표준약관",
+        is_own_company=False,
+        product_type="표준약관",
+        policy_generation="5th",
+    )
+
+    chunks = chunk_pages(sample, doc_source=standard_source)
+    metadata = chunks[0].metadata
+
+    assert metadata["is_own_company"] is False
+    assert metadata["policy_generation"] == "5th"
+    assert metadata["product_type"] == "표준약관"
+
+
 def test_chunk_jsonl_roundtrip_keeps_extended_metadata(tmp_path: Path) -> None:
     path = tmp_path / "chunks.jsonl"
     chunk = Chunk(
