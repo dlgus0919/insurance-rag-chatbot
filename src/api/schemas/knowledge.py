@@ -49,6 +49,7 @@ class CandidateDecisionRequest(BaseModel):
     decision: Literal["approve", "hold", "reject"]
     reason: str = Field(..., min_length=1, max_length=1000)
     hold_reason_codes: list[str] = Field(default_factory=list)
+    approved_paths: list[str] = Field(default_factory=list)
 
 
 class CandidateListResponse(BaseModel):

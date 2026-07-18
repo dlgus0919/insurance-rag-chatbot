@@ -8,6 +8,8 @@ from pathlib import Path
 
 from src import config
 from src.graph.vector_sync import build_report, check_evidence_sync, load_evidence_rows
+from src.graph.store import GraphStore
+from src.ontology.registry import get_default_ontology_registry
 from src.retrieval.index_mode import INDEX_MODES, resolve_index_paths
 from src.retrieval.vector_store import VectorStore
 
@@ -62,6 +64,20 @@ def main() -> int:
         _, chroma_dir = resolve_index_paths(args.index_mode)
 
     limit = args.limit if args.limit and args.limit > 0 else None
+    graph_manifest_store = GraphStore(graph_path, readonly=True)
+    try:
+        graph_manifest = {
+            row["key"]: row["value"]
+            for row in graph_manifest_store.query("SELECT key, value FROM graph_build_manifest")
+        }
+    finally:
+        graph_manifest_store.close()
+    integrity_errors = get_default_ontology_registry().graph_manifest_integrity_errors(graph_manifest)
+    if integrity_errors:
+        print("[FAIL] Graph ontology integrity manifest mismatch")
+        for error in integrity_errors:
+            print(f"- {error}")
+        return 1
     rows = load_evidence_rows(
         graph_path,
         limit=limit,

@@ -202,3 +202,30 @@ test('admin apply approved copy mentions search index promotion', async () => {
   assert.match(js, /index_rebuilt/);
   assert.match(js, /graph_rebuilt/);
 });
+
+test('ontology candidate cards expose explicit field approval choices', async () => {
+  const { renderCandidateList } = await import('../frontend/js/pages/admin.js');
+
+  const html = renderCandidateList([
+    {
+      candidate_id: 'cand-approval-path',
+      status: 'pending',
+      canonical_name: '검토 후보',
+      approval_operations: [
+        {
+          path: '/concepts/cond.alpha/evidence_tags/hash-alpha',
+          field_label: '근거 태그',
+          value_preview: 'source:alpha',
+          value_hash: 'hash-alpha',
+        },
+      ],
+      runtime_properties: { internal_value: 'must-not-render' },
+    },
+  ], 'ontology');
+
+  assert.match(html, /승인할 변경 항목/);
+  assert.match(html, /data-ontology-approval-path/);
+  assert.match(html, /근거 태그/);
+  assert.match(html, /source:alpha/);
+  assert.doesNotMatch(html, /must-not-render/);
+});

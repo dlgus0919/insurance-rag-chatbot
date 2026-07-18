@@ -5,11 +5,21 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
+from src.ontology.approval_integrity import (
+    ApprovalPatch,
+    ApprovalPatchError,
+    LegacyApprovalUnverifiableError,
+    StaleApprovalPatchError,
+    build_approval_patch,
+    canonical_json_hash,
+    project_candidate_operation_previews,
+    project_candidate_operations,
+)
 from src.ontology.hold_feedback import build_hold_feedback_payload, normalize_hold_reason_codes
 from src.ontology.policy import OntologyReviewPolicy, load_review_policy
-from src.ontology.registry import ONTOLOGY_DIR
+from src.ontology.registry import BASE_ONTOLOGY_MANIFEST, ONTOLOGY_DIR
 
 
 REVIEW_DIR = ONTOLOGY_DIR / "review"
@@ -63,6 +73,16 @@ def _append_jsonl(path: Path, row: dict[str, Any]) -> None:
         f.write("\n")
 
 
+def _load_manifest(path: str | Path) -> dict[str, Any]:
+    with Path(path).open(encoding="utf-8") as file:
+        payload = json.load(file)
+    if not isinstance(payload, dict):
+        raise ValueError(f"base manifest must be an object: {path}")
+    if not isinstance(payload.get("concepts"), list):
+        raise ValueError(f"base manifest concepts must be a list: {path}")
+    return payload
+
+
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -78,6 +98,9 @@ def is_codex_development_auto_approvable(candidate: "OntologyCandidate", policy:
     """Return whether a pending candidate is explicitly marked for dev-only Codex approval."""
     review_policy = policy or load_review_policy()
     auto_approval = review_policy.auto_approval
+    candidate_type = str(candidate.properties.get("candidate_type") or "new_concept").strip()
+    if candidate_type not in set(review_policy.low_risk_candidate_types):
+        return False
     if auto_approval.require_pending_status and candidate.status != PENDING:
         return False
     if auto_approval.require_source_evidence and not candidate.source_evidence:
@@ -110,6 +133,7 @@ class OntologyCandidate:
     planner: dict[str, Any] = field(default_factory=dict)
     retrieval: dict[str, Any] = field(default_factory=dict)
     properties: dict[str, Any] = field(default_factory=dict)
+    runtime_properties: dict[str, Any] = field(default_factory=dict)
     source_evidence: list[dict[str, Any]] = field(default_factory=list)
     status: str = PENDING
     risk_flags: list[str] = field(default_factory=list)
@@ -133,6 +157,7 @@ class OntologyCandidate:
             planner=dict(payload.get("planner") or {}),
             retrieval=dict(payload.get("retrieval") or {}),
             properties=dict(payload.get("properties") or {}),
+            runtime_properties=dict(payload.get("runtime_properties") or {}),
             source_evidence=[
                 dict(item)
                 for item in payload.get("source_evidence", [])
@@ -169,6 +194,7 @@ class OntologyCandidate:
             "planner": self.planner,
             "retrieval": self.retrieval,
             "properties": self.properties,
+            "runtime_properties": self.runtime_properties,
             "source_evidence": self.source_evidence,
             "status": self.status,
             "risk_flags": self.risk_flags,
@@ -176,6 +202,26 @@ class OntologyCandidate:
             "created_at": self.created_at,
             "extraction_run_id": self.extraction_run_id,
         }
+
+    def approval_payload(self) -> dict[str, Any]:
+        """Return only content that may be explicitly approved for runtime use."""
+
+        return {
+            "candidate_id": self.candidate_id,
+            "concept_id": self.concept_id,
+            "canonical_name": self.canonical_name,
+            "node_type": self.node_type,
+            "aliases": self.aliases,
+            "candidate_aliases": self.candidate_aliases,
+            "evidence_tags": self.evidence_tags,
+            "planner": self.planner,
+            "retrieval": self.retrieval,
+            "runtime_properties": self.runtime_properties,
+            "source_evidence": self.source_evidence,
+        }
+
+    def approval_payload_hash(self) -> str:
+        return canonical_json_hash(self.approval_payload())
 
     def runtime_concept(self) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -194,11 +240,7 @@ class OntologyCandidate:
             payload["planner"] = self.planner
         if self.retrieval:
             payload["retrieval"] = self.retrieval
-        properties = dict(self.properties)
-        properties.setdefault("approval_candidate_id", self.candidate_id)
-        properties.setdefault("approval_status", self.status)
-        if self.source_evidence:
-            properties.setdefault("source_evidence_count", len(self.source_evidence))
+        properties = dict(self.runtime_properties)
         if properties:
             payload["properties"] = properties
         return payload
@@ -270,6 +312,8 @@ class OntologyReviewStore:
         reviewer_type: str = "practitioner",
         reason: str = "",
         hold_reason_codes: list[str] | None = None,
+        approved_paths: list[str] | None = None,
+        base_manifest_path: str | Path = BASE_ONTOLOGY_MANIFEST,
     ) -> OntologyCandidate:
         if decision not in VALID_DECISIONS:
             raise ValueError(f"invalid decision: {decision}")
@@ -285,6 +329,18 @@ class OntologyReviewStore:
             if candidate.candidate_id != candidate_id:
                 continue
             before_status = candidate.status
+            approval_patch: ApprovalPatch | None = None
+            if decision == "approve":
+                try:
+                    approval_patch = build_approval_patch(
+                        candidate,
+                        _load_manifest(base_manifest_path),
+                        approved_paths=approved_paths or [],
+                        reviewer=reviewer,
+                        reviewed_at=utc_now_iso(),
+                    )
+                except ApprovalPatchError as exc:
+                    raise ValueError(str(exc)) from exc
             candidate.status = after_status
             if decision == "hold":
                 candidate.properties = dict(candidate.properties)
@@ -311,12 +367,62 @@ class OntologyReviewStore:
             }
             if decision == "hold":
                 log_row["hold_reason_codes"] = normalized_hold_reason_codes
+            if approval_patch is not None:
+                log_row["candidate_payload_hash"] = approval_patch.candidate_payload_hash
+                log_row["base_manifest_hash"] = approval_patch.base_manifest_hash
+                log_row["approval_patch"] = approval_patch.to_dict()
             self._append_review_log(log_row)
             break
         if updated is None:
             raise KeyError(f"candidate not found: {candidate_id}")
         self.save_candidates(candidates)
         return updated
+
+    def latest_approval_patch(self, candidate_id: str) -> ApprovalPatch | None:
+        candidate = self.get_candidate(candidate_id)
+        for row in reversed(_read_jsonl(self.review_log_path)):
+            if row.get("candidate_id") != candidate_id or row.get("decision") != "approve":
+                continue
+            patch_payload = row.get("approval_patch")
+            if not isinstance(patch_payload, dict):
+                continue
+            patch = ApprovalPatch.from_dict(patch_payload)
+            if patch.candidate_payload_hash != candidate.approval_payload_hash():
+                raise StaleApprovalPatchError(
+                    f"candidate approval payload is stale: {candidate_id}"
+                )
+            return patch
+        return None
+
+    def available_approval_operations(
+        self,
+        candidate_id: str,
+        *,
+        base_manifest_path: str | Path = BASE_ONTOLOGY_MANIFEST,
+    ) -> list[dict[str, str]]:
+        return project_candidate_operation_previews(
+            self.get_candidate(candidate_id),
+            _load_manifest(base_manifest_path),
+        )
+
+    @staticmethod
+    def _auto_approval_paths(
+        candidate: OntologyCandidate,
+        *,
+        base_manifest_path: str | Path = BASE_ONTOLOGY_MANIFEST,
+    ) -> list[str]:
+        try:
+            operations = project_candidate_operations(
+                candidate,
+                _load_manifest(base_manifest_path),
+            )
+        except ApprovalPatchError:
+            return []
+        return [
+            operation.path
+            for operation in operations
+            if "/properties/" not in operation.path
+        ]
 
     def auto_approve_test_candidates(self, *, reviewer: str = "codex-test-auto", dry_run: bool = False) -> list[OntologyCandidate]:
         candidates = self.load_candidates()
@@ -328,12 +434,16 @@ class OntologyReviewStore:
         if dry_run:
             return selected
         for candidate in selected:
+            approved_paths = self._auto_approval_paths(candidate)
+            if not approved_paths:
+                continue
             self.decide(
                 candidate.candidate_id,
                 "approve",
                 reviewer=reviewer,
                 reviewer_type="codex_test_auto",
                 reason="test_candidate auto approval",
+                approved_paths=approved_paths,
             )
         return selected
 
@@ -343,6 +453,7 @@ class OntologyReviewStore:
         reviewer: str = "codex-dev-auto",
         dry_run: bool = False,
         policy: OntologyReviewPolicy | None = None,
+        base_manifest_path: str | Path = BASE_ONTOLOGY_MANIFEST,
     ) -> list[OntologyCandidate]:
         review_policy = policy or load_review_policy()
         candidates = self.load_candidates()
@@ -354,21 +465,40 @@ class OntologyReviewStore:
         if dry_run:
             return selected
         for candidate in selected:
+            approved_paths = self._auto_approval_paths(
+                candidate,
+                base_manifest_path=base_manifest_path,
+            )
+            if not approved_paths:
+                continue
             self.decide(
                 candidate.candidate_id,
                 "approve",
                 reviewer=reviewer,
                 reviewer_type="codex_dev_auto",
                 reason="codex development-only domain review auto approval",
+                approved_paths=approved_paths,
+                base_manifest_path=base_manifest_path,
             )
         return selected
 
-    def mark_approved_as_applied(self, *, manifest_path: str | Path) -> list[OntologyCandidate]:
+    def mark_approved_as_applied(
+        self,
+        *,
+        manifest_path: str | Path,
+        approval_patches: Mapping[str, ApprovalPatch],
+        active_content_hash: str,
+    ) -> list[OntologyCandidate]:
         candidates = self.load_candidates()
         applied: list[OntologyCandidate] = []
         for candidate in candidates:
             if candidate.status != APPROVED:
                 continue
+            approval_patch = approval_patches.get(candidate.candidate_id)
+            if approval_patch is None:
+                raise LegacyApprovalUnverifiableError(
+                    f"legacy approved candidate has no field-level patch: {candidate.candidate_id}"
+                )
             before_status = candidate.status
             candidate.status = APPLIED
             candidate.properties = dict(candidate.properties)
@@ -386,6 +516,12 @@ class OntologyReviewStore:
                     "created_at": utc_now_iso(),
                     "before_status": before_status,
                     "after_status": APPLIED,
+                    "candidate_payload_hash": candidate.approval_payload_hash(),
+                    "approval_patch_hash": approval_patch.content_hash(),
+                    "active_content_hash": active_content_hash,
+                    "applied_operation_paths": [
+                        operation.path for operation in approval_patch.allowed_operations
+                    ],
                 }
             )
             _append_jsonl(
@@ -394,6 +530,12 @@ class OntologyReviewStore:
                     "candidate_id": candidate.candidate_id,
                     "concept_id": candidate.concept_id,
                     "manifest_path": str(manifest_path),
+                    "candidate_payload_hash": candidate.approval_payload_hash(),
+                    "approval_patch_hash": approval_patch.content_hash(),
+                    "active_content_hash": active_content_hash,
+                    "applied_operation_paths": [
+                        operation.path for operation in approval_patch.allowed_operations
+                    ],
                     "applied_at": candidate.properties["applied_at"],
                 },
             )
@@ -412,6 +554,7 @@ def build_test_candidate(candidate_id: str = "test.ontology.demo") -> OntologyCa
         canonical_name="테스트 승인 개념",
         node_type="ClaimCondition",
         aliases=["테스트 승인 개념", "테스트온톨로지"],
+        properties={"candidate_type": "new_concept"},
         planner={
             "conditions": ["테스트 승인 개념"],
             "intents": ["claim_condition_lookup", "session_claim_path_review"],

@@ -225,6 +225,24 @@ def _hold_reason_options() -> str:
     return "\n".join(items)
 
 
+def _approval_operation_options(operations: list[dict[str, str]]) -> str:
+    if not operations:
+        return '<div class="muted">승인할 변경 항목이 없습니다.</div>'
+    items = []
+    for operation in operations:
+        path = str(operation.get("path") or "").strip()
+        if not path:
+            continue
+        items.append(
+            "<label>"
+            f'<input type="checkbox" name="approved_paths" value="{html.escape(path)}">'
+            f"<strong>{html.escape(str(operation.get('field_label') or '승인 변경 항목'))}</strong>"
+            f'<span class="muted">{html.escape(str(operation.get("value_preview") or "-"))}</span>'
+            "</label>"
+        )
+    return "\n".join(items) or '<div class="muted">승인할 변경 항목이 없습니다.</div>'
+
+
 class OntologyReviewHandler(BaseHTTPRequestHandler):
     server: "OntologyReviewServer"
 
@@ -290,11 +308,17 @@ class OntologyReviewHandler(BaseHTTPRequestHandler):
                 wrap_width=92,
             )
             if selected.status == PENDING:
+                operations = self.server.store.available_approval_operations(selected.candidate_id)
                 form = f"""
 <form method="post" action="/decide">
   <input type="hidden" name="candidate_id" value="{html.escape(selected.candidate_id)}">
   <input type="hidden" name="status" value="{html.escape(status_filter)}">
   <textarea name="reason" placeholder="판단 사유를 남기려면 입력하세요."></textarea>
+  <fieldset class="hold-reasons">
+    <legend>승인할 변경 항목</legend>
+    <div class="muted">승인을 선택할 때 반영할 항목을 하나 이상 고르세요. 선택하지 않은 후보 정보는 승인 기록과 운영 반영 대상에 포함되지 않습니다.</div>
+    {_approval_operation_options(operations)}
+  </fieldset>
   <fieldset class="hold-reasons">
     <legend>보류 사유 분류</legend>
     <div class="muted">보류를 선택할 때 해당하는 사유를 하나 이상 고르세요. 다음 후보 생성/검토에서 alias 제외, 근거 재탐색, target concept 재검토 힌트로 사용됩니다.</div>
@@ -340,6 +364,7 @@ class OntologyReviewHandler(BaseHTTPRequestHandler):
         decision = (form.get("decision") or [""])[0]
         reason = (form.get("reason") or [""])[0]
         hold_reason_codes = normalize_hold_reason_codes(form.get("hold_reason_codes") or [])
+        approved_paths = form.get("approved_paths") or []
         status_filter = (form.get("status") or [self.server.status_filter])[0]
         try:
             self.server.store.decide(
@@ -349,6 +374,7 @@ class OntologyReviewHandler(BaseHTTPRequestHandler):
                 reviewer_type="practitioner_local_ui",
                 reason=reason,
                 hold_reason_codes=hold_reason_codes,
+                approved_paths=approved_paths,
             )
             message = f"{candidate_id} 후보를 {decision} 처리했습니다."
         except Exception as exc:  # pragma: no cover - handler safety path.

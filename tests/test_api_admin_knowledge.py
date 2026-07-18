@@ -7,6 +7,7 @@ import pytest
 from src.api.routes import knowledge
 from src.auth.users import User
 from src.ingest.intake_store import IntakeJobStore, IntakeJobStatus
+from src.ontology.review_store import OntologyCandidate, OntologyReviewStore
 
 
 @pytest.fixture
@@ -39,6 +40,52 @@ async def test_list_intake_jobs_returns_runtime_jobs(tmp_path: Path, monkeypatch
 
     assert payload["total"] == 1
     assert payload["items"][0]["original_filename"] == "약관.pdf"
+
+
+@pytest.mark.anyio
+async def test_ontology_candidate_api_requires_explicit_approval_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = OntologyReviewStore(
+        candidates_path=tmp_path / "candidates.jsonl",
+        review_log_path=tmp_path / "review_log.jsonl",
+        applied_reviews_path=tmp_path / "applied_reviews.jsonl",
+    )
+    store.add_candidate(
+        OntologyCandidate(
+            candidate_id="cand-api",
+            concept_id="cond.api",
+            canonical_name="API 검토 후보",
+            aliases=["API 후보"],
+            evidence_tags=["source:api"],
+            properties={"candidate_type": "new_concept"},
+            source_evidence=[{"chunk_id": "chunk:api", "excerpt": "원문 근거"}],
+        )
+    )
+    monkeypatch.setattr(knowledge, "OntologyReviewStore", lambda **_kwargs: store)
+
+    listed = await knowledge.list_ontology_candidates(_admin_user())
+
+    operation = listed["items"][0]["approval_operations"][0]
+    assert operation["path"].startswith("/concepts/cond.api/")
+    assert operation["field_label"]
+    assert operation["value_preview"]
+    assert operation["value_hash"]
+
+    decided = await knowledge.decide_ontology_candidate(
+        "cand-api",
+        knowledge.CandidateDecisionRequest(
+            decision="approve",
+            reason="근거와 승인 항목이 일치합니다.",
+            approved_paths=[operation["path"]],
+        ),
+        _admin_user(),
+    )
+
+    assert decided["status"] == "approved"
+    review_row = (tmp_path / "review_log.jsonl").read_text(encoding="utf-8")
+    assert operation["path"] in review_row
 
 
 @pytest.mark.anyio

@@ -50,15 +50,26 @@ def apply_ontology_reviews(*, dry_run: bool = False) -> dict[str, Any]:
         result = apply_reviews(store, rebuild_graph=False, dry_run=dry_run)
     except ValueError as exc:
         return {"skipped": True, "reason": str(exc)}
-    return {
-        "skipped": False,
-        "dry_run": dry_run,
-        "output_path": str(result.output_path),
-        "base_concept_count": result.base_concept_count,
-        "merged_candidate_count": result.merged_candidate_count,
-        "total_concept_count": result.total_concept_count,
-        "warnings": result.warnings,
-    }
+    payload = result.to_dict(rebuild_graph=False)
+    payload.update(
+        {
+            "skipped": False,
+            "dry_run": dry_run,
+            "output_path": (
+                str(result.merge_result.output_path) if result.merge_result is not None else ""
+            ),
+            "base_concept_count": (
+                result.merge_result.base_concept_count if result.merge_result is not None else 0
+            ),
+            "merged_candidate_count": (
+                result.merge_result.merged_candidate_count if result.merge_result is not None else 0
+            ),
+            "total_concept_count": (
+                result.merge_result.total_concept_count if result.merge_result is not None else 0
+            ),
+        }
+    )
+    return payload
 
 
 def apply_rule_candidates(*, dry_run: bool = False) -> dict[str, Any]:
@@ -125,6 +136,8 @@ def apply_approved_knowledge() -> KnowledgeApplyResult:
     ontology_preflight: dict[str, Any] = {}
     try:
         ontology_preflight = apply_ontology_reviews(dry_run=True)
+        if not ontology_preflight.get("valid", False):
+            raise RuntimeError("ontology integrity preflight failed")
         apply_rule_candidates(dry_run=True)
         refs = collect_approved_intake_source_refs(
             OntologyReviewStore().candidates_path,

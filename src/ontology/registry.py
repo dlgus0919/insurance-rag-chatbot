@@ -6,14 +6,28 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 from src.graph.normalizer import normalize_name
+from src.ontology.approval_integrity import (
+    BaseManifestLock,
+    IntegrityIssue,
+    ManifestIntegrityReport,
+    audit_active_manifest,
+    build_trusted_base_projection,
+    manifest_content_hash,
+)
+from src.ontology.manifest_schema import (
+    validate_active_provenance_schema,
+    validate_ontology_manifest_schema,
+)
 
 
 ONTOLOGY_DIR = Path(__file__).resolve().parents[2] / "data" / "ontology"
 BASE_ONTOLOGY_MANIFEST = ONTOLOGY_DIR / "concepts.json"
 ACTIVE_ONTOLOGY_MANIFEST = ONTOLOGY_DIR / "concepts.active.json"
+BASE_ONTOLOGY_LOCK = ONTOLOGY_DIR / "policies" / "base_manifest.lock.json"
+ACTIVE_ONTOLOGY_PROVENANCE = ONTOLOGY_DIR / "concepts.active.provenance.json"
 DEFAULT_ONTOLOGY_MANIFEST = BASE_ONTOLOGY_MANIFEST
 NODE_TYPE_PREFIXES = {
     "ComplicationConcept": "comp",
@@ -173,18 +187,76 @@ class OntologyConcept:
 class OntologyRegistry:
     """Versioned ontology manifest loaded once and shared by runtime components."""
 
-    def __init__(self, manifest_path: str | Path = DEFAULT_ONTOLOGY_MANIFEST):
+    def __init__(
+        self,
+        manifest_path: str | Path = DEFAULT_ONTOLOGY_MANIFEST,
+        *,
+        base_manifest_path: str | Path = BASE_ONTOLOGY_MANIFEST,
+        base_lock_path: str | Path = BASE_ONTOLOGY_LOCK,
+        provenance_path: str | Path | None = None,
+        enforce_integrity: bool = True,
+    ):
         self.manifest_path = Path(manifest_path)
+        self.base_manifest_path = Path(base_manifest_path)
+        self.base_lock_path = Path(base_lock_path)
+        self.provenance_path = (
+            Path(provenance_path)
+            if provenance_path is not None
+            else self._default_provenance_path()
+        )
+        self.enforce_integrity = enforce_integrity
         self.schema_version = ""
         self.version = ""
         self.concepts: list[OntologyConcept] = []
+        self.integrity_report = ManifestIntegrityReport(
+            state="stale",
+            manifest_content_hash="",
+            trusted_base_content_hash="",
+            issues=(),
+            quarantined_concept_ids=(),
+        )
+        self.provenance_content_hash = ""
         self._load()
         self._validate()
         self._compile_indexes()
 
-    def _load(self) -> None:
-        with self.manifest_path.open(encoding="utf-8") as f:
+    def _default_provenance_path(self) -> Path | None:
+        if self.manifest_path.name.endswith(".active.json"):
+            return self.manifest_path.with_name(
+                f"{self.manifest_path.stem}.provenance.json"
+            )
+        return None
+
+    @property
+    def _is_active_manifest(self) -> bool:
+        return self.provenance_path is not None
+
+    @staticmethod
+    def _read_payload(path: Path) -> dict[str, Any]:
+        with path.open(encoding="utf-8") as f:
             payload = json.load(f)
+        if not isinstance(payload, dict):
+            raise ValueError("manifest must be a JSON object")
+        validate_ontology_manifest_schema(payload)
+        return payload
+
+    def _set_integrity_failure(
+        self,
+        code: str,
+        message: str,
+        *,
+        payload: dict[str, Any] | None = None,
+    ) -> None:
+        self.integrity_report = ManifestIntegrityReport(
+            state="stale",
+            manifest_content_hash=manifest_content_hash(payload) if payload else "",
+            trusted_base_content_hash="",
+            issues=(IntegrityIssue(code=code, concept_id="", path="/integrity", message=message),),
+            quarantined_concept_ids=(),
+        )
+        self.concepts = []
+
+    def _set_concepts(self, payload: dict[str, Any]) -> None:
         self.schema_version = str(payload.get("schema_version") or "")
         self.version = str(payload.get("version") or "")
         self.concepts = [
@@ -192,6 +264,111 @@ class OntologyRegistry:
             for item in payload.get("concepts", [])
             if isinstance(item, dict)
         ]
+
+    def _load_base(self, payload: dict[str, Any]) -> None:
+        try:
+            lock = BaseManifestLock.load(self.base_lock_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            self._set_integrity_failure(
+                "BASE_LOCK_UNAVAILABLE",
+                "reviewed base lock is unavailable or invalid",
+                payload=payload,
+            )
+            return
+        try:
+            trusted_payload, report = build_trusted_base_projection(payload, lock)
+        except ValueError:
+            self._set_integrity_failure(
+                "BASE_MANIFEST_INVALID",
+                "base manifest cannot be projected against the reviewed lock",
+                payload=payload,
+            )
+            return
+        self.integrity_report = report
+        if report.state == "stale":
+            self.concepts = []
+            return
+        self._set_concepts(trusted_payload)
+
+    def _load_active(self, payload: dict[str, Any]) -> None:
+        try:
+            base_payload = self._read_payload(self.base_manifest_path)
+            lock = BaseManifestLock.load(self.base_lock_path)
+            if self.provenance_path is None:
+                raise FileNotFoundError("active provenance path is required")
+            provenance_payload = self._read_payload_like(self.provenance_path)
+        except FileNotFoundError:
+            self._set_integrity_failure(
+                "ACTIVE_PROVENANCE_UNAVAILABLE",
+                "active manifest provenance or reviewed base input is unavailable",
+                payload=payload,
+            )
+            return
+        except (OSError, ValueError, json.JSONDecodeError):
+            self._set_integrity_failure(
+                "ACTIVE_INTEGRITY_INPUT_INVALID",
+                "active manifest integrity input is invalid",
+                payload=payload,
+            )
+            return
+
+        try:
+            audit = audit_active_manifest(base_payload, lock, payload, provenance_payload)
+        except (ValueError, KeyError, TypeError):
+            self._set_integrity_failure(
+                "ACTIVE_INTEGRITY_AUDIT_FAILED",
+                "active manifest provenance cannot be verified",
+                payload=payload,
+            )
+            return
+
+        self.integrity_report = audit.report
+        self.provenance_content_hash = audit.provenance_content_hash
+        if audit.report.state == "stale":
+            self.concepts = []
+            return
+        quarantined = set(audit.report.quarantined_concept_ids)
+        filtered_payload = dict(payload)
+        filtered_payload["concepts"] = [
+            concept
+            for concept in payload.get("concepts", [])
+            if isinstance(concept, dict)
+            and str(concept.get("concept_id") or "").strip() not in quarantined
+        ]
+        self._set_concepts(filtered_payload)
+
+    @staticmethod
+    def _read_payload_like(path: Path) -> dict[str, Any]:
+        with path.open(encoding="utf-8") as f:
+            payload = json.load(f)
+        if not isinstance(payload, dict):
+            raise ValueError("integrity sidecar must be a JSON object")
+        validate_active_provenance_schema(payload)
+        return payload
+
+    def _load(self) -> None:
+        try:
+            payload = self._read_payload(self.manifest_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            self._set_integrity_failure(
+                "MANIFEST_READ_FAILED",
+                "ontology manifest is unavailable or invalid",
+            )
+            return
+        if not self.enforce_integrity:
+            self.integrity_report = ManifestIntegrityReport(
+                state="valid",
+                manifest_content_hash=manifest_content_hash(payload),
+                trusted_base_content_hash="",
+                issues=(),
+                quarantined_concept_ids=(),
+            )
+            self._set_concepts(payload)
+            return
+        if self._is_active_manifest:
+            self._load_active(payload)
+            return
+        self._load_base(payload)
 
     def _validate(self) -> None:
         seen: set[str] = set()
@@ -271,6 +448,28 @@ class OntologyRegistry:
     def claim_unit_aliases(self) -> dict[str, tuple[str, ...]]:
         return dict(self._claim_unit_aliases)
 
+    def find_matches(self, text: str) -> list[ConceptMatch]:
+        """Return manifest-backed alias matches from concepts that passed integrity checks."""
+
+        matches: list[ConceptMatch] = []
+        for concept in self.concepts:
+            groups = tuple(
+                dict.fromkeys(
+                    (*concept.planner_coverage_topics, *concept.planner_conditions)
+                )
+            )
+            for alias in (*concept.aliases, concept.canonical_name):
+                if matches_ontology_alias(text, alias):
+                    matches.append(
+                        ConceptMatch(
+                            concept_id=concept.concept_id,
+                            canonical_name=concept.canonical_name,
+                            alias=alias,
+                            groups=groups,
+                        )
+                    )
+        return matches
+
     def expand_retrieval_query(self, question: str) -> str:
         normalized_question = question.replace(" ", "")
         expansion_terms: list[str] = []
@@ -330,7 +529,60 @@ class OntologyRegistry:
             "retrieval_rule_count": sum(len(concept.retrieval_expansion_rules) for concept in self.concepts),
             "coverage_topic_count": len(self._coverage_topics),
             "condition_count": len(self._conditions),
+            "ontology_integrity": self.integrity_summary(),
         }
+
+    def integrity_summary(self) -> dict[str, Any]:
+        return {
+            "state": self.integrity_report.state,
+            "manifest_content_hash": self.integrity_report.manifest_content_hash,
+            "quarantined_concept_count": len(self.integrity_report.quarantined_concept_ids),
+            "issue_counts": self.integrity_report.issue_counts(),
+        }
+
+    def integrity_diagnostics(self) -> dict[str, Any]:
+        return {
+            **self.integrity_summary(),
+            "trusted_base_content_hash": self.integrity_report.trusted_base_content_hash,
+            "quarantined_concept_ids": list(self.integrity_report.quarantined_concept_ids),
+            "issues": [
+                {
+                    "code": issue.code,
+                    "concept_id": issue.concept_id,
+                    "path": issue.path,
+                    "message": issue.message,
+                }
+                for issue in self.integrity_report.issues
+            ],
+        }
+
+    def graph_manifest_metadata(self) -> dict[str, str]:
+        """Return the bounded ontology-integrity fields recorded by graph builds."""
+
+        return {
+            "ontology_manifest_content_hash": self.integrity_report.manifest_content_hash,
+            "ontology_provenance_content_hash": self.provenance_content_hash,
+            "ontology_integrity_state": self.integrity_report.state,
+            "ontology_quarantined_concept_count": str(
+                len(self.integrity_report.quarantined_concept_ids)
+            ),
+        }
+
+    def graph_manifest_integrity_errors(self, manifest: Mapping[str, str]) -> list[str]:
+        """Report graph manifest values that do not match this verified registry."""
+
+        expected = self.graph_manifest_metadata()
+        errors: list[str] = []
+        for key, value in expected.items():
+            if key not in manifest:
+                errors.append(f"{key}: expected {value or '<empty>'}, got <missing>")
+                continue
+            actual = str(manifest[key])
+            if actual != value:
+                errors.append(
+                    f"{key}: expected {value or '<empty>'}, got {actual or '<empty>'}"
+                )
+        return errors
 
 
 @lru_cache(maxsize=1)

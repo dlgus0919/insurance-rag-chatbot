@@ -150,6 +150,30 @@ async def test_system_summary_reports_only_running_llm_models(monkeypatch) -> No
 
 
 @pytest.mark.anyio
+async def test_system_summary_reports_ontology_integrity_aggregate(monkeypatch) -> None:
+    class _Registry:
+        def integrity_summary(self) -> dict:
+            return {
+                "state": "quarantined",
+                "manifest_content_hash": "manifest-hash",
+                "quarantined_concept_count": 1,
+                "issue_counts": {"UNAPPROVED_ACTIVE_DELTA": 1},
+            }
+
+    monkeypatch.setattr(admin, "get_default_ontology_registry", lambda: _Registry())
+    monkeypatch.setattr(admin, "list_runtime_available_models", lambda: {})
+
+    payload = await admin.system_summary(_admin_user())
+
+    assert payload["ontology_integrity"] == {
+        "state": "quarantined",
+        "manifest_content_hash": "manifest-hash",
+        "quarantined_concept_count": 1,
+        "issue_counts": {"UNAPPROVED_ACTIVE_DELTA": 1},
+    }
+
+
+@pytest.mark.anyio
 async def test_latest_rag_diagnostics_returns_latest_general_query(db_session) -> None:
     db_session.add(
         AuditLog(

@@ -38,7 +38,9 @@
             "coverage_topics": {"$ref": "#/$defs/stringList"},
             "conditions": {"$ref": "#/$defs/stringList"},
             "intents": {"$ref": "#/$defs/stringList"},
-            "claim_unit_terms": {"$ref": "#/$defs/stringList"}
+            "claim_unit_terms": {"$ref": "#/$defs/stringList"},
+            "clarification_questions": {"$ref": "#/$defs/stringList"},
+            "required_evidence": {"$ref": "#/$defs/stringList"}
           }
         },
         "retrieval": {
@@ -48,7 +50,8 @@
             "expansion_rules": {
               "type": "array",
               "items": {"$ref": "#/$defs/expansionRule"}
-            }
+            },
+            "lexical_priority_terms": {"$ref": "#/$defs/stringList"}
           }
         },
         "properties": {

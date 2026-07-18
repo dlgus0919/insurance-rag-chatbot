@@ -11,7 +11,7 @@ import pandas as pd
 from src import config
 from src.graph.schema import Node, Edge, Evidence, Alias, NodeType, EdgeType
 from src.graph.normalizer import normalize_name, normalize_code
-from src.ontology.registry import get_default_ontology_registry
+from src.ontology.registry import OntologyRegistry, get_default_ontology_registry
 
 
 POLICY_REVIEW_SOURCE_PRIORITY = {
@@ -1056,8 +1056,9 @@ class NonpayStandardExtractor:
 class PolicyReviewExtractor:
     """Extract document-grounded policy review nodes and relations from processed chunks."""
 
-    def __init__(self, store: Any):
+    def __init__(self, store: Any, ontology_registry: OntologyRegistry | None = None):
         self.store = store
+        self.ontology_registry = ontology_registry
 
     def extract(self, chunks_path: str | Path) -> None:
         self.store.begin()
@@ -1111,7 +1112,7 @@ class PolicyReviewExtractor:
         self._seed_nodes(NodeType.TreatmentEpisodeContext, TREATMENT_EPISODE_CONTEXTS.keys(), "treatment_episode_context")
 
     def _seed_ontology_registry_nodes(self) -> None:
-        registry = get_default_ontology_registry()
+        registry = self.ontology_registry or get_default_ontology_registry()
         for concept in registry.concepts_for_graph_seed():
             try:
                 node_type = NodeType(concept.node_type)

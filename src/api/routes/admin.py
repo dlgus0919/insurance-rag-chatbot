@@ -31,6 +31,7 @@ from src.auth import users as user_store
 from src.auth.users import User
 from src.graph.vector_sync import build_report, check_evidence_sync, load_evidence_rows
 from src.llm.factory import list_runtime_available_models
+from src.ontology.registry import get_default_ontology_registry
 from src.retrieval.index_mode import (
     INDEX_MODES,
     USER_FACING_DEFAULT_ALIASES,
@@ -381,6 +382,7 @@ async def system_summary(
             }
         )
 
+    ontology_registry = get_default_ontology_registry()
     return {
         "status": "ok" if any(row["bm25_exists"] or row["chroma_exists"] for row in index_rows) else "degraded",
         "assets": {
@@ -398,7 +400,17 @@ async def system_summary(
             "hf_model_download": config.HF_MODEL_DOWNLOAD,
             "cloud_deploy": config.CLOUD_DEPLOY,
         },
+        "ontology_integrity": ontology_registry.integrity_summary(),
     }
+
+
+@router.get("/ontology-integrity")
+async def ontology_integrity(
+    _: User = Depends(require_permission("admin.stats")),
+) -> dict:
+    """Return administrator-only concept-level ontology integrity diagnostics."""
+
+    return get_default_ontology_registry().integrity_diagnostics()
 
 
 @router.get("/graph-sync-status")

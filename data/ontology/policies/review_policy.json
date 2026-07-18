@@ -103,5 +103,27 @@
       "dev_only",
       "dev_auto_approval"
     ]
+  },
+  "approval_path_policy": {
+    "evidence_tag": [
+      "evidence_tags"
+    ],
+    "alias_or_expansion": [
+      "candidate_aliases"
+    ],
+    "search_query_expansion": [
+      "retrieval.expansion_rules"
+    ],
+    "new_concept": [
+      "canonical_name",
+      "node_type",
+      "aliases",
+      "candidate_aliases",
+      "evidence_tags",
+      "planner",
+      "retrieval.expansion_rules",
+      "retrieval.lexical_priority_terms",
+      "runtime_properties"
+    ]
   }
 }

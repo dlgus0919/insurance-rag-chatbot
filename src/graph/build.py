@@ -24,6 +24,7 @@ from src.graph.extractors import (
     PolicyReviewExtractor,
     SilsonCoverageExtractor,
 )
+from src.ontology.registry import OntologyRegistry, get_default_ontology_registry
 from src.retrieval.canonical_manifest import iter_chunks_for_index_mode, load_canonical_manifest
 
 
@@ -100,6 +101,8 @@ def build_graph(
     skip_hira_codes: bool = False,
     rule_links_path: str | Path | None = None,
     active_source_chunks_path: str | Path | None = ACTIVE_SOURCE_CHUNKS_PATH,
+    ontology_registry: OntologyRegistry | None = None,
+    strict: bool = False,
 ) -> None:
     chunks_path = Path(chunks_path)
     canonical_manifest_path = Path(canonical_manifest_path) if canonical_manifest_path else None
@@ -109,6 +112,13 @@ def build_graph(
     manifest_path = Path(manifest_path)
     low_confidence_report_path = Path(low_confidence_report_path)
     rule_links_path = Path(rule_links_path) if rule_links_path else None
+    ontology_registry = ontology_registry or get_default_ontology_registry()
+
+    if strict and ontology_registry.integrity_report.state != "valid":
+        raise ValueError(
+            "strict graph build requires a valid ontology integrity state; "
+            f"got {ontology_registry.integrity_report.state}"
+        )
 
     # 1. Clean up and Rebuild if requested
     if rebuild and output_db_path.exists():
@@ -181,7 +191,7 @@ def build_graph(
 
     # Ingest document-grounded policy review graph
     print(f"[INFO] Extracting policy review graph from {resolved_chunks_path}")
-    review_extractor = PolicyReviewExtractor(store)
+    review_extractor = PolicyReviewExtractor(store, ontology_registry=ontology_registry)
     review_extractor.extract(resolved_chunks_path)
 
     # 5. Link approved claim rules to source/ontology graph nodes without copying payout values.
@@ -207,6 +217,7 @@ def build_graph(
         "active_source_chunks_path": str(active_source_chunks_path) if active_source_chunks_path else "",
         "standard_code_db": str(standard_db_path),
         "rule_links_path": str(rule_links_path) if rule_links_path else "",
+        **ontology_registry.graph_manifest_metadata(),
         "node_count": store.query("SELECT COUNT(*) as count FROM graph_nodes")[0]["count"],
         "edge_count": store.query("SELECT COUNT(*) as count FROM graph_edges")[0]["count"],
         "evidence_count": store.query("SELECT COUNT(*) as count FROM graph_evidence")[0]["count"],

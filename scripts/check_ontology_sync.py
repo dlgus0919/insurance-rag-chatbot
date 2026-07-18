@@ -14,6 +14,9 @@ from src.ontology.candidate_quality import find_manifest_candidate_alias_issues
 
 def check_registry(registry: OntologyRegistry) -> list[str]:
     errors: list[str] = []
+    integrity = registry.integrity_summary()
+    if integrity["state"] != "valid":
+        errors.append(f"ontology integrity state is {integrity['state']}")
     concept_ids = {concept.concept_id for concept in registry.concepts}
     if len(concept_ids) != len(registry.concepts):
         errors.append("duplicated concept_id exists")

@@ -132,11 +132,17 @@ class OntologyReviewPolicy:
     unsafe_auto_approval_fragments: tuple[str, ...]
     expression_shape: ExpressionShapePolicy
     auto_approval: AutoApprovalPolicy
+    approval_path_policy: dict[str, tuple[str, ...]]
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "OntologyReviewPolicy":
         expression_shape = payload.get("expression_shape") if isinstance(payload.get("expression_shape"), dict) else {}
         auto_approval = payload.get("auto_approval") if isinstance(payload.get("auto_approval"), dict) else {}
+        approval_path_policy_payload = (
+            payload.get("approval_path_policy")
+            if isinstance(payload.get("approval_path_policy"), dict)
+            else {}
+        )
         return cls(
             schema_version=str(payload.get("schema_version") or "").strip(),
             policy_id=str(payload.get("policy_id") or "").strip(),
@@ -147,6 +153,11 @@ class OntologyReviewPolicy:
             unsafe_auto_approval_fragments=tuple(_string_list(payload.get("unsafe_auto_approval_fragments"))),
             expression_shape=ExpressionShapePolicy.from_dict(expression_shape),
             auto_approval=AutoApprovalPolicy.from_dict(auto_approval),
+            approval_path_policy={
+                str(candidate_type).strip(): tuple(_string_list(groups))
+                for candidate_type, groups in approval_path_policy_payload.items()
+                if str(candidate_type).strip() and isinstance(groups, list)
+            },
         )
 
     def validate(self) -> list[str]:
@@ -162,6 +173,11 @@ class OntologyReviewPolicy:
             errors.append(f"review_policy candidate type conflict: {', '.join(sorted(overlap))}")
         errors.extend(self.expression_shape.validate(field_name="review_policy.expression_shape"))
         errors.extend(self.auto_approval.validate())
+        if not self.approval_path_policy:
+            errors.append("review_policy.approval_path_policy must not be empty")
+        for candidate_type, groups in self.approval_path_policy.items():
+            if not groups:
+                errors.append(f"review_policy.approval_path_policy.{candidate_type} must not be empty")
         return errors
 
 

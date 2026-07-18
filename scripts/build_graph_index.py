@@ -115,6 +115,7 @@ def main() -> None:
         skip_policy_appendix=args.skip_policy_appendix,
         skip_hira_codes=args.skip_hira_codes,
         rule_links_path=args.rule_links,
+        strict=args.strict,
     )
     build_snapshot(Path(args.output), Path(args.viz_snapshot))
 

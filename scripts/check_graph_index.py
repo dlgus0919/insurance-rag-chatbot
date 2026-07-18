@@ -9,6 +9,7 @@ project_root = Path(__file__).resolve().parent.parent
 sys.path.append(str(project_root))
 
 from src.graph.store import GraphStore
+from src.ontology.registry import get_default_ontology_registry
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify and inspect SQLite Property Graph index.")
@@ -26,7 +27,7 @@ def main() -> None:
         sys.exit(1)
 
     print(f"=== Graph DB Inspection: {graph_path.name} ===")
-    store = GraphStore(graph_path)
+    store = GraphStore(graph_path, readonly=True)
 
     # 1. Manifest
     print("\n--- Manifest Info ---")
@@ -34,6 +35,15 @@ def main() -> None:
     manifest = {row["key"]: row["value"] for row in manifest_rows}
     for k, v in manifest.items():
         print(f"  {k}: {v}")
+
+    registry = get_default_ontology_registry()
+    integrity_errors = registry.graph_manifest_integrity_errors(manifest)
+    if integrity_errors:
+        print("\n[FAIL] Graph ontology integrity manifest mismatch")
+        for error in integrity_errors:
+            print(f"  - {error}")
+        store.close()
+        sys.exit(1)
 
     # 2. Total Counts
     print("\n--- Summary Statistics ---")

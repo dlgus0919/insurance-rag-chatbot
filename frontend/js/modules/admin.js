@@ -151,13 +151,14 @@ export function fetchOntologyCandidates() {
   return fetchAPI(API_CONFIG.ENDPOINTS.ADMIN_ONTOLOGY_CANDIDATES);
 }
 
-export function decideOntologyCandidate(candidateId, decision, reason, holdReasonCodes = []) {
+export function decideOntologyCandidate(candidateId, decision, reason, holdReasonCodes = [], approvedPaths = []) {
   return fetchAPI(`${API_CONFIG.ENDPOINTS.ADMIN_ONTOLOGY_CANDIDATES}/${encodeURIComponent(candidateId)}/decision`, {
     method: 'POST',
     body: JSON.stringify({
       decision,
       reason,
       hold_reason_codes: holdReasonCodes,
+      approved_paths: approvedPaths,
     }),
   });
 }

@@ -2,7 +2,9 @@
 
 from src.ontology.registry import (
     ACTIVE_ONTOLOGY_MANIFEST,
+    ACTIVE_ONTOLOGY_PROVENANCE,
     BASE_ONTOLOGY_MANIFEST,
+    BASE_ONTOLOGY_LOCK,
     ConceptMatch,
     OntologyConcept,
     OntologyRegistry,
@@ -12,7 +14,9 @@ from src.ontology.registry import (
 
 __all__ = [
     "ACTIVE_ONTOLOGY_MANIFEST",
+    "ACTIVE_ONTOLOGY_PROVENANCE",
     "BASE_ONTOLOGY_MANIFEST",
+    "BASE_ONTOLOGY_LOCK",
     "ConceptMatch",
     "OntologyConcept",
     "OntologyRegistry",

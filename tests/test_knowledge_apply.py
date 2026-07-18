@@ -8,7 +8,11 @@ def test_apply_approved_knowledge_runs_steps_in_order(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "src.ingest.knowledge_apply.apply_ontology_reviews",
-        lambda *, dry_run=False: calls.append(f"ontology:{dry_run}") or {"merged_candidate_count": 1},
+        lambda *, dry_run=False: calls.append(f"ontology:{dry_run}") or {
+            "status": "dry_run" if dry_run else "applied",
+            "valid": True,
+            "merged_candidate_count": 1,
+        },
     )
     monkeypatch.setattr(
         "src.ingest.knowledge_apply.apply_rule_candidates",
@@ -55,7 +59,11 @@ def test_apply_approved_knowledge_stops_when_rule_preflight_fails(monkeypatch) -
 
     monkeypatch.setattr(
         "src.ingest.knowledge_apply.apply_ontology_reviews",
-        lambda *, dry_run=False: calls.append(f"ontology:{dry_run}") or {"merged_candidate_count": 1},
+        lambda *, dry_run=False: calls.append(f"ontology:{dry_run}") or {
+            "status": "dry_run" if dry_run else "applied",
+            "valid": True,
+            "merged_candidate_count": 1,
+        },
     )
 
     def fail_rules(*, dry_run: bool = False):
@@ -83,12 +91,41 @@ def test_apply_approved_knowledge_stops_when_rule_preflight_fails(monkeypatch) -
     assert calls == ["ontology:True", "rules:True"]
 
 
+def test_apply_approved_knowledge_stops_before_other_steps_when_ontology_integrity_is_invalid(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "src.ingest.knowledge_apply.apply_ontology_reviews",
+        lambda *, dry_run=False: calls.append(f"ontology:{dry_run}") or {
+            "status": "legacy_unverifiable",
+            "valid": False,
+            "legacy_unverifiable_candidate_ids": ["cand-legacy"],
+        },
+    )
+    monkeypatch.setattr(
+        "src.ingest.knowledge_apply.apply_rule_candidates",
+        lambda *, dry_run=False: calls.append(f"rules:{dry_run}") or {},
+    )
+
+    result = apply_approved_knowledge()
+
+    assert result.status == "failed_preflight"
+    assert result.ontology["status"] == "legacy_unverifiable"
+    assert calls == ["ontology:True"]
+
+
 def test_apply_approved_knowledge_stops_when_source_promotion_fails(monkeypatch) -> None:
     calls: list[str] = []
 
     monkeypatch.setattr(
         "src.ingest.knowledge_apply.apply_ontology_reviews",
-        lambda *, dry_run=False: calls.append(f"ontology:{dry_run}") or {"merged_candidate_count": 1},
+        lambda *, dry_run=False: calls.append(f"ontology:{dry_run}") or {
+            "status": "dry_run" if dry_run else "applied",
+            "valid": True,
+            "merged_candidate_count": 1,
+        },
     )
     monkeypatch.setattr(
         "src.ingest.knowledge_apply.apply_rule_candidates",

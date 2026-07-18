@@ -102,7 +102,11 @@ async def list_ontology_candidates(
     _: User = Depends(require_permission("admin.knowledge.read")),
 ) -> dict:
     store = OntologyReviewStore(candidates_path=ONTOLOGY_CANDIDATES_PATH)
-    records = [candidate.to_dict() for candidate in store.load_candidates()]
+    records = []
+    for candidate in store.load_candidates():
+        record = candidate.to_dict()
+        record["approval_operations"] = store.available_approval_operations(candidate.candidate_id)
+        records.append(record)
     return {"total": len(records), "items": records}
 
 
@@ -120,6 +124,7 @@ async def decide_ontology_candidate(
         reviewer_type="practitioner",
         reason=payload.reason,
         hold_reason_codes=payload.hold_reason_codes,
+        approved_paths=payload.approved_paths,
     )
     return candidate.to_dict()
 

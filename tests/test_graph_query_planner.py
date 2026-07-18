@@ -2,7 +2,16 @@ from __future__ import annotations
 
 import pytest
 
+from src.config import ROOT_DIR
 from src.graph.query_planner import GraphQueryPlanner, GraphQueryPlan
+from src.ontology.registry import OntologyRegistry
+
+
+def _forensic_source_grounded_registry() -> OntologyRegistry:
+    return OntologyRegistry(
+        ROOT_DIR / "data" / "ontology" / "concepts.json",
+        enforce_integrity=False,
+    )
 
 
 @pytest.mark.parametrize(
@@ -87,7 +96,9 @@ def test_query_planner_matches_attached_standalone_drinking_expression(query: st
 
 
 def test_query_planner_hair_loss_adds_source_grounded_cause_questions() -> None:
-    plan = GraphQueryPlanner().plan("탈모 보상 가능?")
+    plan = GraphQueryPlanner(
+        ontology_registry=_forensic_source_grounded_registry()
+    ).plan("탈모 보상 가능?")
 
     assert "탈모" in plan.coverage_topics
     assert any("노화현상" in question and "질병성 탈모" in question for question in plan.clarification_questions)

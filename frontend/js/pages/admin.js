@@ -712,7 +712,7 @@ export function renderCandidateList(items, kind) {
         <button class="act-btn del" type="button" data-admin-action="decide-rule-candidate" data-candidate-id="${escapeHTML(candidateId)}" data-decision="reject">거절</button>
       `;
     return `
-      <article class="candidate-card">
+      <article class="candidate-card" data-candidate-id="${escapeHTML(candidateId)}">
         <div class="candidate-title">${escapeHTML(title)}</div>
         <div class="candidate-meta">${escapeHTML(item.status || '-')} · ${escapeHTML(candidateId || '-')}</div>
         ${reviewContext}
@@ -733,12 +733,26 @@ function renderOntologyCandidateContext(item) {
   const summary = display.summary || item.description || '후보 설명이 없습니다. 원문 근거와 승인 대상 표현을 기준으로 검토하세요.';
   const approvalPrompt = display.approval_prompt || '위 표현들을 같은 보험 업무 개념으로 묶어도 될까요?';
   const qualityNotes = ontologyQualityNotes(item);
+  const approvalOperations = Array.isArray(item.approval_operations) ? item.approval_operations : [];
 
   return `
     <div class="candidate-section">
       <div class="candidate-section-label">승인 대상 표현</div>
       ${renderInlineList(aliases, 'candidate-chip', '표시할 후보 alias가 없습니다.')}
     </div>
+    ${approvalOperations.length ? `
+      <div class="candidate-section">
+        <div class="candidate-section-label">승인할 변경 항목</div>
+        <div class="candidate-approval-options">
+          ${approvalOperations.map((operation) => `
+            <label class="candidate-approval-option">
+              <input type="checkbox" data-ontology-approval-path value="${escapeHTML(operation.path || '')}">
+              <span><strong>${escapeHTML(operation.field_label || '승인 변경 항목')}</strong><br>${escapeHTML(operation.value_preview || '-')}</span>
+            </label>
+          `).join('')}
+        </div>
+      </div>
+    ` : ''}
     <div class="candidate-section">
       <div class="candidate-section-label">설명</div>
       <p class="candidate-text">${escapeHTML(summary)}</p>
@@ -889,7 +903,17 @@ async function decideKnowledgeCandidate(kind, candidateId, decision) {
   try {
     if (kind === 'ontology') {
       const holdCodes = decision === 'hold' ? ['needs_more_evidence'] : [];
-      await decideOntologyCandidate(candidateId, decision, finalReason, holdCodes);
+      const card = document.querySelector(`.candidate-card[data-candidate-id="${CSS.escape(candidateId)}"]`);
+      const approvedPaths = card
+        ? Array.from(card.querySelectorAll('[data-ontology-approval-path]:checked'))
+          .map((input) => input.value)
+          .filter(Boolean)
+        : [];
+      if (decision === 'approve' && !approvedPaths.length) {
+        toast('승인할 변경 항목을 하나 이상 선택하세요.', 'error');
+        return;
+      }
+      await decideOntologyCandidate(candidateId, decision, finalReason, holdCodes, approvedPaths);
     } else {
       await decideRuleCandidate(candidateId, decision, finalReason);
     }
