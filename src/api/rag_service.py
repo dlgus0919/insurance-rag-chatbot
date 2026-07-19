@@ -18,12 +18,19 @@ from src.claim_calculation.thread_context import (
 from src.graph.context import build_graph_context
 from src.llm.factory import build_llm
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
+from src.ontology.registry import get_default_ontology_registry
 from src.rag.auto_params import AutoRagParams, apply_adaptive_k_to_hits
 from src.rag.clause_detail_rows import ClauseDetailRowStore, resolve_clause_detail_rows_path
+from src.rag.conversation_context import ResolvedConversationContext
 from src.rag.evidence import append_evidence_validation_warning
+from src.rag.evidence_assessment import (
+    GroundedDisplayResult,
+    evaluate_registry_evidence,
+    has_schema_v2_display_contract,
+)
 from src.rag.pipeline import RagPipeline, _deterministic_guard_answer, _hit_to_chunk
 from src.rag.quick_code import build_quick_code_prompt, retrieve_quick_code_chunks
-from src.rag.source_grounded_answers import PolicyClauseDecision, build_policy_clause_decision
+from src.rag.source_grounded_answers import PolicyClauseDecision
 from src.rag.table_store import TableStore
 from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
@@ -253,6 +260,7 @@ async def prepare_retrieved_context(
     *,
     auto_params: AutoRagParams | None = None,
     policy_generation: str | None = None,
+    conversation_context: ResolvedConversationContext | None = None,
 ):
     """Retrieve chunks, GraphDB facts, source metadata, and a prompt for generation."""
 
@@ -263,7 +271,15 @@ async def prepare_retrieved_context(
 
     if getattr(pipeline, "graph_enabled", False) and getattr(pipeline, "graph_retriever", None):
         try:
-            graph_result = pipeline.graph_retriever.retrieve(question)
+            graph_question = conversation_context.route_query if conversation_context else question
+            clarification = conversation_context.graph_clarification if conversation_context else None
+            if clarification is None:
+                graph_result = pipeline.graph_retriever.retrieve(graph_question)
+            else:
+                graph_result = pipeline.graph_retriever.retrieve(
+                    graph_question,
+                    clarification=clarification,
+                )
             graph_context = build_graph_context(graph_result)
             source_chunk_ids = getattr(graph_result, "source_chunk_ids", []) or []
             if source_chunk_ids:
@@ -280,7 +296,7 @@ async def prepare_retrieved_context(
             fallback_builder = getattr(pipeline.graph_retriever, "build_fallback_result", None)
             if callable(fallback_builder):
                 graph_result = fallback_builder(
-                    question,
+                    graph_question,
                     "GraphDB 조회 중 예외가 발생해 직접 연결된 조항 경로를 확인하지 못했습니다.",
                     warning=f"Graph retrieval failed in API path: {exc}",
                 )
@@ -303,8 +319,10 @@ async def prepare_retrieved_context(
     }
     if policy_generation:
         retrieval_kwargs["policy_generation"] = policy_generation
-    claim_context = build_claim_thread_context(history, question)
-    retrieval_question = contextualize_claim_query(question, claim_context)
+    route_question = conversation_context.route_query if conversation_context else question
+    retrieval_base_question = conversation_context.retrieval_query if conversation_context else question
+    claim_context = build_claim_thread_context(history, retrieval_base_question)
+    retrieval_question = contextualize_claim_query(retrieval_base_question, claim_context)
     hits, debug = pipeline.retrieve_hits(retrieval_question, **retrieval_kwargs)
     if auto_params is not None:
         preserve_ids = {hit.id for hit in graph_hits}
@@ -323,15 +341,17 @@ async def prepare_retrieved_context(
             debug.final_hits = [item for item in debug.final_hits if item.chunk_id in selected_ids]
             debug.auto_cutoff = cutoff
     chunks = [_hit_to_chunk(hit) for hit in hits]
-    policy_decision = build_policy_clause_decision(
-        question,
+    evidence_result = evaluate_registry_evidence(
+        route_question,
         chunks,
         policy_generation=policy_generation,
+        context=conversation_context,
+        registry=get_default_ontology_registry(),
     )
-    if policy_decision is not None:
-        chunks = policy_decision.chunks
+    if evidence_result is not None:
+        chunks = list(evidence_result.selected_chunks)
     sources = chunks_to_sources(chunks)
-    prompt = pipeline.build_prompt(question, chunks, graph_context=graph_context)
+    prompt = pipeline.build_prompt(route_question, chunks, graph_context=graph_context)
     history_context = build_history_context(history)
     if claim_context.references_claim and claim_context.prompt_context:
         history_context = "\n\n".join(
@@ -340,10 +360,10 @@ async def prepare_retrieved_context(
     if history_context:
         prompt = f"{history_context}\n\n{prompt}"
     deterministic_answer = (
-        policy_decision.answer
-        if policy_decision is not None
+        evidence_result.answer
+        if evidence_result is not None
         else _deterministic_guard_answer(
-            question,
+            route_question,
             chunks,
             graph_context=graph_context,
             graph_result=graph_result,
@@ -352,9 +372,9 @@ async def prepare_retrieved_context(
     )
     if debug is not None:
         debug.graph_result = graph_result
-    graph_payload = apply_policy_clause_decision(
+    graph_payload = apply_evidence_assessment(
         graph_result_to_payload(graph_result),
-        policy_decision,
+        evidence_result,
     )
     _log_graph_payload_visibility(question, graph_payload)
     return chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug
@@ -757,7 +777,7 @@ def apply_policy_clause_decision(
     graph_payload: dict | None,
     decision: PolicyClauseDecision | None,
 ) -> dict | None:
-    """Attach direct policy evidence without allowing a generic Graph fallback to override it."""
+    """Preserve the legacy direct-evidence payload contract for API callers."""
 
     if decision is None:
         return graph_payload
@@ -781,6 +801,25 @@ def apply_policy_clause_decision(
         list(decision_payload.get("required_evidence") or []),
     )
     payload["canonical_decision"] = decision_payload
+    payload["graph_review_paths"] = [
+        path
+        for path in list(payload.get("graph_review_paths") or [])
+        if path.get("path_type") != "claim_condition_review"
+    ]
+    return payload
+
+
+def apply_evidence_assessment(
+    graph_payload: dict | None,
+    result: GroundedDisplayResult | None,
+) -> dict | None:
+    """Attach approved direct evidence without letting Graph fallback override it."""
+
+    if result is None:
+        return graph_payload
+
+    payload = deepcopy(graph_payload) if isinstance(graph_payload, dict) else {}
+    payload.update(deepcopy(result.payload))
     payload["graph_review_paths"] = [
         path
         for path in list(payload.get("graph_review_paths") or [])
@@ -1001,6 +1040,8 @@ def graph_payload_has_renderable_evidence(graph_payload: dict | None) -> bool:
 
     if not isinstance(graph_payload, dict):
         return False
+    if has_schema_v2_display_contract(graph_payload):
+        return True
     if isinstance(graph_payload.get("canonical_decision"), dict):
         return True
     if graph_payload.get("graph_review_paths"):

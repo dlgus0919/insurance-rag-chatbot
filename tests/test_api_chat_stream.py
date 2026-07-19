@@ -495,9 +495,161 @@ async def test_chat_stream_does_not_emit_done_when_turn_persistence_fails(db_ses
     )
     stream = await _stream_text(response)
 
-    assert "event: final" in stream
+    assert "event: final" not in stream
     assert "event: done" not in stream
     assert "CHAT_HISTORY_PERSIST_FAILED" in stream
+
+
+@pytest.mark.anyio
+async def test_chat_stream_replays_a_persisted_turn_without_duplicate_messages(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
+    created = await sessions.create_session(SessionCreateRequest(title="재시도"), _user(), db_session)
+
+    first = await chat.chat_stream(
+        ChatRequest(
+            query="도수치료 보상돼?",
+            session_id=created.id,
+            model="gemma3:4b",
+            turn_id="turn-retry-001",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    await _stream_text(first)
+
+    replay = await chat.chat_stream(
+        ChatRequest(
+            query="도수치료 보상돼?",
+            session_id=created.id,
+            model="gemma3:4b",
+            turn_id="turn-retry-001",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(replay)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert len(messages) == 2
+    assert '"replayed": true' in stream
+    assert "event: final" in stream
+    assert "event: done" in stream
+
+
+@pytest.mark.anyio
+async def test_chat_stream_restores_pending_clarification_for_the_second_turn(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
+    captured_contexts = []
+
+    class FakeRegistry:
+        class IntegrityReport:
+            manifest_content_hash = "manifest-test-v1"
+
+        integrity_report = IntegrityReport()
+
+    monkeypatch.setattr(chat, "get_default_ontology_registry", lambda: FakeRegistry())
+
+    async def fake_prepare(*_args, **kwargs):
+        context = kwargs.get("conversation_context")
+        captured_contexts.append(context)
+        pending_slots = []
+        if len(captured_contexts) == 1:
+            pending_slots = [
+                {
+                    "slot_id": "condition-a",
+                    "evidence_condition_id": "condition-a",
+                    "question": "해당 조건이 확인되었나요?",
+                    "allowed_values": ["yes", "no", "unknown"],
+                    "evidence_chunk_ids": ["chunk-1"],
+                }
+            ]
+        return (
+            [],
+            [],
+            "prompt",
+            {"schema_version": 2, "clarification": {"pending_slots": pending_slots}},
+            [],
+            "구조화된 답변",
+            None,
+        )
+
+    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_prepare)
+    created = await sessions.create_session(SessionCreateRequest(title="연속 확인"), _user(), db_session)
+
+    first = await chat.chat_stream(
+        ChatRequest(
+            query="보상 조건을 검토해 주세요.",
+            session_id=created.id,
+            model="gemma3:4b",
+            turn_id="turn-context-001",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    first_stream = await _stream_text(first)
+
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    first_messages = list(result.scalars())
+    first_meta = chat._assistant_meta(first_messages[1].sources or [])
+    request_id = first_meta["conversation_state"]["clarification_request"]["request_id"]
+
+    assert "event: conversation" in first_stream
+    assert request_id in first_stream
+    assert '"slot_id": "condition-a"' in first_stream
+    assert "topic_anchor" not in first_stream
+    assert "evidence_chunk_ids" not in first_stream
+
+    replayed_first = await chat.chat_stream(
+        ChatRequest(
+            query="보상 조건을 검토해 주세요.",
+            session_id=created.id,
+            model="gemma3:4b",
+            turn_id="turn-context-001",
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    replay_stream = await _stream_text(replayed_first)
+
+    assert '"replayed": true' in replay_stream
+    assert "event: conversation" in replay_stream
+    assert request_id in replay_stream
+
+    second = await chat.chat_stream(
+        ChatRequest(
+            query="네",
+            session_id=created.id,
+            model="gemma3:4b",
+            turn_id="turn-context-002",
+            clarification={"request_id": request_id, "slot_id": "condition-a", "value": "yes"},
+        ),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(second)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+    second_meta = chat._assistant_meta(messages[3].sources or [])
+
+    assert len(messages) == 4
+    assert captured_contexts[1].kind == "clarification_response"
+    assert captured_contexts[1].route_query == "보상 조건을 검토해 주세요."
+    assert captured_contexts[1].assertion_draft is not None
+    assert captured_contexts[1].assertion_draft.value == "yes"
+    assert second_meta["conversation_state"]["user_assertions"][0]["source_message_id"] == str(messages[2].id)
+    assert '"persisted": true' in stream
 
 
 @pytest.mark.anyio

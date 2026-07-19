@@ -13,6 +13,7 @@ class ChatRequest(BaseModel):
     mode: Literal["general", "quickcode", "formal"] = "general"
     query: str = Field(..., min_length=1)
     session_id: str | None = None
+    turn_id: str | None = Field(default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
     model: str | None = None
     provider: Literal["openai", "local"] | None = None
     reasoning_mode: Literal["off", "on"] = "off"

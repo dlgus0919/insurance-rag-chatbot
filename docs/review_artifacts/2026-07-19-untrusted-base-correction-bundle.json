@@ -1,0 +1,197 @@
+{
+  "artifact_type": "untrusted_base_correction_bundle",
+  "entries": [
+    {
+      "concept": {
+        "aliases": [
+          "노화현상으로 인한 탈모",
+          "노화성 탈모"
+        ],
+        "canonical_name": "노화현상으로 인한 탈모",
+        "concept_id": "cond.age_related_hair_loss",
+        "node_type": "ClaimCondition",
+        "planner": {
+          "conditions": [
+            "노화현상으로 인한 탈모"
+          ]
+        }
+      },
+      "concept_id": "cond.age_related_hair_loss",
+      "content_hash": "67aa0abcedc1a37da7f414c58a370e809b9e6a361f31d655f781b526db09eb9e",
+      "status": "pending"
+    },
+    {
+      "concept": {
+        "aliases": [
+          "질병성 탈모",
+          "질병 진단으로 인한 탈모"
+        ],
+        "canonical_name": "의사 진단 질병성 탈모",
+        "concept_id": "cond.disease_related_hair_loss",
+        "node_type": "ClaimCondition",
+        "planner": {
+          "conditions": [
+            "의사 진단 질병성 탈모"
+          ]
+        }
+      },
+      "concept_id": "cond.disease_related_hair_loss",
+      "content_hash": "c677267b00f5cd8de78fe95a07d365133c4a75eba5fbb28c8a8e6d55be349429",
+      "status": "pending"
+    },
+    {
+      "concept": {
+        "aliases": [
+          "급여/비급여",
+          "비급여 의료비"
+        ],
+        "canonical_name": "급여/비급여 구분",
+        "concept_id": "cond.pay_nonpay_status",
+        "node_type": "ClaimCondition",
+        "planner": {
+          "conditions": [
+            "급여/비급여 구분"
+          ]
+        }
+      },
+      "concept_id": "cond.pay_nonpay_status",
+      "content_hash": "a1af9ff05510ea16ee8068f511c78f6c1817b85d4d415ba82323d0bc7b8f1c99",
+      "status": "pending"
+    },
+    {
+      "concept": {
+        "aliases": [
+          "치료 부작용 탈모",
+          "약물 부작용 탈모"
+        ],
+        "canonical_name": "치료·약물 부작용 탈모",
+        "concept_id": "cond.treatment_side_effect_hair_loss",
+        "node_type": "ClaimCondition",
+        "planner": {
+          "conditions": [
+            "치료·약물 부작용 탈모"
+          ]
+        }
+      },
+      "concept_id": "cond.treatment_side_effect_hair_loss",
+      "content_hash": "593a6317c4370f5d5b3aa03376f22136868d44fbabe884b0be6d86f5f4791e47",
+      "status": "pending"
+    },
+    {
+      "concept": {
+        "aliases": [
+          "업무 또는 일상생활에 지장",
+          "일상생활 지장",
+          "업무 지장"
+        ],
+        "canonical_name": "업무 또는 일상생활 지장 여부",
+        "concept_id": "cond.work_daily_life_impairment",
+        "node_type": "ClaimCondition",
+        "planner": {
+          "conditions": [
+            "업무 또는 일상생활 지장 여부"
+          ]
+        }
+      },
+      "concept_id": "cond.work_daily_life_impairment",
+      "content_hash": "1dc85bdfc273f6594d62a819d63a099f7b39204b06cfa97fbdffb80249ad810c",
+      "status": "pending"
+    },
+    {
+      "concept": {
+        "aliases": [
+          "탈모",
+          "노화성 탈모",
+          "노화현상으로 인한 탈모",
+          "질병성 탈모",
+          "치료 부작용 탈모",
+          "약물 부작용 탈모"
+        ],
+        "canonical_name": "탈모",
+        "concept_id": "cov.hair_loss",
+        "node_type": "CoverageItem",
+        "planner": {
+          "clarification_questions": [
+            "탈모의 원인이 노화현상인지, 의사 진단을 받은 질병성 탈모인지, 치료·약물 부작용인지 확인해 주세요.",
+            "진단명 또는 진단코드, 의사소견, 치료 목적과 급여/비급여 구분을 확인할 수 있는 자료가 있는지 확인해 주세요."
+          ],
+          "coverage_topics": [
+            "탈모"
+          ],
+          "required_evidence": [
+            "진단명 또는 진단코드",
+            "의사소견",
+            "치료 목적 확인",
+            "급여/비급여 구분",
+            "업무 또는 일상생활 지장 여부"
+          ]
+        },
+        "properties": {
+          "source_grounded_decision": {
+            "age_related_terms": [
+              "노화현상으로 인한 탈모",
+              "노화성 탈모"
+            ],
+            "alternative_cause_note": "의사 진단을 받은 질병성 탈모 또는 치료·약물 부작용으로 인한 탈모에는 이 노화현상 조항을 자동 적용할 수 없습니다. 다만 보상 여부도 자동으로 확정하지 않으므로 진단·치료 사실과 약관 요건을 별도로 확인해야 합니다.",
+            "conditional_exclusion_summary": "노화현상으로 인한 탈모의 치료로 발생한 비급여 의료비는 업무 또는 일상생활에 지장이 없는 경우 보상하지 않는다는 조항이 확인됩니다.",
+            "conditions": [
+              "노화현상으로 인한 탈모",
+              "업무 또는 일상생활 지장 여부",
+              "급여/비급여 구분"
+            ],
+            "direct_source_chunk_ids": {
+              "4th": [
+                "약관_ch_002457"
+              ],
+              "5th": [
+                "표준약관_ch_005453"
+              ]
+            },
+            "disease_or_side_effect_terms": [
+              "질병성 탈모",
+              "질병 진단으로 인한 탈모",
+              "치료 부작용 탈모",
+              "약물 부작용 탈모"
+            ],
+            "evidence_terms": [
+              "노화현상으로 인한 탈모",
+              "비급여 의료비"
+            ],
+            "general_scope_note": "일반적인 탈모만으로는 보상 여부를 확정할 수 없습니다. 노화현상에 따른 탈모인지와 조항의 적용 조건을 먼저 확인해야 합니다.",
+            "question_terms": [
+              "탈모"
+            ],
+            "standard_reference_note": "현재 선택된 5세대 검색 근거는 표준약관입니다. 등록된 5세대 자사 상품 약관이 없으므로 표준약관을 참고 기준으로 안내합니다."
+          }
+        },
+        "retrieval": {
+          "expansion_rules": [
+            {
+              "expansion_terms": [
+                "노화현상으로 인한 탈모",
+                "업무 또는 일상생활에 지장이 없는 경우",
+                "비급여 의료비",
+                "의사 진단",
+                "치료 부작용"
+              ],
+              "match_any": [
+                "탈모"
+              ]
+            }
+          ],
+          "lexical_priority_terms": [
+            "노화현상으로 인한 탈모",
+            "탈모"
+          ]
+        }
+      },
+      "concept_id": "cov.hair_loss",
+      "content_hash": "a9e848a5cb8db383dfa917ec30d2aa538d0cd68f4f37888ffd7bb4bbd6be23f9",
+      "status": "pending"
+    }
+  ],
+  "schema_version": 1,
+  "source_manifest_content_hash": "9700d288477ce2e9aa6e21d374849f56be00096b6a89bc8e7e1bc2c0463ff12c",
+  "status": "pending",
+  "trusted_base_content_hash": "ccfbf4faa15bbd34993e1f09aa7fe90fb72f519de2cf955f0bbfa80b290fe3b2"
+}

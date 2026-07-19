@@ -22,6 +22,13 @@ from src.api.db import get_db
 from src.api.isolated_e2e import is_isolated_e2e_run
 from src.api.deps import log_audit_event, require_permission
 from src.api.models import ChatMessage, ChatSession
+from src.api.public_payloads import (
+    assistant_metadata,
+    public_graph_payload,
+    public_sources,
+    public_warnings,
+    storage_sources,
+)
 from src.api.rate_limit import limiter
 from src.api.rag_service import (
     SYSTEM_PROMPT,
@@ -37,7 +44,18 @@ from src.api.routes.claim import _claim_response_text, _claim_snapshot_source
 from src.api.schemas.chat import ChatRequest
 from src.api.schemas.claim import ClaimCalculationRequest, ClaimCalculationResponse, ClaimItemRequest
 from src.auth.users import User
+from src.ontology.registry import get_default_ontology_registry
 from src.rag.auto_params import TOPK_STRATEGY_RULE, AutoRagParams, resolve_auto_rag_params
+from src.rag.conversation_context import (
+    ConversationQueryScope,
+    ConversationState,
+    finalize_assertion_source,
+    parse_conversation_state,
+    resolve_conversation_context,
+    serialize_conversation_state,
+    state_with_pending_clarification,
+)
+from src.rag.evidence_assessment import clarification_slots_from_payload
 from src.rag.pipeline import DebugInfo
 from src.rag.query_router import resolve_query_route
 from src.claim_calculation.models import ClaimCaseContext, ClaimItemInput
@@ -334,6 +352,129 @@ def _provider_from_model_id(model: str) -> str:
     return "openai" if model.startswith("gpt-") else "vllm"
 
 
+def _assistant_meta(sources: list[dict] | None) -> dict:
+    """Return the private assistant metadata persisted with a response."""
+
+    return assistant_metadata(sources)
+
+
+def _public_sources(sources: list[dict] | None) -> list[dict]:
+    return public_sources(sources)
+
+
+def _public_graph_payload(graph_payload: dict | None) -> dict | None:
+    return public_graph_payload(graph_payload)
+
+
+def _history_for_conversation(history: list[ChatMessage]) -> list[dict]:
+    return [
+        {
+            "role": message.role,
+            "sources": {"assistant_meta": _assistant_meta(message.sources or [])},
+        }
+        for message in history
+    ]
+
+
+def _current_ontology_manifest_hash() -> str | None:
+    report = getattr(get_default_ontology_registry(), "integrity_report", None)
+    value = getattr(report, "manifest_content_hash", "")
+    return str(value).strip() or None
+
+
+def _conversation_interaction_payload(state: ConversationState | dict | None) -> dict | None:
+    """Expose only the current pending selection contract to the browser."""
+
+    if isinstance(state, dict):
+        try:
+            state = parse_conversation_state(state)
+        except ValueError:
+            return None
+    if state is None:
+        return None
+    request = state.clarification_request
+    if request is None or request.status != "pending" or not request.slots:
+        return None
+    return {
+        "request_id": request.request_id,
+        "slots": [
+            {
+                "slot_id": slot.slot_id,
+                "question": slot.question,
+                "allowed_values": list(slot.allowed_values),
+            }
+            for slot in request.slots
+        ],
+        "query_scope": {
+            "route": request.query_scope.route,
+            "policy_generation": request.query_scope.policy_generation,
+            "doc_filter": list(request.query_scope.doc_filter),
+            "index_mode": request.query_scope.index_mode,
+        },
+    }
+
+
+def _existing_turn(history: list[ChatMessage], turn_id: str) -> ChatMessage | None:
+    for message in reversed(history):
+        if message.role != "assistant":
+            continue
+        turn = _assistant_meta(message.sources or []).get("turn")
+        if isinstance(turn, dict) and turn.get("turn_id") == turn_id:
+            return message
+    return None
+
+
+def _persisted_sources(
+    sources: list[dict],
+    *,
+    turn_id: str,
+    graph_payload: dict | None,
+    warnings: list[dict] | None,
+    conversation_state: ConversationState | None,
+) -> list[dict]:
+    metadata = _assistant_meta(sources)
+    metadata["__kind"] = "assistant_meta"
+    metadata["turn"] = {"turn_id": turn_id}
+    if graph_payload is not None:
+        metadata["graph_result"] = graph_payload
+    if warnings:
+        metadata["warnings"] = list(warnings)
+    if conversation_state is not None:
+        metadata["conversation_state"] = serialize_conversation_state(conversation_state)
+    return storage_sources(sources) + [metadata]
+
+
+def _ambiguous_continuation_answer(context) -> str:
+    request = context.pending_request
+    if request is None or not request.slots:
+        return "이전 확인 항목에 대한 답인지 새 질문인지 구분하기 어렵습니다. 확인할 조건을 함께 알려주세요."
+    slot = request.slots[0]
+    return f"이전 확인 항목에 대한 답인지 구분하기 어렵습니다. {slot.question}"
+
+
+async def _replay_persisted_turn(chat_session: ChatSession, message: ChatMessage, turn_id: str):
+    metadata = _assistant_meta(message.sources or [])
+    yield _sse("session", {"session_id": chat_session.id, "turn_id": turn_id, "replayed": True})
+    yield _sse("status", "replaying")
+    public_sources = _public_sources(message.sources or [])
+    if public_sources:
+        yield _sse("sources", public_sources)
+    graph_payload = metadata.get("graph_result")
+    if isinstance(graph_payload, dict):
+        yield _sse("graph", _public_graph_payload(graph_payload))
+    for warning in public_warnings(metadata.get("warnings")):
+        if isinstance(warning, dict):
+            yield _sse("warning", warning)
+    interaction = _conversation_interaction_payload(metadata.get("conversation_state"))
+    if interaction is not None:
+        yield _sse("conversation", interaction)
+    yield _sse("final", {"answer": message.content})
+    yield _sse(
+        "done",
+        {"session_id": chat_session.id, "answer": message.content, "persisted": True, "replayed": True},
+    )
+
+
 @router.post("/stream")
 @limiter.limit("20/minute")
 async def chat_stream(
@@ -346,6 +487,7 @@ async def chat_stream(
 
     chat_session = await _ensure_session(db, user.username, chat_request.session_id, chat_request.query)
     history = await _load_history(db, chat_session.id)
+    turn_id = chat_request.turn_id or f"turn-{uuid4().hex}"
 
     async def event_generator():
         llm_stream = None
@@ -357,24 +499,40 @@ async def chat_stream(
         debug_info: DebugInfo | None = None
         tokens: list[str] = []
         selected_model = _select_model(chat_request)
+        manifest_hash = _current_ontology_manifest_hash()
+        conversation_context = resolve_conversation_context(
+            chat_request.query,
+            _history_for_conversation(history),
+            current_manifest_hash=manifest_hash,
+            clarification=chat_request.clarification or None,
+        )
+        selected_policy_generation = (
+            chat_request.policy_generation or conversation_context.query_scope.policy_generation
+        )
         requested_index_mode, effective_index_mode = _resolve_chat_index_modes(
-            _query_with_policy_generation(chat_request.query, chat_request.policy_generation),
+            _query_with_policy_generation(conversation_context.route_query, selected_policy_generation),
             chat_request.index_mode,
         )
-        context_query = _query_with_policy_generation(chat_request.query, chat_request.policy_generation)
+        context_query = _query_with_policy_generation(conversation_context.route_query, selected_policy_generation)
         started = time.perf_counter()
         try:
+            existing_turn = _existing_turn(history, turn_id)
+            if existing_turn is not None:
+                async for event in _replay_persisted_turn(chat_session, existing_turn, turn_id):
+                    yield event
+                return
+            yield _sse("session", {"session_id": chat_session.id, "turn_id": turn_id})
             yield _sse("status", "searching")
-            claim_follow_up = await _handle_claim_follow_up(
-                chat_session_id=chat_session.id,
-                query=chat_request.query,
-                history=history,
-                selected_model=selected_model,
-                index_mode=effective_index_mode,
-            )
+            claim_follow_up = None
+            if conversation_context.kind in {"new_question", "topic_switch"}:
+                claim_follow_up = await _handle_claim_follow_up(
+                    chat_session_id=chat_session.id,
+                    query=chat_request.query,
+                    history=history,
+                    selected_model=selected_model,
+                    index_mode=effective_index_mode,
+                )
             if claim_follow_up is not None:
-                yield _sse("sources", claim_follow_up.sources)
-                yield _sse("final", {"answer": claim_follow_up.answer})
                 try:
                     await _persist_turn(
                         db,
@@ -382,6 +540,8 @@ async def chat_stream(
                         chat_request.query,
                         claim_follow_up.answer,
                         claim_follow_up.sources,
+                        turn_id=turn_id,
+                        conversation_state=conversation_context.state_after,
                     )
                 except Exception:
                     logger.exception("failed to persist claim follow-up session_id=%s", chat_session.id)
@@ -394,6 +554,11 @@ async def chat_stream(
                         },
                     )
                     return
+                yield _sse("sources", _public_sources(claim_follow_up.sources))
+                interaction = _conversation_interaction_payload(conversation_context.state_after)
+                if interaction is not None:
+                    yield _sse("conversation", interaction)
+                yield _sse("final", {"answer": claim_follow_up.answer})
                 yield _sse(
                     "done",
                     {"session_id": chat_session.id, "answer": claim_follow_up.answer, "persisted": True},
@@ -418,10 +583,41 @@ async def chat_stream(
                         "claim_follow_up_status": claim_follow_up.status,
                         "claim_follow_up_item_count": claim_follow_up.item_count,
                         "claim_follow_up_requires_review": claim_follow_up.requires_review,
+                        "turn_id": turn_id,
+                        "conversation_kind": conversation_context.kind,
                         "query_preview": chat_request.query.strip()[:200],
                         "request_id": getattr(getattr(request, "state", None), "request_id", None),
                     },
                 )
+                return
+            if conversation_context.kind == "ambiguous_continuation":
+                answer = _ambiguous_continuation_answer(conversation_context)
+                try:
+                    await _persist_turn(
+                        db,
+                        chat_session.id,
+                        chat_request.query,
+                        answer,
+                        [],
+                        turn_id=turn_id,
+                        conversation_state=conversation_context.state_after,
+                    )
+                except Exception:
+                    logger.exception("failed to persist ambiguous continuation session_id=%s", chat_session.id)
+                    await db.rollback()
+                    yield _sse(
+                        "error",
+                        {
+                            "code": "CHAT_HISTORY_PERSIST_FAILED",
+                            "message": "대화 저장 중 오류가 발생했습니다. 같은 대화에서 다시 시도해 주세요.",
+                        },
+                    )
+                    return
+                interaction = _conversation_interaction_payload(conversation_context.state_after)
+                if interaction is not None:
+                    yield _sse("conversation", interaction)
+                yield _sse("final", {"answer": answer})
+                yield _sse("done", {"session_id": chat_session.id, "answer": answer, "persisted": True})
                 return
             system_prompt = SYSTEM_PROMPT
             resolved_mode = chat_request.mode
@@ -430,14 +626,14 @@ async def chat_stream(
             route_reason = "explicit_mode"
             matched_cues: list[str] = []
             if chat_request.mode == "general":
-                route = resolve_query_route(chat_request.query, effective_filters)
+                route = resolve_query_route(conversation_context.route_query, effective_filters)
                 resolved_mode = route.route
                 effective_filters = route.filters
                 resolved_intent = route.intent
                 route_reason = route.route_reason
                 matched_cues = route.matched_cues
             auto_decision = resolve_auto_rag_params(
-                question=chat_request.query,
+                question=conversation_context.route_query,
                 mode=resolved_mode,
                 filters=effective_filters,
                 requested_top_k=chat_request.top_k,
@@ -467,8 +663,8 @@ async def chat_stream(
                 )
             elif resolved_mode == "formal":
                 formal_kwargs = {}
-                if chat_request.policy_generation:
-                    formal_kwargs["policy_generation"] = chat_request.policy_generation
+                if selected_policy_generation:
+                    formal_kwargs["policy_generation"] = selected_policy_generation
                 chunks, sources, prompt, doc_filter = await prepare_formal_context(
                     pipeline,
                     context_query,
@@ -480,8 +676,9 @@ async def chat_stream(
                 )
             else:
                 retrieval_kwargs = {"auto_params": auto_decision}
-                if chat_request.policy_generation:
-                    retrieval_kwargs["policy_generation"] = chat_request.policy_generation
+                if selected_policy_generation:
+                    retrieval_kwargs["policy_generation"] = selected_policy_generation
+                retrieval_kwargs["conversation_context"] = conversation_context
                 chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug_info = await prepare_retrieved_context(
                     pipeline,
                     context_query,
@@ -490,16 +687,31 @@ async def chat_stream(
                     effective_filters,
                     **retrieval_kwargs,
                 )
-            prompt = _prompt_with_policy_generation(prompt, chat_request.policy_generation)
-            yield _sse("sources", sources)
+            conversation_scope = ConversationQueryScope(
+                route=resolved_mode,
+                intent=resolved_intent,
+                policy_generation=selected_policy_generation,
+                doc_filter=tuple(str(item) for item in (effective_filters.get("doc_filter") or []) if str(item).strip()),
+                index_mode=effective_index_mode,
+            )
+            conversation_state = state_with_pending_clarification(
+                conversation_context.state_after,
+                topic_anchor=conversation_context.route_query,
+                origin_turn_id=turn_id,
+                ontology_manifest_hash=manifest_hash or "",
+                query_scope=conversation_scope,
+                slots=clarification_slots_from_payload(graph_payload),
+            )
+            prompt = _prompt_with_policy_generation(prompt, selected_policy_generation)
+            yield _sse("sources", _public_sources(sources))
             if graph_payload is not None:
                 logger.info(
                     "chat graph payload review_paths=%s exclusions=%s",
                     [path.get("path_type") for path in graph_payload.get("graph_review_paths", [])],
                     [path.get("exclusion_reasons") for path in graph_payload.get("graph_review_paths", [])],
                 )
-                yield _sse("graph", graph_payload)
-            for warning in warnings:
+                yield _sse("graph", _public_graph_payload(graph_payload))
+            for warning in public_warnings(warnings):
                 yield _sse("warning", warning)
 
             if deterministic_answer is not None:
@@ -525,7 +737,9 @@ async def chat_stream(
                     await asyncio.sleep(0)
                 for warning in _llm_safety_warnings(pipeline.llm):
                     warnings.append(warning)
-                    yield _sse("warning", warning)
+                    public_warning = public_warnings([warning])
+                    if public_warning:
+                        yield _sse("warning", public_warning[0])
 
             raw_answer = "".join(tokens).strip()
             if not raw_answer:
@@ -533,11 +747,10 @@ async def chat_stream(
                     "code": "EMPTY_LLM_OUTPUT",
                     "message": "모델 응답 본문이 비어 있어 답변을 생성하지 못했습니다.",
                 }
-                yield _sse("warning", empty_warning)
+                yield _sse("warning", public_warnings([empty_warning])[0])
                 answer = "모델 응답 본문이 비어 있어 답변을 생성하지 못했습니다. 검색 근거를 다시 확인해 주세요."
             else:
                 answer = finalize_answer_for_question(chat_request.query, raw_answer, chunks, graph_payload)
-            yield _sse("final", {"answer": answer})
             try:
                 await _persist_turn(
                     db,
@@ -547,6 +760,8 @@ async def chat_stream(
                     sources,
                     graph_payload=graph_payload,
                     warnings=warnings,
+                    turn_id=turn_id,
+                    conversation_state=conversation_state,
                 )
             except Exception:
                 logger.exception("failed to persist chat session_id=%s", chat_session.id)
@@ -559,6 +774,10 @@ async def chat_stream(
                     },
                 )
                 return
+            interaction = _conversation_interaction_payload(conversation_state)
+            if interaction is not None:
+                yield _sse("conversation", interaction)
+            yield _sse("final", {"answer": answer})
             yield _sse("done", {"session_id": chat_session.id, "answer": answer, "persisted": True})
             await log_audit_event(
                 db,
@@ -594,8 +813,10 @@ async def chat_stream(
                     "index_mode": requested_index_mode,
                     "effective_index_mode": effective_index_mode,
                     "elapsed_ms": round((time.perf_counter() - started) * 1000, 2),
-                    "policy_generation": chat_request.policy_generation,
+                    "policy_generation": selected_policy_generation,
                     "session_id": chat_session.id,
+                    "turn_id": turn_id,
+                    "conversation_kind": conversation_context.kind,
                     "source_count": len(sources),
                     "query_preview": chat_request.query.strip()[:200],
                     "doc_filter": doc_filter,
@@ -932,24 +1153,29 @@ async def _persist_turn(
     query: str,
     answer: str,
     sources: list[dict],
+    *,
+    turn_id: str | None = None,
     graph_payload: dict | None = None,
     warnings: list[dict] | None = None,
+    conversation_state: ConversationState | None = None,
 ) -> None:
-    persisted_sources = list(sources)
-    if graph_payload is not None or warnings:
-        persisted_sources.append(
-            {
-                "__kind": "assistant_meta",
-                "graph_result": graph_payload,
-                "warnings": warnings or [],
-            }
-        )
-    db.add_all(
-        [
-            ChatMessage(session_id=session_id, role="user", content=query, sources=None),
-            ChatMessage(session_id=session_id, role="assistant", content=answer, sources=persisted_sources),
-        ]
+    persisted_turn_id = turn_id or f"turn-{uuid4().hex}"
+    user_message = ChatMessage(session_id=session_id, role="user", content=query, sources=None)
+    db.add(user_message)
+    await db.flush()
+    resolved_state = (
+        finalize_assertion_source(conversation_state, source_message_id=str(user_message.id))
+        if conversation_state is not None
+        else None
     )
+    persisted_sources = _persisted_sources(
+        sources,
+        turn_id=persisted_turn_id,
+        graph_payload=graph_payload,
+        warnings=warnings,
+        conversation_state=resolved_state,
+    )
+    db.add(ChatMessage(session_id=session_id, role="assistant", content=answer, sources=persisted_sources))
     await db.commit()
 
 

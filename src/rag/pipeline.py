@@ -17,12 +17,12 @@ from src.parser.chunker import Chunk
 from src.rag.auto_params import AutoRagParams, apply_adaptive_k_to_hits
 from src.rag.clause_detail_rows import ClauseDetailRowRecord, ClauseDetailRowStore
 from src.rag.evidence import append_evidence_validation_warning, build_strict_evidence_context, detect_retrieval_conflicts
+from src.rag.evidence_assessment import evaluate_registry_evidence
 from src.rag.search_intent import SearchIntentPlan, classify_search_intent, extract_code_terms
 from src.rag.source_grounded_answers import (
     build_absent_code_guard_answer,
     build_generation_deductible_comparison_answer,
     build_hira_fee_answer,
-    build_policy_clause_decision,
 )
 from src.rag.procedure_grade import format_procedure_grade_answer, resolve_procedure_grade
 from src.rag.table_store import TableStore
@@ -1839,10 +1839,13 @@ class RagPipeline:
         self._pair_mapping_store = pair_mapping_store
         self._v1_chunk_lookup = v1_chunk_lookup or {}
         self._source_chunk_lookup = source_chunk_lookup or {}
+        if config.resolve_safe_baseline_runtime_root() is not None:
+            # Safe-baseline mode must not degrade to a raw or damaged graph path.
+            get_default_ontology_registry()
         self.graph_enabled = config.GRAPH_ENABLED and _GRAPH_IMPORT_OK
         if self.graph_enabled:
             try:
-                self.graph_retriever = GraphRetriever(config.GRAPH_INDEX_PATH)
+                self.graph_retriever = GraphRetriever(config.resolve_graph_index_path())
             except Exception:
                 self.graph_retriever = None
                 self.graph_enabled = False
@@ -2326,13 +2329,14 @@ class RagPipeline:
             debug.graph_result = graph_result
 
         chunks = [_hit_to_chunk(hit) for hit in fused_hits]
-        policy_decision = build_policy_clause_decision(
+        evidence_result = evaluate_registry_evidence(
             question,
             chunks,
             policy_generation=policy_generation,
+            registry=get_default_ontology_registry(),
         )
-        if policy_decision is not None:
-            chunks = policy_decision.chunks
+        if evidence_result is not None:
+            chunks = list(evidence_result.selected_chunks)
         clause_detail_rows = self._clause_detail_manifest_rows(
             question,
             _clause_detail_categories(question),
@@ -2341,8 +2345,8 @@ class RagPipeline:
 
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
         deterministic_answer = (
-            policy_decision.answer
-            if policy_decision is not None
+            evidence_result.answer
+            if evidence_result is not None
             else _deterministic_guard_answer(
                 question,
                 chunks,

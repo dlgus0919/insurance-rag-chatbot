@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   hasRenderableGraphPayload,
+  renderAssistantResultHtml,
   renderCanonicalDecisionHtml,
   renderClarificationHtml,
   renderGraphFactsHtml,
@@ -85,4 +86,45 @@ test('renders canonical policy decision with Korean labels and structured follow
   assert.doesNotMatch(canonicalHtml, /claim_condition_review/);
   assert.match(clarificationHtml, /진단명 또는 진단코드/);
   assert.match(clarificationHtml, /의사소견/);
+});
+
+test('renders schema v2 primary text once with one interactive clarification slot', () => {
+  const graph = {
+    schema_version: 2,
+    display: { primary_text: '직접 조항의 적용 조건을 확인해야 합니다.' },
+    evidence_assessment: {
+      status: 'clarification_required',
+      effect: 'review',
+      summary: '직접 조항의 적용 조건을 확인해야 합니다.',
+      authority_note: '표준약관 직접 조항입니다.',
+      conditions: [{ question: '치료 목적인가요?', state: 'unresolved' }],
+      source_evidence: [{ doc_short: '표준약관', page_start: 9 }],
+    },
+    clarification: {
+      pending_slots: [
+        { slot_id: 'slot-a', question: '치료 목적인가요?', allowed_values: ['yes', 'no', 'unknown'] },
+        { slot_id: 'slot-b', question: '추가 자료가 있나요?', allowed_values: ['yes', 'no'] },
+      ],
+    },
+  };
+  const interaction = {
+    request_id: 'clarification-request-a',
+    slots: graph.clarification.pending_slots,
+    query_scope: { route: 'general', doc_filter: [], index_mode: 'v2_only' },
+  };
+
+  const html = renderAssistantResultHtml(
+    '직접 조항의 적용 조건을 확인해야 합니다.',
+    graph,
+    [],
+    [],
+    interaction,
+  );
+
+  assert.equal((html.match(/직접 조항의 적용 조건을 확인해야 합니다\./g) || []).length, 1);
+  assert.equal((html.match(/추가 확인 필요/g) || []).length, 1);
+  assert.match(html, /data-clarification-value="yes"/);
+  assert.match(html, /data-clarification-request-id="clarification-request-a"/);
+  assert.doesNotMatch(html, /추가 자료가 있나요\?/);
+  assert.doesNotMatch(html, /표준약관 직접 조항입니다\./);
 });

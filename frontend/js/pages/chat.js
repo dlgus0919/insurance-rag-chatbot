@@ -143,6 +143,42 @@ function setupChatDelegatedHandlers() {
       return;
     }
 
+    const clarificationChoice = target.closest('[data-clarification-value]');
+    if (clarificationChoice) {
+      const sourceRow = clarificationChoice.closest('.msg-row.bot');
+      const interaction = sourceRow?._clarificationInteraction;
+      const requestId = clarificationChoice.dataset.clarificationRequestId || '';
+      const slotId = clarificationChoice.dataset.clarificationSlotId || '';
+      const value = clarificationChoice.dataset.clarificationValue || '';
+      if (!interaction || interaction.request_id !== requestId || !slotId || !value) {
+        toast('확인 요청을 다시 불러온 뒤 선택해 주세요.', 'warn');
+        return;
+      }
+
+      const answerLabel = clarificationChoice.textContent?.trim() || value;
+      const optimisticRow = appendMsg('user', answerLabel);
+      const scope = interaction.query_scope || {};
+      await streamChat(
+        answerLabel,
+        scope.route === 'claim' ? 'general' : (scope.route || 'general'),
+        Array.isArray(scope.doc_filter) && scope.doc_filter.length
+          ? { doc_filter: scope.doc_filter }
+          : {},
+        '',
+        optimisticRow,
+        {
+          sessionId: interaction.session_id || currentSession || null,
+          clarification: { request_id: requestId, slot_id: slotId, value },
+          filters: Array.isArray(scope.doc_filter) && scope.doc_filter.length
+            ? { doc_filter: scope.doc_filter }
+            : {},
+          indexMode: scope.index_mode || null,
+          policyGeneration: scope.policy_generation || null,
+        },
+      );
+      return;
+    }
+
     const candidateBtn = target.closest('.candidate-btn');
     if (candidateBtn) {
       const code = candidateBtn.dataset.code || '';
@@ -504,27 +540,29 @@ function appendMsg(role, text, sources, track = true, uiPayload = null) {
   const time = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
   const isUser = role === 'user';
   const graphResult = role === 'bot' ? (uiPayload?.graphResult || null) : null;
-  const messageText = role === 'bot' ? stripAnswerEmoji(sanitizeAssistantAnswer(text, graphResult)) : String(text || '');
-  const sourceHtml = renderSourcesHtml(sources);
+  const messageText = role === 'bot' ? getAssistantPrimaryText(text, graphResult) : String(text || '');
   const warnings = role === 'bot' ? (uiPayload?.warnings || []) : [];
   const legacyStructuredNotice = role === 'bot' ? Boolean(uiPayload?.legacyStructuredNotice) : false;
   const claimSnapshot = role === 'bot' ? (uiPayload?.claimSnapshot || null) : null;
+  const clarificationInteraction = role === 'bot' ? (uiPayload?.clarificationInteraction || null) : null;
   const claimSnapshotHtml = claimSnapshot?.result ? renderClaimResultHtml(claimSnapshot.result) : '';
-  const botExtras = role === 'bot'
-    ? renderCanonicalDecisionHtml(graphResult)
-      + renderClarificationHtml(graphResult)
-      + renderWarningHtml(warnings)
-      + renderLegacyStructuredNoticeHtml(legacyStructuredNotice)
-      + renderGraphReviewPathsHtml(graphResult)
-      + renderGraphFactsHtml(graphResult)
-    : '';
-  const bubbleContent = claimSnapshotHtml || `${renderAssistantContent(messageText)}${botExtras}${sourceHtml}`;
+  const bubbleContent = claimSnapshotHtml || (role === 'bot'
+    ? renderAssistantResultHtml(
+      text,
+      graphResult,
+      warnings,
+      sources,
+      clarificationInteraction,
+      legacyStructuredNotice,
+    )
+    : renderAssistantContent(messageText));
   const row = document.createElement('div');
   row.className = `msg-row ${role}`;
   const avatar = isUser
     ? `<div class="msg-av usr">${me ? me.name[0] : 'U'}</div>`
     : `<div class="msg-av bot"><img src="${getBotLogoSrc()}" alt="AI"></div>`;
   row.innerHTML = `${avatar}<div><div class="msg-bubble">${bubbleContent}</div><div class="msg-meta">${time}</div></div>`;
+  if (clarificationInteraction) row._clarificationInteraction = clarificationInteraction;
   container.appendChild(row);
   container.scrollTop = container.scrollHeight;
   if (track) msgs.push({ role, text: messageText, time, sources: sources || [], graphResult, warnings });
@@ -763,9 +801,26 @@ async function calculateClaim(payload, optimisticRow = null) {
   }
 }
 
-async function streamChat(query, mode = 'general', filters = {}, memo = '', optimisticRow = null) {
+function createTurnId() {
+  if (typeof globalThis.crypto?.randomUUID === 'function') {
+    return `turn-${globalThis.crypto.randomUUID().replace(/-/g, '')}`;
+  }
+  return `turn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function requestIdentityFor(optimisticRow, requestIdentity = null) {
+  const identity = requestIdentity || {};
+  if (!identity.turnId) {
+    identity.turnId = optimisticRow?.dataset.turnId || createTurnId();
+    if (optimisticRow) optimisticRow.dataset.turnId = identity.turnId;
+  }
+  return identity;
+}
+
+async function streamChat(query, mode = 'general', filters = {}, memo = '', optimisticRow = null, requestIdentity = null) {
   abortActiveChat();
-  let requestSessionId = currentSession;
+  const identity = requestIdentityFor(optimisticRow, requestIdentity);
+  let requestSessionId = identity.sessionId ?? currentSession;
   const requestRevision = chatThreadState.currentRevision();
   const requestAbort = new AbortController();
   activeAbort = requestAbort;
@@ -782,6 +837,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '', opti
   let graphResult = null;
   let warnings = [];
   let persisted = false;
+  let clarificationInteraction = null;
 
   try {
     const payload = {
@@ -794,11 +850,13 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '', opti
       temperature: getTemperature(),
       auto_params: isAutoParamsEnabled(),
       adaptive_k: isAutoParamsEnabled(),
-      filters,
-      policy_generation: getPolicyGeneration(),
-      index_mode: getIndexMode(),
+      filters: identity.filters || filters,
+      policy_generation: identity.policyGeneration || getPolicyGeneration(),
+      index_mode: identity.indexMode || getIndexMode(),
+      turn_id: identity.turnId,
     };
     if (memo) payload.memo = memo;
+    if (identity.clarification) payload.clarification = identity.clarification;
     const response = await apiFetch('/chat/stream', {
       method: 'POST',
       body: JSON.stringify(payload),
@@ -811,8 +869,13 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '', opti
     bubble = botRow.querySelector('.msg-bubble');
     await readSse(response.body.getReader(), (event) => {
       if (!isCurrentRequest(requestRevision, requestAbort)) return;
+      if (event.event === 'session' && event.data?.session_id) {
+        requestSessionId = event.data.session_id;
+        identity.sessionId = requestSessionId;
+      }
       if (event.event === 'sources') sources = event.data || [];
       if (event.event === 'graph') graphResult = event.data || null;
+      if (event.event === 'conversation') clarificationInteraction = event.data || null;
       if (event.event === 'warning') warnings.push(event.data || {});
       if (event.event === 'token') {
         answer += event.data.t || '';
@@ -828,6 +891,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '', opti
         }
         persisted = true;
         if (!requestSessionId) requestSessionId = event.data.session_id;
+        identity.sessionId = requestSessionId;
         currentSession = event.data.session_id;
         setCurrentSession(currentSession);
         if (event.data.answer) answer = event.data.answer;
@@ -837,14 +901,18 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '', opti
     if (!isCurrentRequest(requestRevision, requestAbort)) return;
     if (!persisted) throw new Error('대화 저장 확인이 완료되지 않았습니다. 다시 시도해 주세요.');
     if (!answer) answer = '응답이 비어 있습니다.';
-    answer = sanitizeAssistantAnswer(answer, graphResult);
-    bubble.innerHTML = renderAssistantContent(answer)
-      + renderCanonicalDecisionHtml(graphResult)
-      + renderClarificationHtml(graphResult)
-      + renderWarningHtml(warnings)
-      + renderGraphReviewPathsHtml(graphResult)
-      + renderGraphFactsHtml(graphResult)
-      + renderSourcesHtml(sources);
+    answer = getAssistantPrimaryText(answer, graphResult);
+    if (clarificationInteraction && requestSessionId) {
+      clarificationInteraction = { ...clarificationInteraction, session_id: requestSessionId };
+    }
+    bubble.innerHTML = renderAssistantResultHtml(
+      answer,
+      graphResult,
+      warnings,
+      sources,
+      clarificationInteraction,
+    );
+    if (clarificationInteraction) botRow._clarificationInteraction = clarificationInteraction;
     msgs.push({
       role: 'bot',
       text: answer,
@@ -861,7 +929,7 @@ async function streamChat(query, mode = 'general', filters = {}, memo = '', opti
       markMessageSendFailed(
         optimisticRow,
         requestSessionId,
-        () => streamChat(query, mode, filters, memo, optimisticRow),
+        () => streamChat(query, mode, filters, memo, optimisticRow, identity),
       );
     }
   } finally {
@@ -896,7 +964,7 @@ function markMessageSendFailed(row, requestSessionId, retry) {
   button.className = 'msg-retry-btn';
   button.textContent = '재시도';
   button.addEventListener('click', async () => {
-    if (String(currentSession || '') !== String(requestSessionId || '')) {
+    if (currentSession && requestSessionId && String(currentSession) !== String(requestSessionId)) {
       toast('원래 대화를 다시 연 뒤 재시도해 주세요.', 'error');
       return;
     }
@@ -1061,7 +1129,71 @@ function formatMoney(value) {
   return numeric.toLocaleString('ko-KR');
 }
 
-function renderClarificationHtml(graphResult) {
+function isSchemaV2EvidencePayload(graphResult) {
+  return Number(graphResult?.schema_version) === 2
+    && Boolean(String(graphResult?.display?.primary_text || '').trim());
+}
+
+function getAssistantPrimaryText(answer, graphResult) {
+  const canonicalText = isSchemaV2EvidencePayload(graphResult)
+    ? String(graphResult.display.primary_text || '').trim()
+    : '';
+  return canonicalText || stripAnswerEmoji(sanitizeAssistantAnswer(answer, graphResult));
+}
+
+function renderEvidenceAssessmentHtml(graphResult) {
+  const assessment = graphResult?.evidence_assessment;
+  if (!assessment || typeof assessment !== 'object') return '';
+
+  const conditions = Array.isArray(assessment.conditions)
+    ? assessment.conditions.map((item) => {
+      if (typeof item === 'string') return item.trim();
+      return String(item?.question || item?.label || '').trim();
+    }).filter(Boolean)
+    : [];
+  const sourceText = (Array.isArray(assessment.source_evidence) ? assessment.source_evidence : [])
+    .map((source) => {
+      const documentName = String(source?.doc_short || '').trim();
+      const page = source?.page_start;
+      if (!documentName) return '';
+      return page === null || page === undefined || page === ''
+        ? documentName
+        : `${documentName} p.${page}`;
+    })
+    .filter(Boolean);
+  if (!conditions.length && !sourceText.length) return '';
+
+  const conditionsHtml = conditions.length
+    ? `<div class="review-line"><strong>확인 조건</strong>: ${conditions.map(escapeHTML).join(', ')}</div>`
+    : '';
+  const sourceHtml = sourceText.length
+    ? `<div class="review-line"><strong>직접 근거</strong>: ${sourceText.map(escapeHTML).join(', ')}</div>`
+    : '';
+  return `<div class="graph-review-paths evidence-assessment"><div class="evidence-title">근거 검토</div>${conditionsHtml}${sourceHtml}</div>`;
+}
+
+function renderClarificationChoiceButtons(slot, interaction) {
+  const requestId = String(interaction?.request_id || '').trim();
+  if (!requestId) return '';
+  const values = Array.isArray(slot.allowed_values) ? slot.allowed_values : [];
+  const labelByValue = { yes: '예', no: '아니오', unknown: '모름' };
+  const buttons = values
+    .filter((value) => Object.prototype.hasOwnProperty.call(labelByValue, value))
+    .map((value) => `<button type="button" class="tag-chip clarification-choice-btn" data-clarification-value="${escapeHTML(value)}" data-clarification-request-id="${escapeHTML(requestId)}" data-clarification-slot-id="${escapeHTML(slot.slot_id)}">${labelByValue[value]}</button>`)
+    .join('');
+  return buttons ? `<div class="clarify-tags clarification-choice-tags">${buttons}</div>` : '';
+}
+
+function renderClarificationHtml(graphResult, interaction = null) {
+  const pendingSlots = Array.isArray(graphResult?.clarification?.pending_slots)
+    ? graphResult.clarification.pending_slots
+    : (Array.isArray(interaction?.slots) ? interaction.slots : []);
+  const pendingSlot = pendingSlots.find((slot) => String(slot?.question || '').trim());
+  if (pendingSlot) {
+    const question = escapeHTML(String(pendingSlot.question).trim());
+    return `<div class="msg-clarifications"><div class="evidence-title">추가 확인 필요</div><div class="clarify-subtitle">${question}</div>${renderClarificationChoiceButtons(pendingSlot, interaction)}</div>`;
+  }
+
   const plan = graphResult?.plan || {};
   const questions = Array.isArray(plan.clarification_questions) ? plan.clarification_questions : [];
   const terms = plan.normalized_terms && typeof plan.normalized_terms === 'object' ? plan.normalized_terms : {};
@@ -1090,6 +1222,28 @@ function renderClarificationHtml(graphResult) {
     : '';
 
   return `<div class="msg-clarifications"><div class="evidence-title">추가 확인 필요</div>${ambiguousHtml}${questionHtml}${evidenceHtml}${termHtml}${candidateHtml}</div>`;
+}
+
+function renderAssistantResultHtml(
+  answer,
+  graphResult,
+  warnings = [],
+  sources = [],
+  clarificationInteraction = null,
+  legacyStructuredNotice = false,
+) {
+  const messageText = getAssistantPrimaryText(answer, graphResult);
+  const decisionHtml = isSchemaV2EvidencePayload(graphResult)
+    ? renderEvidenceAssessmentHtml(graphResult)
+    : renderCanonicalDecisionHtml(graphResult);
+  return renderAssistantContent(messageText)
+    + decisionHtml
+    + renderClarificationHtml(graphResult, clarificationInteraction)
+    + renderWarningHtml(warnings)
+    + renderLegacyStructuredNoticeHtml(legacyStructuredNotice)
+    + renderGraphReviewPathsHtml(graphResult)
+    + renderGraphFactsHtml(graphResult)
+    + renderSourcesHtml(sources);
 }
 
 function renderCanonicalDecisionHtml(graphResult) {
@@ -1136,6 +1290,7 @@ function renderWarningHtml(warnings) {
 
 function hasRenderableGraphPayload(graphResult) {
   if (!graphResult || typeof graphResult !== 'object') return false;
+  if (isSchemaV2EvidencePayload(graphResult)) return true;
   if (graphResult.canonical_decision && typeof graphResult.canonical_decision === 'object') return true;
   if (Array.isArray(graphResult.graph_review_paths) && graphResult.graph_review_paths.length > 0) return true;
   if (Array.isArray(graphResult.facts) && graphResult.facts.length > 0) return true;
@@ -1470,6 +1625,32 @@ function extractAssistantUiPayload(sources) {
     graphResult: meta.graph_result || null,
     warnings: Array.isArray(meta.warnings) ? meta.warnings : [],
     claimSnapshot: meta.claim_snapshot || null,
+    clarificationInteraction: clarificationInteractionFromState(meta.conversation_state),
+  };
+}
+
+function clarificationInteractionFromState(state) {
+  const request = state?.clarification_request;
+  if (!request || request.status !== 'pending') return null;
+  const requestId = String(request.request_id || '').trim();
+  const slots = (Array.isArray(request.slots) ? request.slots : [])
+    .map((slot) => ({
+      slot_id: String(slot?.slot_id || '').trim(),
+      question: String(slot?.question || '').trim(),
+      allowed_values: Array.isArray(slot?.allowed_values) ? slot.allowed_values : [],
+    }))
+    .filter((slot) => slot.slot_id && slot.question && slot.allowed_values.length);
+  if (!requestId || !slots.length) return null;
+  const scope = request.query_scope || {};
+  return {
+    request_id: requestId,
+    slots,
+    query_scope: {
+      route: scope.route || null,
+      policy_generation: scope.policy_generation || null,
+      doc_filter: Array.isArray(scope.doc_filter) ? scope.doc_filter : [],
+      index_mode: scope.index_mode || null,
+    },
   };
 }
 
@@ -1505,6 +1686,7 @@ export {
   getActiveScopeFilters,
   hasRenderableGraphPayload,
   isReasoningSupportedModel,
+  renderAssistantResultHtml,
   renderCanonicalDecisionHtml,
   renderClarificationHtml,
   renderSourcesHtml,

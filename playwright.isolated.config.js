@@ -35,7 +35,7 @@ requireIsolatedWriteTarget();
 
 export default defineConfig({
   testDir: path.join(projectRoot, 'tests', 'e2e'),
-  testMatch: 'isolated-claim-flow.spec.js',
+  testMatch: ['isolated-claim-flow.spec.js', 'chat.spec.js'],
   timeout: 60000,
   fullyParallel: false,
   workers: 1,

@@ -121,8 +121,10 @@ test.describe('채팅 플로우', () => {
 
   test('저장 실패한 사용자 메시지는 원래 대화에서 재시도할 수 있음', async ({ page }) => {
     let calls = 0;
+    const payloads = [];
     await page.route('**/api/chat/stream', async (route) => {
       calls += 1;
+      payloads.push(route.request().postDataJSON());
       const body = calls === 1
         ? [
             'event: final',
@@ -152,8 +154,100 @@ test.describe('채팅 플로우', () => {
 
     await page.click('.msg-retry-btn');
     await expect.poll(() => calls).toBe(2);
+    expect(payloads[1].turn_id).toBe(payloads[0].turn_id);
     await expect(page.locator('.msg-row.user.send-failed')).toHaveCount(0);
     await expect(page.locator('.msg-row.bot').last()).toContainText('재시도 답변');
+  });
+
+  test('확인 선택은 같은 세션의 두 번째 일반 질의로 전달됨', async ({ page }) => {
+    const payloads = [];
+    const clarification = {
+      request_id: 'clarification-e2e-001',
+      slots: [
+        {
+          slot_id: 'treatment-purpose',
+          question: '치료 목적인가요?',
+          allowed_values: ['yes', 'no', 'unknown'],
+        },
+      ],
+      query_scope: {
+        route: 'general',
+        policy_generation: '5th',
+        doc_filter: [],
+        index_mode: 'v2_only',
+      },
+    };
+    const firstGraph = {
+      schema_version: 2,
+      display: { primary_text: '직접 조항의 적용 조건을 먼저 확인해야 합니다.' },
+      evidence_assessment: {
+        status: 'clarification_required',
+        effect: 'review',
+        conditions: [{ question: '치료 목적인가요?', state: 'unresolved' }],
+        source_evidence: [{ doc_short: '표준약관', page_start: 9 }],
+      },
+      clarification: { pending_slots: clarification.slots },
+    };
+    await page.route('**/api/chat/stream', async (route) => {
+      const payload = route.request().postDataJSON();
+      payloads.push(payload);
+      const secondTurn = payloads.length === 2;
+      const body = secondTurn
+        ? [
+            'event: session',
+            'data: {"session_id":"clarification-session","turn_id":"turn-follow-up"}',
+            '',
+            'event: final',
+            'data: {"answer":"선택한 확인 내용을 반영해 계속 검토합니다."}',
+            '',
+            'event: done',
+            'data: {"session_id":"clarification-session","persisted":true}',
+            '',
+            '',
+          ].join('\n')
+        : [
+            'event: session',
+            'data: {"session_id":"clarification-session","turn_id":"turn-first"}',
+            '',
+            'event: graph',
+            `data: ${JSON.stringify(firstGraph)}`,
+            '',
+            'event: conversation',
+            `data: ${JSON.stringify(clarification)}`,
+            '',
+            'event: final',
+            'data: {"answer":"직접 조항의 적용 조건을 먼저 확인해야 합니다."}',
+            '',
+            'event: done',
+            'data: {"session_id":"clarification-session","persisted":true}',
+            '',
+            '',
+          ].join('\n');
+      await route.fulfill({ status: 200, contentType: 'text/event-stream', body });
+    });
+
+    await page.fill('#chat-input', '보상 조건을 검토해 주세요.');
+    await page.keyboard.press('Enter');
+    const choice = page.locator('[data-clarification-value="yes"]');
+    await expect(choice).toBeVisible();
+    await choice.click();
+
+    await expect.poll(() => payloads.length).toBe(2);
+    expect(payloads[0].turn_id).toMatch(/^turn-/);
+    expect(payloads[1]).toMatchObject({
+      query: '예',
+      session_id: 'clarification-session',
+      clarification: {
+        request_id: 'clarification-e2e-001',
+        slot_id: 'treatment-purpose',
+        value: 'yes',
+      },
+      policy_generation: '5th',
+      index_mode: 'v2_only',
+    });
+    expect(payloads[1].turn_id).toMatch(/^turn-/);
+    expect(payloads[1].turn_id).not.toBe(payloads[0].turn_id);
+    await expect(page.locator('.msg-row.bot').last()).toContainText('선택한 확인 내용을 반영해 계속 검토합니다.');
   });
 
   test('GraphDB 구조화 검토 경로와 근거를 렌더링', async ({ page }) => {

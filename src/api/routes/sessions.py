@@ -14,6 +14,7 @@ from src.api.db import get_db
 from src.api.deps import require_permission
 from src.api.exceptions import InvalidFormatException, SessionNotFoundException
 from src.api.models import ChatMessage, ChatSession
+from src.api.public_payloads import assistant_metadata, public_export_metadata, public_sources
 from src.api.rate_limit import limiter
 from src.api.rag_service import normalize_assistant_answer_for_display
 from src.api.schemas.sessions import MessageResponse, SessionCreateRequest, SessionResponse
@@ -103,7 +104,7 @@ async def list_messages(
             session_id=message.session_id,
             role=message.role,
             content=_message_content_for_display(message),
-            sources=message.sources,
+            sources=_public_sources(message.sources or []),
             created_at=message.created_at,
         )
         for message in result.scalars()
@@ -234,14 +235,11 @@ def _format_txt_export(chat_session: ChatSession, messages: list[ChatMessage]) -
 
 
 def _public_sources(sources: list[dict]) -> list[dict]:
-    return [source for source in sources if source.get("__kind") != "assistant_meta"]
+    return public_sources(sources)
 
 
 def _extract_assistant_meta(sources: list[dict]) -> dict:
-    for source in sources:
-        if source.get("__kind") == "assistant_meta":
-            return source
-    return {}
+    return assistant_metadata(sources)
 
 
 def _message_content_for_display(message: ChatMessage) -> str:
@@ -253,12 +251,7 @@ def _message_content_for_display(message: ChatMessage) -> str:
 
 
 def _public_export_meta(sources: list[dict]) -> dict:
-    meta = _extract_assistant_meta(sources)
-    graph_result = meta.get("graph_result") or {}
-    return {
-        "warnings": list(meta.get("warnings") or []),
-        "graph_review_paths": list(graph_result.get("graph_review_paths") or []),
-    }
+    return public_export_metadata(sources)
 
 
 def _format_sources(sources: list[dict]) -> str:

@@ -356,7 +356,31 @@ CHUNK_OVERLAP_CHARS: int = int(os.getenv("CHUNK_OVERLAP_CHARS", "100"))
 
 # GraphDB Configuration
 GRAPH_ENABLED: bool = os.getenv("GRAPH_ENABLED", "false").lower() == "true"
-GRAPH_INDEX_PATH: Path = Path(os.getenv("GRAPH_INDEX_PATH", str(ROOT_DIR / "data" / "index" / "graph" / "insurance_graph.sqlite")))
+SAFE_BASELINE_RUNTIME_ROOT_ENV = "INSURANCE_SAFE_BASELINE_RUNTIME_ROOT"
+
+
+def resolve_safe_baseline_runtime_root() -> Path | None:
+    """Return the explicitly published safe-baseline root, when configured."""
+
+    configured = os.getenv(SAFE_BASELINE_RUNTIME_ROOT_ENV, "").strip()
+    return Path(configured) if configured else None
+
+
+def resolve_graph_index_path() -> Path:
+    """Resolve GraphDB from the same explicit safe root as the ontology registry."""
+
+    runtime_root = resolve_safe_baseline_runtime_root()
+    if runtime_root is not None:
+        return runtime_root / "graph" / "insurance_graph.sqlite"
+    return Path(
+        os.getenv(
+            "GRAPH_INDEX_PATH",
+            str(ROOT_DIR / "data" / "index" / "graph" / "insurance_graph.sqlite"),
+        )
+    )
+
+
+GRAPH_INDEX_PATH: Path = resolve_graph_index_path()
 GRAPH_VIZ_SNAPSHOT_PATH: Path = Path(
     os.getenv(
         "GRAPH_VIZ_SNAPSHOT_PATH",

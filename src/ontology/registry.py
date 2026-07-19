@@ -8,6 +8,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from src.config import SAFE_BASELINE_RUNTIME_ROOT_ENV
+
 from src.graph.normalizer import normalize_name
 from src.ontology.approval_integrity import (
     BaseManifestLock,
@@ -29,6 +31,7 @@ ACTIVE_ONTOLOGY_MANIFEST = ONTOLOGY_DIR / "concepts.active.json"
 BASE_ONTOLOGY_LOCK = ONTOLOGY_DIR / "policies" / "base_manifest.lock.json"
 ACTIVE_ONTOLOGY_PROVENANCE = ONTOLOGY_DIR / "concepts.active.provenance.json"
 DEFAULT_ONTOLOGY_MANIFEST = BASE_ONTOLOGY_MANIFEST
+SAFE_BASELINE_RUNTIME_ROOT_ENV = "INSURANCE_SAFE_BASELINE_RUNTIME_ROOT"
 NODE_TYPE_PREFIXES = {
     "ComplicationConcept": "comp",
     "ClaimCondition": "cond",
@@ -216,6 +219,7 @@ class OntologyRegistry:
             quarantined_concept_ids=(),
         )
         self.provenance_content_hash = ""
+        self._approved_operation_paths: set[str] = set()
         self._load()
         self._validate()
         self._compile_indexes()
@@ -254,6 +258,7 @@ class OntologyRegistry:
             issues=(IntegrityIssue(code=code, concept_id="", path="/integrity", message=message),),
             quarantined_concept_ids=(),
         )
+        self._approved_operation_paths = set()
         self.concepts = []
 
     def _set_concepts(self, payload: dict[str, Any]) -> None:
@@ -266,6 +271,7 @@ class OntologyRegistry:
         ]
 
     def _load_base(self, payload: dict[str, Any]) -> None:
+        self._approved_operation_paths = set()
         try:
             lock = BaseManifestLock.load(self.base_lock_path)
         except (OSError, ValueError, json.JSONDecodeError):
@@ -291,6 +297,7 @@ class OntologyRegistry:
         self._set_concepts(trusted_payload)
 
     def _load_active(self, payload: dict[str, Any]) -> None:
+        self._approved_operation_paths = set()
         try:
             base_payload = self._read_payload(self.base_manifest_path)
             lock = BaseManifestLock.load(self.base_lock_path)
@@ -336,6 +343,36 @@ class OntologyRegistry:
             and str(concept.get("concept_id") or "").strip() not in quarantined
         ]
         self._set_concepts(filtered_payload)
+        if audit.report.state == "valid":
+            self._approved_operation_paths = {
+                operation.path for operation in audit.approved_operations
+            }
+
+    def approved_decision_profile_payloads(self) -> list[dict[str, Any]]:
+        """Return only active decision profiles covered by applied provenance.
+
+        Profiles are policy payloads, not inferred runtime knowledge.  Their
+        explicit operation path must be present in the validated active
+        provenance sidecar before a RAG response may use them.
+        """
+
+        if not self._is_active_manifest or self.integrity_report.state != "valid":
+            return []
+        payloads: list[dict[str, Any]] = []
+        for concept in self.concepts:
+            profiles = concept.properties.get("approved_decision_profiles")
+            if not isinstance(profiles, list):
+                continue
+            for profile in profiles:
+                if not isinstance(profile, dict):
+                    continue
+                operation_path = str(profile.get("approval_operation_path") or "").strip()
+                if not operation_path or operation_path not in self._approved_operation_paths:
+                    continue
+                enriched = dict(profile)
+                enriched["concept_id"] = concept.concept_id
+                payloads.append(enriched)
+        return payloads
 
     @staticmethod
     def _read_payload_like(path: Path) -> dict[str, Any]:
@@ -587,10 +624,23 @@ class OntologyRegistry:
 
 @lru_cache(maxsize=1)
 def get_default_ontology_registry() -> OntologyRegistry:
+    runtime_root = _configured_safe_baseline_runtime_root()
+    if runtime_root is not None:
+        from src.ontology.safe_baseline import load_safe_baseline_runtime_registry
+
+        return load_safe_baseline_runtime_registry(runtime_root)
     return OntologyRegistry(resolve_default_ontology_manifest())
 
 
+def _configured_safe_baseline_runtime_root() -> Path | None:
+    configured = os.getenv(SAFE_BASELINE_RUNTIME_ROOT_ENV, "").strip()
+    return Path(configured) if configured else None
+
+
 def resolve_default_ontology_manifest() -> Path:
+    runtime_root = _configured_safe_baseline_runtime_root()
+    if runtime_root is not None:
+        return runtime_root / "ontology" / "concepts.active.json"
     configured = os.getenv("INSURANCE_ONTOLOGY_MANIFEST", "").strip()
     if configured:
         return Path(configured)

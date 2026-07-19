@@ -1163,8 +1163,12 @@ class GraphRetriever:
 
         return session_assertions, review_paths, source_chunk_ids
 
-    def retrieve(self, question: str) -> GraphRetrievalResult:
-        plan = self.planner.plan(question)
+    def retrieve(
+        self,
+        question: str,
+        clarification: dict[str, list[dict[str, str]]] | None = None,
+    ) -> GraphRetrievalResult:
+        plan = self.planner.plan(question, clarification=clarification)
         result = GraphRetrievalResult(plan=plan)
 
         # fallback 대비: db_path가 없으면 경고만 남기고 리턴
