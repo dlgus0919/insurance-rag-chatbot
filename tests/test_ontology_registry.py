@@ -7,7 +7,13 @@ import pytest
 
 from src.graph.query_planner import GraphQueryPlanner
 from src.ontology.approval_integrity import BaseManifestLock, manifest_content_hash
-from src.ontology.registry import OntologyRegistry, get_default_ontology_registry, resolve_default_ontology_manifest
+from src.ontology.registry import (
+    OntologyConcept,
+    OntologyRegistry,
+    RetrievalExpansionRule,
+    get_default_ontology_registry,
+    resolve_default_ontology_manifest,
+)
 from scripts.check_ontology_sync import check_registry
 
 
@@ -145,6 +151,40 @@ def test_custom_manifest_adds_new_concept_without_planner_code_change(tmp_path) 
     assert "새보험 특례" in plan.conditions
     assert "신규 약관 특례" in registry.expand_retrieval_query("새보험특례로 보상 가능한가요?")
     assert check_registry(registry) == []
+
+
+def test_ontology_concept_preserves_legacy_positional_constructor_layout() -> None:
+    expansion_rule = RetrievalExpansionRule(
+        match_any=("legacy match",),
+        expansion_terms=("legacy expansion",),
+    )
+
+    concept = OntologyConcept(
+        "cond.legacy",
+        "기존 호출 호환",
+        "ClaimCondition",
+        ("기존 별칭",),
+        ("보장 주제",),
+        ("조건",),
+        ("의도",),
+        ("청구 단위",),
+        ("추가 질문",),
+        ("필수 근거",),
+        ("후보 별칭",),
+        ("근거 태그",),
+        (expansion_rule,),
+        ("검색 우선어",),
+        {"source": "legacy-call"},
+    )
+
+    assert concept.candidate_aliases == ("후보 별칭",)
+    assert concept.evidence_tags == ("근거 태그",)
+    assert concept.retrieval_expansion_rules == (expansion_rule,)
+    assert concept.retrieval_lexical_priority_terms == ("검색 우선어",)
+    assert concept.properties == {"source": "legacy-call"}
+    assert concept.planner_required_context == ()
+    assert concept.planner_clarification_fields == ()
+    assert concept.planner_evidence_categories == ()
 
 
 def test_ontology_sync_check_rejects_retrieval_only_concept(tmp_path) -> None:

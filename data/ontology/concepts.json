@@ -1,472 +1,1132 @@
 {
-  "schema_version": "1.0",
-  "version": "2026-07-16-source-grounded-hair-loss-guidance",
-  "description": "Initial runtime ontology manifest for retrieval expansion and Graph Planner lexicon.",
   "concepts": [
     {
-      "concept_id": "cov.indemnity_medical",
+      "aliases": [
+        "실손",
+        "실비",
+        "실손보험",
+        "실손의료보험"
+      ],
       "canonical_name": "실손",
+      "concept_id": "cov.indemnity_medical",
       "node_type": "CoverageItem",
-      "aliases": ["실손", "실비", "실손보험", "실손의료보험"],
-      "planner": {"coverage_topics": ["실손"]}
-    },
-    {
-      "concept_id": "cov.hair_loss",
-      "canonical_name": "탈모",
-      "node_type": "CoverageItem",
-      "aliases": ["탈모", "노화성 탈모", "노화현상으로 인한 탈모", "질병성 탈모", "치료 부작용 탈모", "약물 부작용 탈모"],
       "planner": {
-        "coverage_topics": ["탈모"],
-        "clarification_questions": [
-          "탈모의 원인이 노화현상인지, 의사 진단을 받은 질병성 탈모인지, 치료·약물 부작용인지 확인해 주세요.",
-          "진단명 또는 진단코드, 의사소견, 치료 목적과 급여/비급여 구분을 확인할 수 있는 자료가 있는지 확인해 주세요."
-        ],
-        "required_evidence": ["진단명 또는 진단코드", "의사소견", "치료 목적 확인", "급여/비급여 구분", "업무 또는 일상생활 지장 여부"]
-      },
-      "retrieval": {
-        "lexical_priority_terms": ["노화현상으로 인한 탈모", "탈모"],
-        "expansion_rules": [
-          {
-            "match_any": ["탈모"],
-            "expansion_terms": ["노화현상으로 인한 탈모", "업무 또는 일상생활에 지장이 없는 경우", "비급여 의료비", "의사 진단", "치료 부작용"]
-          }
+        "coverage_topics": [
+          "실손"
         ]
-      },
-      "properties": {
-        "source_grounded_decision": {
-          "question_terms": ["탈모"],
-          "age_related_terms": ["노화현상으로 인한 탈모", "노화성 탈모"],
-          "disease_or_side_effect_terms": ["질병성 탈모", "질병 진단으로 인한 탈모", "치료 부작용 탈모", "약물 부작용 탈모"],
-          "evidence_terms": ["노화현상으로 인한 탈모", "비급여 의료비"],
-          "direct_source_chunk_ids": {
-            "4th": ["약관_ch_002457"],
-            "5th": ["표준약관_ch_005453"]
-          },
-          "conditions": ["노화현상으로 인한 탈모", "업무 또는 일상생활 지장 여부", "급여/비급여 구분"],
-          "conditional_exclusion_summary": "노화현상으로 인한 탈모의 치료로 발생한 비급여 의료비는 업무 또는 일상생활에 지장이 없는 경우 보상하지 않는다는 조항이 확인됩니다.",
-          "general_scope_note": "일반적인 탈모만으로는 보상 여부를 확정할 수 없습니다. 노화현상에 따른 탈모인지와 조항의 적용 조건을 먼저 확인해야 합니다.",
-          "alternative_cause_note": "의사 진단을 받은 질병성 탈모 또는 치료·약물 부작용으로 인한 탈모에는 이 노화현상 조항을 자동 적용할 수 없습니다. 다만 보상 여부도 자동으로 확정하지 않으므로 진단·치료 사실과 약관 요건을 별도로 확인해야 합니다.",
-          "standard_reference_note": "현재 선택된 5세대 검색 근거는 표준약관입니다. 등록된 5세대 자사 상품 약관이 없으므로 표준약관을 참고 기준으로 안내합니다."
-        }
       }
     },
     {
-      "concept_id": "cond.age_related_hair_loss",
-      "canonical_name": "노화현상으로 인한 탈모",
-      "node_type": "ClaimCondition",
-      "aliases": ["노화현상으로 인한 탈모", "노화성 탈모"],
-      "planner": {"conditions": ["노화현상으로 인한 탈모"]}
-    },
-    {
-      "concept_id": "cond.disease_related_hair_loss",
-      "canonical_name": "의사 진단 질병성 탈모",
-      "node_type": "ClaimCondition",
-      "aliases": ["질병성 탈모", "질병 진단으로 인한 탈모"],
-      "planner": {"conditions": ["의사 진단 질병성 탈모"]}
-    },
-    {
-      "concept_id": "cond.treatment_side_effect_hair_loss",
-      "canonical_name": "치료·약물 부작용 탈모",
-      "node_type": "ClaimCondition",
-      "aliases": ["치료 부작용 탈모", "약물 부작용 탈모"],
-      "planner": {"conditions": ["치료·약물 부작용 탈모"]}
-    },
-    {
-      "concept_id": "cond.work_daily_life_impairment",
-      "canonical_name": "업무 또는 일상생활 지장 여부",
-      "node_type": "ClaimCondition",
-      "aliases": ["업무 또는 일상생활에 지장", "일상생활 지장", "업무 지장"],
-      "planner": {"conditions": ["업무 또는 일상생활 지장 여부"]}
-    },
-    {
-      "concept_id": "cond.pay_nonpay_status",
-      "canonical_name": "급여/비급여 구분",
-      "node_type": "ClaimCondition",
-      "aliases": ["급여/비급여", "비급여 의료비"],
-      "planner": {"conditions": ["급여/비급여 구분"]}
-    },
-    {
-      "concept_id": "cov.rider",
+      "aliases": [
+        "특약"
+      ],
       "canonical_name": "특약",
+      "concept_id": "cov.rider",
       "node_type": "CoverageItem",
-      "aliases": ["특약"],
-      "planner": {"coverage_topics": ["특약"]}
-    },
-    {
-      "concept_id": "cov.manual_therapy",
-      "canonical_name": "도수치료",
-      "node_type": "CoverageItem",
-      "aliases": ["도수치료", "도수"],
-      "planner": {"coverage_topics": ["도수치료"]}
-    },
-    {
-      "concept_id": "cov.shockwave_therapy",
-      "canonical_name": "체외충격파치료",
-      "node_type": "CoverageItem",
-      "aliases": ["체외충격파치료", "체외충격파"],
-      "candidate_aliases": ["체충파", "체외충격", "충격파치료"],
-      "planner": {"coverage_topics": ["체외충격파치료"]}
-    },
-    {
-      "concept_id": "cov.prolotherapy",
-      "canonical_name": "증식치료",
-      "node_type": "CoverageItem",
-      "aliases": ["증식치료"],
-      "planner": {"coverage_topics": ["증식치료"]}
-    },
-    {
-      "concept_id": "cov.nonpay_injection",
-      "canonical_name": "비급여 주사료",
-      "node_type": "CoverageItem",
-      "aliases": ["비급여 주사료", "비급여 주사", "주사료", "영양제", "영양주사"],
-      "planner": {"coverage_topics": ["비급여 주사료"]}
-    },
-    {
-      "concept_id": "cov.mri",
-      "canonical_name": "MRI",
-      "node_type": "CoverageItem",
-      "aliases": ["MRI"],
-      "candidate_aliases": ["엠알아이", "엠알 아이"],
-      "planner": {"coverage_topics": ["MRI"]}
-    },
-    {
-      "concept_id": "cov.mra",
-      "canonical_name": "MRA",
-      "node_type": "CoverageItem",
-      "aliases": ["MRA"],
-      "candidate_aliases": ["엠알에이", "엠알 에이"],
-      "planner": {"coverage_topics": ["MRA"]}
-    },
-    {
-      "concept_id": "cov.magnetic_resonance",
-      "canonical_name": "자기공명영상진단",
-      "node_type": "CoverageItem",
-      "aliases": ["자기공명영상진단", "자기공명영상"],
-      "candidate_aliases": ["자기공명", "자기 공명"],
-      "planner": {"coverage_topics": ["자기공명영상진단"]}
-    },
-    {
-      "concept_id": "cov.three_major_nonpay",
-      "canonical_name": "3대비급여",
-      "node_type": "CoverageItem",
-      "aliases": ["3대비급여", "3대 비급여", "세대비급여"],
-      "planner": {"coverage_topics": ["3대비급여"]},
-      "retrieval": {
-        "expansion_rules": [
-          {
-            "normalized_contains_any": ["3대비급여"],
-            "context_any": ["항목", "무엇", "해당"],
-            "expansion_terms": ["도수치료", "체외충격파치료", "증식치료", "주사료", "자기공명영상진단", "MRI", "MRA", "용어 정의"]
-          }
-        ]
-      }
-    },
-    {
-      "concept_id": "cov.superior_room_difference",
-      "canonical_name": "상급병실료 차액",
-      "node_type": "CoverageItem",
-      "aliases": ["상급병실료 차액", "상급병실", "병실료 차액"],
-      "candidate_aliases": ["병실차액", "상급병실차액", "상급 병실 차액"],
-      "planner": {"coverage_topics": ["상급병실료 차액"], "conditions": ["상급병실료 차액"]}
-    },
-    {
-      "concept_id": "cov.health_insurance_not_applied",
-      "canonical_name": "건강보험 미적용",
-      "node_type": "CoverageItem",
-      "aliases": ["건강보험 미적용", "건보 미적용", "급여 미적용"],
-      "candidate_aliases": ["건보 안됨", "건보 제외", "건강보험 안됨"],
-      "planner": {"coverage_topics": ["건강보험 미적용"], "conditions": ["건강보험 미적용"]}
-    },
-    {
-      "concept_id": "cov.auto_insurance",
-      "canonical_name": "자동차보험",
-      "node_type": "CoverageItem",
-      "aliases": ["자동차보험", "자동차 보험", "교통사고", "차 사고"],
-      "planner": {"coverage_topics": ["자동차보험"]},
-      "retrieval": {
-        "expansion_rules": [
-          {
-            "match_any": ["교통사고", "자동차사고", "차량사고", "차 사고"],
-            "expansion_terms": ["상해급여", "상해비급여", "보장개시일", "자동차보험", "산재보험", "본인부담의료비", "보험금을 지급하지 않는 사유"]
-          }
-        ]
-      }
-    },
-    {
-      "concept_id": "cov.workers_compensation",
-      "canonical_name": "산재보험",
-      "node_type": "CoverageItem",
-      "aliases": ["산재보험", "산재", "산업재해"],
-      "planner": {"coverage_topics": ["산재보험"]}
-    },
-    {
-      "concept_id": "cov.health_check",
-      "canonical_name": "건강검진",
-      "node_type": "CoverageItem",
-      "aliases": ["건강검진", "검진 목적", "단순 건강검진"],
-      "planner": {"coverage_topics": ["건강검진"], "conditions": ["예방 목적"]}
-    },
-    {
-      "concept_id": "cond.cosmetic_purpose",
-      "canonical_name": "미용 목적",
-      "node_type": "ClaimCondition",
-      "aliases": ["미용 목적", "미용", "성형 목적"],
-      "planner": {"coverage_topics": ["미용 목적"], "conditions": ["미용 목적"]}
-    },
-    {
-      "concept_id": "cond.treatment_purpose",
-      "canonical_name": "치료 목적",
-      "node_type": "ClaimCondition",
-      "aliases": ["치료 목적", "치료목적"],
-      "planner": {"conditions": ["치료 목적"]}
-    },
-    {
-      "concept_id": "cond.congenital",
-      "canonical_name": "선천성",
-      "node_type": "ClaimCondition",
-      "aliases": ["선천성"],
-      "planner": {"conditions": ["선천성"]}
-    },
-    {
-      "concept_id": "cond.preexisting",
-      "canonical_name": "기왕증",
-      "node_type": "ClaimCondition",
-      "aliases": ["기왕증", "기왕력"],
-      "planner": {"conditions": ["기왕증"]}
-    },
-    {
-      "concept_id": "cond.preventive_purpose",
-      "canonical_name": "예방 목적",
-      "node_type": "ClaimCondition",
-      "aliases": ["예방 목적", "예방목적", "검진 목적", "건강검진", "이상 소견 없이"],
-      "planner": {"conditions": ["예방 목적"]}
-    },
-    {
-      "concept_id": "cond.complication",
-      "canonical_name": "합병증",
-      "node_type": "ComplicationConcept",
-      "aliases": ["합병증"],
-      "planner": {"conditions": ["합병증"], "intents": ["complication_policy_lookup"]}
-    },
-    {
-      "concept_id": "cond.complication_treatment",
-      "canonical_name": "합병증 치료",
-      "node_type": "ComplicationConcept",
-      "aliases": ["합병증 치료"],
-      "planner": {"coverage_topics": ["합병증 치료"], "conditions": ["합병증"], "intents": ["complication_policy_lookup"]}
-    },
-    {
-      "concept_id": "cond.side_effect",
-      "canonical_name": "부작용",
-      "node_type": "ComplicationConcept",
-      "aliases": ["부작용"],
-      "planner": {"conditions": ["부작용"], "intents": ["complication_policy_lookup"]}
-    },
-    {
-      "concept_id": "cond.sequela",
-      "canonical_name": "후유증",
-      "node_type": "ComplicationConcept",
-      "aliases": ["후유증"],
-      "planner": {"conditions": ["후유증"], "intents": ["complication_policy_lookup"]}
-    },
-    {
-      "concept_id": "cond.inflammation",
-      "canonical_name": "염증",
-      "node_type": "ClaimCondition",
-      "aliases": ["염증"],
-      "planner": {"conditions": ["염증"]}
-    },
-    {
-      "concept_id": "cond.other_insurance_payment",
-      "canonical_name": "타 보험 보상",
-      "node_type": "ClaimCondition",
-      "aliases": ["자동차보험", "산재보험", "이미 보상", "타 보험", "다른 보험"],
-      "planner": {"conditions": ["타 보험 보상"]}
-    },
-    {
-      "concept_id": "cond.motorcycle_riding",
-      "canonical_name": "이륜자동차 운전/탑승",
-      "node_type": "ClaimCondition",
-      "aliases": ["이륜자동차", "오토바이", "원동기", "스쿠터"],
       "planner": {
-        "conditions": ["이륜자동차 운전/탑승"],
-        "intents": ["claim_condition_lookup", "session_claim_path_review"]
+        "coverage_topics": [
+          "특약"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "도수치료",
+        "도수"
+      ],
+      "canonical_name": "도수치료",
+      "concept_id": "cov.manual_therapy",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "도수치료"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "체외충격파치료",
+        "체외충격파"
+      ],
+      "candidate_aliases": [
+        "체충파",
+        "체외충격",
+        "충격파치료"
+      ],
+      "canonical_name": "체외충격파치료",
+      "concept_id": "cov.shockwave_therapy",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "체외충격파치료"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "증식치료"
+      ],
+      "canonical_name": "증식치료",
+      "concept_id": "cov.prolotherapy",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "증식치료"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "비급여 주사료",
+        "비급여 주사",
+        "주사료",
+        "영양제",
+        "영양주사"
+      ],
+      "canonical_name": "비급여 주사료",
+      "concept_id": "cov.nonpay_injection",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "비급여 주사료"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "MRI"
+      ],
+      "candidate_aliases": [
+        "엠알아이",
+        "엠알 아이"
+      ],
+      "canonical_name": "MRI",
+      "concept_id": "cov.mri",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "MRI"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "MRA"
+      ],
+      "candidate_aliases": [
+        "엠알에이",
+        "엠알 에이"
+      ],
+      "canonical_name": "MRA",
+      "concept_id": "cov.mra",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "MRA"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "자기공명영상진단",
+        "자기공명영상"
+      ],
+      "candidate_aliases": [
+        "자기공명",
+        "자기 공명"
+      ],
+      "canonical_name": "자기공명영상진단",
+      "concept_id": "cov.magnetic_resonance",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "자기공명영상진단"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "3대비급여",
+        "3대 비급여",
+        "세대비급여"
+      ],
+      "canonical_name": "3대비급여",
+      "concept_id": "cov.three_major_nonpay",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "3대비급여"
+        ]
       },
       "retrieval": {
         "expansion_rules": [
           {
-            "match_any": ["이륜자동차", "오토바이", "원동기", "스쿠터"],
-            "expansion_terms": ["이륜자동차 부담보 특별약관", "보험금을 지급하지 않는 사유", "상해", "탑승", "운전", "알릴 의무", "통지"]
+            "context_any": [
+              "항목",
+              "무엇",
+              "해당"
+            ],
+            "expansion_terms": [
+              "도수치료",
+              "체외충격파치료",
+              "증식치료",
+              "주사료",
+              "자기공명영상진단",
+              "MRI",
+              "MRA",
+              "용어 정의"
+            ],
+            "normalized_contains_any": [
+              "3대비급여"
+            ]
           }
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "상급병실료 차액",
+        "상급병실",
+        "병실료 차액"
+      ],
+      "candidate_aliases": [
+        "병실차액",
+        "상급병실차액",
+        "상급 병실 차액"
+      ],
+      "canonical_name": "상급병실료 차액",
+      "concept_id": "cov.superior_room_difference",
+      "node_type": "CoverageItem",
+      "planner": {
+        "conditions": [
+          "상급병실료 차액"
+        ],
+        "coverage_topics": [
+          "상급병실료 차액"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "건강보험 미적용",
+        "건보 미적용",
+        "급여 미적용"
+      ],
+      "candidate_aliases": [
+        "건보 안됨",
+        "건보 제외",
+        "건강보험 안됨"
+      ],
+      "canonical_name": "건강보험 미적용",
+      "concept_id": "cov.health_insurance_not_applied",
+      "node_type": "CoverageItem",
+      "planner": {
+        "conditions": [
+          "건강보험 미적용"
+        ],
+        "coverage_topics": [
+          "건강보험 미적용"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "자동차보험",
+        "자동차 보험",
+        "교통사고",
+        "차 사고"
+      ],
+      "canonical_name": "자동차보험",
+      "concept_id": "cov.auto_insurance",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "자동차보험"
+        ]
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "expansion_terms": [
+              "상해급여",
+              "상해비급여",
+              "보장개시일",
+              "자동차보험",
+              "산재보험",
+              "본인부담의료비",
+              "보험금을 지급하지 않는 사유"
+            ],
+            "match_any": [
+              "교통사고",
+              "자동차사고",
+              "차량사고",
+              "차 사고"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "산재보험",
+        "산재",
+        "산업재해"
+      ],
+      "canonical_name": "산재보험",
+      "concept_id": "cov.workers_compensation",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "산재보험"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "건강검진",
+        "검진 목적",
+        "단순 건강검진"
+      ],
+      "canonical_name": "건강검진",
+      "concept_id": "cov.health_check",
+      "node_type": "CoverageItem",
+      "planner": {
+        "conditions": [
+          "예방 목적"
+        ],
+        "coverage_topics": [
+          "건강검진"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "미용 목적",
+        "미용",
+        "성형 목적"
+      ],
+      "canonical_name": "미용 목적",
+      "concept_id": "cond.cosmetic_purpose",
+      "node_type": "ClaimCondition",
+      "planner": {
+        "conditions": [
+          "미용 목적"
+        ],
+        "coverage_topics": [
+          "미용 목적"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "치료 목적",
+        "치료목적"
+      ],
+      "canonical_name": "치료 목적",
+      "concept_id": "cond.treatment_purpose",
+      "node_type": "ClaimCondition",
+      "planner": {
+        "conditions": [
+          "치료 목적"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "선천성"
+      ],
+      "canonical_name": "선천성",
+      "concept_id": "cond.congenital",
+      "node_type": "ClaimCondition",
+      "planner": {
+        "conditions": [
+          "선천성"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "기왕증",
+        "기왕력"
+      ],
+      "canonical_name": "기왕증",
+      "concept_id": "cond.preexisting",
+      "node_type": "ClaimCondition",
+      "planner": {
+        "conditions": [
+          "기왕증"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "예방 목적",
+        "예방목적",
+        "검진 목적",
+        "건강검진",
+        "이상 소견 없이"
+      ],
+      "canonical_name": "예방 목적",
+      "concept_id": "cond.preventive_purpose",
+      "node_type": "ClaimCondition",
+      "planner": {
+        "conditions": [
+          "예방 목적"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "합병증"
+      ],
+      "canonical_name": "합병증",
+      "concept_id": "cond.complication",
+      "node_type": "ComplicationConcept",
+      "planner": {
+        "conditions": [
+          "합병증"
+        ],
+        "intents": [
+          "complication_policy_lookup"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "합병증 치료"
+      ],
+      "canonical_name": "합병증 치료",
+      "concept_id": "cond.complication_treatment",
+      "node_type": "ComplicationConcept",
+      "planner": {
+        "conditions": [
+          "합병증"
+        ],
+        "coverage_topics": [
+          "합병증 치료"
+        ],
+        "intents": [
+          "complication_policy_lookup"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "부작용"
+      ],
+      "canonical_name": "부작용",
+      "concept_id": "cond.side_effect",
+      "node_type": "ComplicationConcept",
+      "planner": {
+        "conditions": [
+          "부작용"
+        ],
+        "intents": [
+          "complication_policy_lookup"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "후유증"
+      ],
+      "canonical_name": "후유증",
+      "concept_id": "cond.sequela",
+      "node_type": "ComplicationConcept",
+      "planner": {
+        "conditions": [
+          "후유증"
+        ],
+        "intents": [
+          "complication_policy_lookup"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "염증"
+      ],
+      "canonical_name": "염증",
+      "concept_id": "cond.inflammation",
+      "node_type": "ClaimCondition",
+      "planner": {
+        "conditions": [
+          "염증"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "자동차보험",
+        "산재보험",
+        "이미 보상",
+        "타 보험",
+        "다른 보험"
+      ],
+      "canonical_name": "타 보험 보상",
+      "concept_id": "cond.other_insurance_payment",
+      "node_type": "ClaimCondition",
+      "planner": {
+        "conditions": [
+          "타 보험 보상"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "이륜자동차",
+        "오토바이",
+        "원동기",
+        "스쿠터"
+      ],
+      "canonical_name": "이륜자동차 운전/탑승",
+      "concept_id": "cond.motorcycle_riding",
+      "node_type": "ClaimCondition",
+      "planner": {
+        "conditions": [
+          "이륜자동차 운전/탑승"
+        ],
+        "intents": [
+          "claim_condition_lookup",
+          "session_claim_path_review"
         ]
       },
       "properties": {
-        "review_actions": ["고지/통지의무 확인", "특약 가입 여부 확인"]
-      }
-    },
-    {
-      "concept_id": "cond.drunk_injury",
-      "canonical_name": "음주 후 상해",
-      "node_type": "ClaimCondition",
-      "aliases": ["음주", "만취", "술"],
-      "planner": {"conditions": ["음주 후 상해"]},
+        "review_actions": [
+          "고지/통지의무 확인",
+          "특약 가입 여부 확인"
+        ]
+      },
       "retrieval": {
         "expansion_rules": [
           {
-            "match_any": ["음주", "만취", "술"],
-            "context_any": ["사고", "상해", "다쳤", "부상"],
-            "expansion_terms": ["보험금을 지급하지 않는 사유", "면책", "고의", "중대한 과실", "상해"]
+            "expansion_terms": [
+              "이륜자동차 부담보 특별약관",
+              "보험금을 지급하지 않는 사유",
+              "상해",
+              "탑승",
+              "운전",
+              "알릴 의무",
+              "통지"
+            ],
+            "match_any": [
+              "이륜자동차",
+              "오토바이",
+              "원동기",
+              "스쿠터"
+            ]
           }
         ]
       }
     },
     {
-      "concept_id": "cond.insufficient_evidence",
+      "aliases": [
+        "음주",
+        "만취",
+        "술"
+      ],
+      "canonical_name": "음주 후 상해",
+      "concept_id": "cond.drunk_injury",
+      "node_type": "ClaimCondition",
+      "planner": {
+        "conditions": [
+          "음주 후 상해"
+        ]
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "context_any": [
+              "사고",
+              "상해",
+              "다쳤",
+              "부상"
+            ],
+            "expansion_terms": [
+              "보험금을 지급하지 않는 사유",
+              "면책",
+              "고의",
+              "중대한 과실",
+              "상해"
+            ],
+            "match_any": [
+              "음주",
+              "만취",
+              "술"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "서류 없이",
+        "세부내역서 없이",
+        "영수증만",
+        "증빙 부족"
+      ],
       "canonical_name": "증빙 부족",
+      "concept_id": "cond.insufficient_evidence",
       "node_type": "ClaimCondition",
-      "aliases": ["서류 없이", "세부내역서 없이", "영수증만", "증빙 부족"],
-      "planner": {"conditions": ["증빙 부족"]}
+      "planner": {
+        "conditions": [
+          "증빙 부족"
+        ]
+      }
     },
     {
-      "concept_id": "cond.outpatient",
+      "aliases": [
+        "통원"
+      ],
       "canonical_name": "통원",
+      "concept_id": "cond.outpatient",
       "node_type": "VisitContext",
-      "aliases": ["통원"],
-      "planner": {"conditions": ["통원"]}
+      "planner": {
+        "conditions": [
+          "통원"
+        ]
+      }
     },
     {
-      "concept_id": "cond.hospitalization",
+      "aliases": [
+        "입원"
+      ],
       "canonical_name": "입원",
+      "concept_id": "cond.hospitalization",
       "node_type": "VisitContext",
-      "aliases": ["입원"],
-      "planner": {"conditions": ["입원"]}
+      "planner": {
+        "conditions": [
+          "입원"
+        ]
+      }
     },
     {
-      "concept_id": "cond.additional_treatment",
+      "aliases": [
+        "추가 치료",
+        "추후 치료"
+      ],
       "canonical_name": "추가 치료",
+      "concept_id": "cond.additional_treatment",
       "node_type": "ClaimCondition",
-      "aliases": ["추가 치료", "추후 치료"],
-      "planner": {"conditions": ["추가 치료"]}
+      "planner": {
+        "conditions": [
+          "추가 치료"
+        ]
+      }
     },
     {
-      "concept_id": "cond.rider_membership_check",
+      "aliases": [
+        "특약 가입 여부",
+        "특약 가입",
+        "특약이 있는지"
+      ],
+      "candidate_aliases": [
+        "특약 확인",
+        "특약 여부",
+        "가입특약"
+      ],
       "canonical_name": "특약 가입 여부 확인",
+      "concept_id": "cond.rider_membership_check",
       "node_type": "ClaimCondition",
-      "aliases": ["특약 가입 여부", "특약 가입", "특약이 있는지"],
-      "candidate_aliases": ["특약 확인", "특약 여부", "가입특약"],
-      "planner": {"conditions": ["특약 가입 여부 확인"]}
+      "planner": {
+        "conditions": [
+          "특약 가입 여부 확인"
+        ]
+      }
     },
     {
-      "concept_id": "cond.detail_statement_check",
+      "aliases": [
+        "세부내역서"
+      ],
       "canonical_name": "세부내역서 확인 필요",
+      "concept_id": "cond.detail_statement_check",
       "node_type": "ClaimCondition",
-      "aliases": ["세부내역서"],
-      "planner": {"conditions": ["세부내역서 확인 필요"]}
+      "planner": {
+        "conditions": [
+          "세부내역서 확인 필요"
+        ]
+      }
     },
     {
-      "concept_id": "cond.diagnosis_certificate_check",
+      "aliases": [
+        "진단서"
+      ],
       "canonical_name": "진단서 확인 필요",
+      "concept_id": "cond.diagnosis_certificate_check",
       "node_type": "ClaimCondition",
-      "aliases": ["진단서"],
-      "planner": {"conditions": ["진단서 확인 필요"]}
+      "planner": {
+        "conditions": [
+          "진단서 확인 필요"
+        ]
+      }
     },
     {
-      "concept_id": "cond.diagnosis_code_check",
+      "aliases": [
+        "진단코드"
+      ],
       "canonical_name": "진단코드 일치 확인",
+      "concept_id": "cond.diagnosis_code_check",
       "node_type": "ClaimCondition",
-      "aliases": ["진단코드"],
-      "planner": {"conditions": ["진단코드 일치 확인"]}
+      "planner": {
+        "conditions": [
+          "진단코드 일치 확인"
+        ]
+      }
     },
     {
-      "concept_id": "cond.treatment_purpose_check",
+      "aliases": [
+        "치료 목적",
+        "목적"
+      ],
       "canonical_name": "치료 목적 확인",
+      "concept_id": "cond.treatment_purpose_check",
       "node_type": "ClaimCondition",
-      "aliases": ["치료 목적", "목적"],
-      "planner": {"conditions": ["치료 목적 확인"]}
+      "planner": {
+        "conditions": [
+          "치료 목적 확인"
+        ]
+      }
     },
     {
-      "concept_id": "evidence.receipt",
+      "aliases": [
+        "영수증"
+      ],
       "canonical_name": "영수증",
-      "node_type": "EvidenceRequirement",
-      "aliases": ["영수증"],
-      "evidence_tags": ["영수증"]
+      "concept_id": "evidence.receipt",
+      "evidence_tags": [
+        "영수증"
+      ],
+      "node_type": "EvidenceRequirement"
     },
     {
-      "concept_id": "evidence.detail_statement",
+      "aliases": [
+        "세부내역서"
+      ],
       "canonical_name": "세부내역서",
-      "node_type": "EvidenceRequirement",
-      "aliases": ["세부내역서"],
-      "evidence_tags": ["세부내역서"]
+      "concept_id": "evidence.detail_statement",
+      "evidence_tags": [
+        "세부내역서"
+      ],
+      "node_type": "EvidenceRequirement"
     },
     {
-      "concept_id": "evidence.diagnosis_certificate",
+      "aliases": [
+        "진단서"
+      ],
       "canonical_name": "진단서",
-      "node_type": "EvidenceRequirement",
-      "aliases": ["진단서"],
-      "evidence_tags": ["진단서"]
+      "concept_id": "evidence.diagnosis_certificate",
+      "evidence_tags": [
+        "진단서"
+      ],
+      "node_type": "EvidenceRequirement"
     },
     {
-      "concept_id": "evidence.surgery_certificate",
+      "aliases": [
+        "수술확인서"
+      ],
       "canonical_name": "수술확인서",
-      "node_type": "EvidenceRequirement",
-      "aliases": ["수술확인서"],
-      "evidence_tags": ["수술확인서"]
+      "concept_id": "evidence.surgery_certificate",
+      "evidence_tags": [
+        "수술확인서"
+      ],
+      "node_type": "EvidenceRequirement"
     },
     {
-      "concept_id": "evidence.reading_result",
+      "aliases": [
+        "판독결과지"
+      ],
       "canonical_name": "판독결과지",
-      "node_type": "EvidenceRequirement",
-      "aliases": ["판독결과지"],
-      "evidence_tags": ["판독결과지"]
+      "concept_id": "evidence.reading_result",
+      "evidence_tags": [
+        "판독결과지"
+      ],
+      "node_type": "EvidenceRequirement"
     },
     {
-      "concept_id": "evidence.test_result",
+      "aliases": [
+        "검사결과지"
+      ],
       "canonical_name": "검사결과지",
-      "node_type": "EvidenceRequirement",
-      "aliases": ["검사결과지"],
-      "evidence_tags": ["검사결과지"]
+      "concept_id": "evidence.test_result",
+      "evidence_tags": [
+        "검사결과지"
+      ],
+      "node_type": "EvidenceRequirement"
     },
     {
-      "concept_id": "claim_unit.one_disease",
+      "aliases": [
+        "하나의 질병",
+        "같은 질병",
+        "동일 질병",
+        "동일한 질병"
+      ],
       "canonical_name": "하나의 질병",
+      "concept_id": "claim_unit.one_disease",
       "node_type": "ClaimUnitConcept",
-      "aliases": ["하나의 질병", "같은 질병", "동일 질병", "동일한 질병"],
-      "planner": {"claim_unit_terms": ["하나의 질병"]}
+      "planner": {
+        "claim_unit_terms": [
+          "하나의 질병"
+        ]
+      }
     },
     {
-      "concept_id": "claim_unit.one_injury",
+      "aliases": [
+        "하나의 상해",
+        "같은 상해",
+        "동일 상해",
+        "동일한 상해"
+      ],
       "canonical_name": "하나의 상해",
+      "concept_id": "claim_unit.one_injury",
       "node_type": "ClaimUnitConcept",
-      "aliases": ["하나의 상해", "같은 상해", "동일 상해", "동일한 상해"],
-      "planner": {"claim_unit_terms": ["하나의 상해"]}
+      "planner": {
+        "claim_unit_terms": [
+          "하나의 상해"
+        ]
+      }
     },
     {
-      "concept_id": "claim_unit.one_outpatient_visit",
+      "aliases": [
+        "하나의 통원",
+        "통원 1회",
+        "하루에 같은 치료"
+      ],
       "canonical_name": "하나의 통원",
+      "concept_id": "claim_unit.one_outpatient_visit",
       "node_type": "ClaimUnitConcept",
-      "aliases": ["하나의 통원", "통원 1회", "하루에 같은 치료"],
-      "planner": {"claim_unit_terms": ["하나의 통원"]}
+      "planner": {
+        "claim_unit_terms": [
+          "하나의 통원"
+        ]
+      }
     },
     {
-      "concept_id": "claim_unit.one_admission",
+      "aliases": [
+        "하나의 입원",
+        "1회 입원",
+        "계속 입원"
+      ],
       "canonical_name": "하나의 입원",
+      "concept_id": "claim_unit.one_admission",
       "node_type": "ClaimUnitConcept",
-      "aliases": ["하나의 입원", "1회 입원", "계속 입원"],
-      "planner": {"claim_unit_terms": ["하나의 입원"]}
+      "planner": {
+        "claim_unit_terms": [
+          "하나의 입원"
+        ]
+      }
     },
     {
-      "concept_id": "claim_unit.one_disease_surgery",
+      "aliases": [
+        "하나의 질병수술",
+        "질병수술비 한 번",
+        "질병수술비만"
+      ],
       "canonical_name": "하나의 질병수술",
+      "concept_id": "claim_unit.one_disease_surgery",
       "node_type": "ClaimUnitConcept",
-      "aliases": ["하나의 질병수술", "질병수술비 한 번", "질병수술비만"],
-      "planner": {"claim_unit_terms": ["하나의 질병수술"]}
+      "planner": {
+        "claim_unit_terms": [
+          "하나의 질병수술"
+        ]
+      }
     },
     {
-      "concept_id": "claim_unit.disability_limit",
+      "aliases": [
+        "후유장해보험금 한도",
+        "후유장해보험가입금액을 한도"
+      ],
       "canonical_name": "하나의 후유장해 지급한도",
+      "concept_id": "claim_unit.disability_limit",
       "node_type": "ClaimUnitConcept",
-      "aliases": ["후유장해보험금 한도", "후유장해보험가입금액을 한도"],
-      "planner": {"claim_unit_terms": ["하나의 후유장해 지급한도"]}
+      "planner": {
+        "claim_unit_terms": [
+          "하나의 후유장해 지급한도"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "보험금 지급기일",
+        "보험금 지급 지연 사유",
+        "지급예정일"
+      ],
+      "canonical_name": "보험금 지급 절차 및 지연 사유",
+      "concept_id": "cond.claim_payment_timeline",
+      "evidence_tags": [
+        "claim_payment_process",
+        "source_grounded"
+      ],
+      "node_type": "ClaimCondition",
+      "planner": {
+        "clarification_fields": [
+          "policy_source",
+          "delay_notice_status"
+        ],
+        "required_context": [
+          "policy_source",
+          "claim_received_at",
+          "delay_notice_status"
+        ]
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "expansion_terms": [
+              "보험금 지급기일",
+              "보험금 지급 지연 사유",
+              "지급예정일"
+            ],
+            "match_any": [
+              "보험금 지급 절차 및 지연 사유",
+              "보험금 지급기일",
+              "보험금 지급 지연 사유",
+              "지급예정일"
+            ]
+          }
+        ],
+        "lexical_priority_terms": [
+          "보험금 지급기일",
+          "보험금 지급 지연 사유",
+          "지급예정일"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "치과 치료",
+        "치과 질환",
+        "치아 질환"
+      ],
+      "canonical_name": "치과 치료 질환 분류",
+      "concept_id": "cond.dental_treatment_classification",
+      "evidence_tags": [
+        "dental",
+        "diagnosis_code_range:K00-K08",
+        "policy_clause_required",
+        "source_grounded"
+      ],
+      "node_type": "ClaimCondition",
+      "planner": {
+        "clarification_fields": [
+          "diagnosis_classification",
+          "treatment_context"
+        ],
+        "required_context": [
+          "policy_generation",
+          "diagnosis_classification",
+          "treatment_context"
+        ]
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "expansion_terms": [
+              "치과 치료",
+              "치과 질환",
+              "치아 질환"
+            ],
+            "match_any": [
+              "치과 치료 질환 분류",
+              "치과 치료",
+              "치과 질환",
+              "치아 질환"
+            ]
+          }
+        ],
+        "lexical_priority_terms": [
+          "치과 치료",
+          "치과 질환",
+          "치아 질환"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "해외 의료기관",
+        "해외 진료",
+        "외국 의료기관"
+      ],
+      "canonical_name": "해외 의료기관 진료",
+      "concept_id": "cond.foreign_medical_institution",
+      "evidence_tags": [
+        "foreign_medical",
+        "standard_policy_reference",
+        "source_grounded"
+      ],
+      "node_type": "ClaimCondition",
+      "planner": {
+        "clarification_fields": [
+          "travel_context",
+          "provider_location"
+        ],
+        "required_context": [
+          "policy_generation",
+          "travel_context",
+          "provider_location"
+        ]
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "expansion_terms": [
+              "해외 의료기관",
+              "해외 진료",
+              "외국 의료기관"
+            ],
+            "match_any": [
+              "해외 의료기관 진료",
+              "해외 의료기관",
+              "해외 진료",
+              "외국 의료기관"
+            ]
+          }
+        ],
+        "lexical_priority_terms": [
+          "해외 의료기관",
+          "해외 진료",
+          "외국 의료기관"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "한방 치료",
+        "한의원 진료",
+        "한방 의료기관"
+      ],
+      "canonical_name": "한방 치료 적용 맥락",
+      "concept_id": "cond.korean_medicine_treatment_context",
+      "evidence_tags": [
+        "korean_medicine",
+        "policy_clause_required",
+        "source_grounded"
+      ],
+      "node_type": "ClaimCondition",
+      "planner": {
+        "clarification_fields": [
+          "provider_type",
+          "benefit_status"
+        ],
+        "required_context": [
+          "policy_generation",
+          "provider_type",
+          "benefit_status"
+        ]
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "expansion_terms": [
+              "한방 치료",
+              "한의원 진료",
+              "한방 의료기관"
+            ],
+            "match_any": [
+              "한방 치료 적용 맥락",
+              "한방 치료",
+              "한의원 진료",
+              "한방 의료기관"
+            ]
+          }
+        ],
+        "lexical_priority_terms": [
+          "한방 치료",
+          "한의원 진료",
+          "한방 의료기관"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "무사고 할인",
+        "무청구 할인"
+      ],
+      "canonical_name": "무사고·무청구 할인 조건",
+      "concept_id": "cond.nonclaim_history_discount",
+      "evidence_tags": [
+        "nonclaim_history",
+        "premium_adjustment",
+        "source_grounded"
+      ],
+      "node_type": "ClaimCondition",
+      "planner": {
+        "clarification_fields": [
+          "contract_history",
+          "premium_adjustment_context"
+        ],
+        "required_context": [
+          "policy_generation",
+          "contract_history",
+          "premium_adjustment_context"
+        ]
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "expansion_terms": [
+              "무사고 할인",
+              "무청구 할인"
+            ],
+            "match_any": [
+              "무사고·무청구 할인 조건",
+              "무사고 할인",
+              "무청구 할인"
+            ]
+          }
+        ],
+        "lexical_priority_terms": [
+          "무사고 할인",
+          "무청구 할인"
+        ]
+      }
+    },
+    {
+      "aliases": [
+        "보험금 청구 서류",
+        "청구 구비서류",
+        "추가 청구서류"
+      ],
+      "canonical_name": "보험금 청구 구비서류",
+      "concept_id": "evidence.claim_document_requirements",
+      "evidence_tags": [
+        "claim_document",
+        "source_grounded"
+      ],
+      "node_type": "EvidenceRequirement",
+      "planner": {
+        "evidence_categories": [
+          "claim_document"
+        ],
+        "required_context": [
+          "claim_event_type",
+          "available_documents"
+        ]
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "expansion_terms": [
+              "보험금 청구 서류",
+              "청구 구비서류",
+              "추가 청구서류"
+            ],
+            "match_any": [
+              "보험금 청구 구비서류",
+              "보험금 청구 서류",
+              "청구 구비서류",
+              "추가 청구서류"
+            ]
+          }
+        ],
+        "lexical_priority_terms": [
+          "보험금 청구 서류",
+          "청구 구비서류",
+          "추가 청구서류"
+        ]
+      }
     }
-  ]
+  ],
+  "description": "Practitioner-approved general-query ontology projection.",
+  "schema_version": "1.0",
+  "version": "v1.2.0"
 }

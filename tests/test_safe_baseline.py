@@ -55,6 +55,12 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     )
 
 
+def _graph_source_metadata(paths) -> dict[str, str]:
+    canonical_source = paths.release_path.parent / "canonical-source.jsonl"
+    canonical_source.write_text('{"chunk_id": "source-1"}\n', encoding="utf-8")
+    return safe_baseline.graph_source_manifest_metadata(canonical_source, None)
+
+
 def test_safe_baseline_excludes_untrusted_payloads_without_approving_them() -> None:
     reviewed_base = _manifest(include_untrusted=False)
     lock = BaseManifestLock.from_manifest(
@@ -223,6 +229,7 @@ def test_prepare_validation_failure_preserves_existing_runtime_artifacts(tmp_pat
 def _write_valid_graph(paths, registry) -> None:
     manifest = {
         **registry.graph_manifest_metadata(),
+        **_graph_source_metadata(paths),
         "node_count": "0",
         "edge_count": "0",
         "evidence_count": "0",
@@ -288,6 +295,7 @@ def _write_graph_with_references(paths, registry) -> None:
     store.commit()
     manifest = {
         **registry.graph_manifest_metadata(),
+        **_graph_source_metadata(paths),
         **{
             manifest_key: str(
                 store.query(f"SELECT COUNT(*) AS count FROM {table_name}")[0]["count"]
@@ -300,6 +308,73 @@ def _write_graph_with_references(paths, registry) -> None:
     store.commit()
     store.close()
     _write_json(paths.graph_manifest_path, manifest)
+
+
+def test_verify_rejects_missing_or_mismatched_graph_source_descriptor(tmp_path: Path) -> None:
+    release, _runtime_root, _before = _prepare_release_with_references(tmp_path)
+    manifest = json.loads(release.graph_manifest_path.read_text(encoding="utf-8"))
+    descriptor = json.loads(manifest["canonical_document_manifest_descriptor"])
+    source_path = Path(descriptor["path"])
+    source_path.write_text('{"chunk_id": "changed"}\n', encoding="utf-8")
+
+    with pytest.raises(SafeBaselineError, match="source descriptor"):
+        safe_baseline.verify_safe_baseline_release(release)
+
+
+def test_prepare_finalizes_candidate_graph_without_sidecars_and_uses_immutable_reads(
+    tmp_path: Path,
+) -> None:
+    release, _runtime_root, _before = _prepare_release_with_references(tmp_path)
+    wal_path = release.graph_db_path.with_name(f"{release.graph_db_path.name}-wal")
+    shm_path = release.graph_db_path.with_name(f"{release.graph_db_path.name}-shm")
+
+    assert not wal_path.exists()
+    assert not shm_path.exists()
+    assert safe_baseline.verify_safe_baseline_release(release).integrity_report.state == "valid"
+    assert not wal_path.exists()
+    assert not shm_path.exists()
+    assert release.release_path.stat().st_mode & 0o7777 == 0o2750
+    assert release.release_path.parent.stat().st_mode & 0o7777 == 0o2750
+    assert release.graph_db_path.stat().st_mode & 0o777 == 0o640
+
+
+def test_prepare_normalizes_outer_release_root_artifact_permissions(tmp_path: Path) -> None:
+    reviewed_base = _manifest(include_untrusted=False)
+    lock = BaseManifestLock.from_manifest(
+        reviewed_base,
+        source_commit="trusted-commit",
+        review_record_id="review-record",
+    )
+    release_root = tmp_path / "releases"
+    monitor_dir = release_root / "monitor"
+    monitor_dir.mkdir(parents=True)
+    for path in (
+        release_root / "prepare.stdout.log",
+        release_root / "prepare.stderr.log",
+        release_root / "exit_code.txt",
+        monitor_dir / "preflight.json",
+        monitor_dir / "memory.csv",
+    ):
+        path.write_text("test artifact\n", encoding="utf-8")
+        path.chmod(0o664)
+    release_root.chmod(0o2775)
+    monitor_dir.chmod(0o2775)
+
+    release = safe_baseline.prepare_safe_baseline_release(
+        build_safe_baseline(_manifest(), lock),
+        base_lock=lock,
+        release_root=release_root,
+        release_id="candidate-a",
+        runtime_root=tmp_path / "runtime",
+        graph_builder=_write_graph_with_references,
+    )
+
+    for path in (release_root, monitor_dir, release.release_path):
+        assert path.stat().st_mode & 0o7777 == 0o2750
+    for path in release_root.rglob("*"):
+        if path.is_file():
+            assert path.stat().st_mode & 0o777 == 0o640
+        assert path.stat().st_mode & 0o022 == 0
 
 
 def _prepare_release_with_references(
@@ -347,6 +422,7 @@ def _delete_graph_reference(
         connection.commit()
     finally:
         connection.close()
+    safe_baseline._finalize_candidate_graph_database(release.graph_db_path)
     external_manifest = json.loads(release.graph_manifest_path.read_text(encoding="utf-8"))
     external_manifest.update(counts)
     _write_json(release.graph_manifest_path, external_manifest)
@@ -462,6 +538,33 @@ def test_verify_rejects_internal_external_graph_manifest_mismatch(tmp_path: Path
         safe_baseline.verify_safe_baseline_release(release)
 
 
+def test_verify_and_publish_reject_unexpected_internal_graph_manifest_key(
+    tmp_path: Path,
+) -> None:
+    release, runtime_root, before = _prepare_release_with_references(tmp_path)
+    connection = sqlite3.connect(release.graph_db_path)
+    try:
+        connection.execute(
+            "INSERT INTO graph_build_manifest (key, value) VALUES (?, ?)",
+            ("unexpected_internal_key", "unexpected-value"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    safe_baseline._finalize_candidate_graph_database(release.graph_db_path)
+
+    with pytest.raises(SafeBaselineError, match="graph database"):
+        safe_baseline.verify_safe_baseline_release(release)
+    with pytest.raises(SafeBaselineError, match="graph database"):
+        safe_baseline.publish_safe_baseline_release(
+            release,
+            runtime_root=runtime_root,
+            operator_acknowledged=True,
+        )
+
+    assert {path: path.read_bytes() for path in before} == before
+
+
 @pytest.mark.parametrize(
     ("key", "value"),
     [
@@ -499,6 +602,7 @@ def test_verify_rejects_internal_graph_metadata_mismatch(
         connection.commit()
     finally:
         connection.close()
+    safe_baseline._finalize_candidate_graph_database(release.graph_db_path)
 
     with pytest.raises(SafeBaselineError, match="graph database"):
         safe_baseline.verify_safe_baseline_release(release)
@@ -527,6 +631,7 @@ def test_verify_rejects_graph_database_with_missing_required_table(tmp_path: Pat
         connection.commit()
     finally:
         connection.close()
+    safe_baseline._finalize_candidate_graph_database(release.graph_db_path)
 
     with pytest.raises(SafeBaselineError, match="missing required tables"):
         safe_baseline.verify_safe_baseline_release(release)

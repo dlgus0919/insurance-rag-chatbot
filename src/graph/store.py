@@ -21,14 +21,26 @@ def check_readonly(method):
 
 
 class GraphStore:
-    def __init__(self, db_path: str | Path, build_mode: bool = False, readonly: bool = False):
+    def __init__(
+        self,
+        db_path: str | Path,
+        build_mode: bool = False,
+        readonly: bool = False,
+        immutable: bool = False,
+    ):
         self.db_path = Path(db_path)
         self.readonly = readonly
+        self.immutable = immutable
+        if self.immutable and not self.readonly:
+            raise ValueError("immutable mode requires read-only mode")
         if self.readonly:
             if not self.db_path.exists():
                 raise FileNotFoundError(f"Database file not found at {self.db_path} for read-only mode.")
             # SQLITE URI read-only 연결
-            self.conn = sqlite3.connect(f"file:{self.db_path}?mode=ro", uri=True)
+            uri = f"file:{self.db_path.resolve()}?mode=ro"
+            if self.immutable:
+                uri += "&immutable=1"
+            self.conn = sqlite3.connect(uri, uri=True)
         else:
             self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row

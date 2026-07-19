@@ -1,6 +1,6 @@
 {
   "name": "insurance-chatbot-frontend",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "private": true,
   "scripts": {
     "build": "npm run build:graph && esbuild js/app.js --bundle --minify --outfile=dist/app.min.js --format=esm",

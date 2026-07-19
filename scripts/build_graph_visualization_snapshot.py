@@ -16,7 +16,7 @@ from src.graph.visualization import MAX_OVERVIEW_EDGES, MAX_OVERVIEW_NODES, Grap
 
 
 def _manifest_summary(db_path: Path) -> dict[str, str]:
-    with sqlite3.connect(f"file:{db_path.resolve()}?mode=ro", uri=True) as conn:
+    with sqlite3.connect(f"file:{db_path.resolve()}?mode=ro&immutable=1", uri=True) as conn:
         tables = {
             row[0]
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
@@ -68,7 +68,7 @@ def build_snapshot(
 ) -> dict[str, Any]:
     """Write a bounded overview snapshot using an atomic sibling replacement."""
 
-    service = GraphVisualizationService(db_path)
+    service = GraphVisualizationService(db_path, immutable=True)
     graph = service.overview(node_limit=node_limit, edge_limit=edge_limit)
     payload = {
         "schema_version": 1,

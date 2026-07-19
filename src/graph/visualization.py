@@ -120,13 +120,17 @@ def _placeholders(values: list[str]) -> str:
 class GraphVisualizationService:
     """Serve small graph slices from a read-only SQLite connection."""
 
-    def __init__(self, db_path: str | Path):
+    def __init__(self, db_path: str | Path, *, immutable: bool = False):
         self.db_path = Path(db_path)
+        self.immutable = immutable
 
     def _connect(self) -> sqlite3.Connection:
         if not self.db_path.is_file():
             raise FileNotFoundError("GraphDB file is unavailable")
-        conn = sqlite3.connect(f"file:{self.db_path.resolve()}?mode=ro", uri=True)
+        uri = f"file:{self.db_path.resolve()}?mode=ro"
+        if self.immutable:
+            uri += "&immutable=1"
+        conn = sqlite3.connect(uri, uri=True)
         conn.row_factory = sqlite3.Row
         return conn
 

@@ -40,7 +40,10 @@
             "intents": {"$ref": "#/$defs/stringList"},
             "claim_unit_terms": {"$ref": "#/$defs/stringList"},
             "clarification_questions": {"$ref": "#/$defs/stringList"},
-            "required_evidence": {"$ref": "#/$defs/stringList"}
+            "required_evidence": {"$ref": "#/$defs/stringList"},
+            "required_context": {"$ref": "#/$defs/stringList"},
+            "clarification_fields": {"$ref": "#/$defs/stringList"},
+            "evidence_categories": {"$ref": "#/$defs/stringList"}
           }
         },
         "retrieval": {

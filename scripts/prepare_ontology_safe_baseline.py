@@ -17,6 +17,7 @@ from src.ontology.approval_integrity import BaseManifestLock
 from src.ontology.safe_baseline import (
     SafeBaselineReleasePaths,
     build_safe_baseline,
+    graph_source_manifest_metadata,
     prepare_safe_baseline_release,
     publish_safe_baseline_release,
     resolve_safe_baseline_release_paths,
@@ -71,9 +72,77 @@ def _release_paths(
     )
 
 
-def _build_graph_builder(args: argparse.Namespace):
+def _canonical_document_manifest_path(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> str | None:
+    """Validate the JSONL document manifest consumed by the Graph builder.
+
+    This is intentionally separate from the ontology concepts JSON manifest.
+    ``build_graph`` reads one JSON object per line, while ontology manifests are
+    a single JSON object and must never be passed through this boundary.
+    """
+
+    value = str(getattr(args, "canonical_document_manifest_path", "") or "").strip()
+    if not value:
+        return None
+    path = Path(value)
+    if path.suffix != ".jsonl":
+        parser.error(
+            "prepare requires --canonical-document-manifest-path to reference a JSONL "
+            "document manifest, not an ontology concepts JSON manifest"
+        )
+    if not path.is_file():
+        parser.error(f"canonical document manifest does not exist: {path}")
+    has_object_row = False
+    with path.open(encoding="utf-8") as file:
+        for line_number, line in enumerate(file, start=1):
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as error:
+                parser.error(
+                    "canonical document manifest must be JSONL "
+                    f"(line {line_number}): {error}"
+                )
+            if not isinstance(row, dict):
+                parser.error(
+                    "canonical document manifest rows must be JSON objects "
+                    f"(line {line_number})"
+                )
+            has_object_row = True
+    if not has_object_row:
+        parser.error("canonical document manifest must contain at least one JSON object row")
+    return str(path.resolve())
+
+
+def _active_source_chunks_path(
+    parser: argparse.ArgumentParser,
+    args: argparse.Namespace,
+) -> str | None:
+    """Validate an explicitly supplied optional source overlay before Graph build."""
+
+    value = str(getattr(args, "active_source_chunks_path", "") or "").strip()
+    if not value:
+        return None
+    path = Path(value)
+    if path.suffix != ".jsonl" or not path.is_file():
+        parser.error(f"active source overlay does not exist or is not JSONL: {path}")
+    return str(path.resolve())
+
+
+def _build_graph_builder(
+    args: argparse.Namespace,
+    canonical_document_manifest_path: str | None = None,
+):
     chunks_path = _require_value(args.parser, args, "chunks_path")
     standard_db_path = _require_value(args.parser, args, "standard_db_path")
+    if canonical_document_manifest_path is None:
+        canonical_document_manifest_path = _canonical_document_manifest_path(args.parser, args)
+    if canonical_document_manifest_path is None:
+        args.parser.error("prepare requires --canonical-document-manifest-path")
+    active_source_chunks_path = _active_source_chunks_path(args.parser, args)
 
     def build_graph_for_release(paths: SafeBaselineReleasePaths, registry) -> None:
         from src.graph.build import build_graph
@@ -85,15 +154,21 @@ def _build_graph_builder(args: argparse.Namespace):
             paths.graph_db_path,
             paths.graph_manifest_path,
             paths.release_path / "reports" / "graph_low_confidence.jsonl",
-            canonical_manifest_path=args.canonical_manifest_path or None,
+            canonical_manifest_path=canonical_document_manifest_path,
             source_mode=args.source_mode,
             rebuild=True,
             rule_links_path=args.rule_links_path or None,
-            active_source_chunks_path=args.active_source_chunks_path or None,
+            active_source_chunks_path=active_source_chunks_path,
             ontology_registry=registry,
             strict=True,
         )
-        metadata = registry.graph_manifest_metadata()
+        metadata = {
+            **registry.graph_manifest_metadata(),
+            **graph_source_manifest_metadata(
+                canonical_document_manifest_path,
+                active_source_chunks_path,
+            ),
+        }
         store = GraphStore(paths.graph_db_path, build_mode=True)
         try:
             for key, value in metadata.items():
@@ -136,13 +211,14 @@ def _legacy_create(parser: argparse.ArgumentParser, args: argparse.Namespace) ->
 def _prepare_release(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     raw_base = _load_json_object(Path(_require_value(parser, args, "raw_base")))
     base_lock = BaseManifestLock.load(_require_value(parser, args, "base_lock"))
+    canonical_document_manifest_path = _canonical_document_manifest_path(parser, args)
     release = prepare_safe_baseline_release(
         build_safe_baseline(raw_base, base_lock),
         base_lock=base_lock,
         release_root=_require_value(parser, args, "release_root"),
         release_id=_require_value(parser, args, "release_id"),
         runtime_root=_require_value(parser, args, "runtime_root"),
-        graph_builder=_build_graph_builder(args),
+        graph_builder=_build_graph_builder(args, canonical_document_manifest_path),
     )
     print(
         json.dumps(
@@ -216,7 +292,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirm")
     parser.add_argument("--chunks-path")
     parser.add_argument("--standard-db-path")
-    parser.add_argument("--canonical-manifest-path")
+    parser.add_argument(
+        "--canonical-document-manifest-path",
+        "--canonical-manifest-path",
+        dest="canonical_document_manifest_path",
+        help="JSONL document manifest consumed by the Graph builder",
+    )
     parser.add_argument("--active-source-chunks-path")
     parser.add_argument("--rule-links-path")
     parser.add_argument("--source-mode", default="v1_v2_combined")

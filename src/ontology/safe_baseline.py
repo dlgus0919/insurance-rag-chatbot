@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -51,6 +52,11 @@ _RUNTIME_ONTOLOGY_ARTIFACTS = (
     "concepts.active.json",
     "concepts.active.provenance.json",
 )
+_GRAPH_SOURCE_DESCRIPTOR_KEYS = (
+    "canonical_document_manifest_descriptor",
+    "active_source_overlay_descriptor",
+)
+_GRAPH_DATABASE_SIDECARS = ("-wal", "-shm")
 
 
 @dataclass(frozen=True)
@@ -203,6 +209,166 @@ def _path_is_within(path: Path, parent: Path) -> bool:
     return path == parent or parent in path.parents
 
 
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for block in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _source_descriptor(
+    path: Path,
+    *,
+    role: str,
+) -> dict[str, str | int]:
+    resolved = path.resolve()
+    if not resolved.is_file():
+        raise SafeBaselineError(f"{role} source manifest is unavailable")
+    return {
+        "schema_version": 1,
+        "role": role,
+        "state": "present",
+        "path": str(resolved),
+        "sha256": _file_sha256(resolved),
+    }
+
+
+def graph_source_manifest_metadata(
+    canonical_document_manifest_path: str | Path,
+    active_source_overlay_path: str | Path | None,
+) -> dict[str, str]:
+    """Describe immutable Graph source inputs independently of build temp files."""
+
+    canonical = _source_descriptor(
+        Path(canonical_document_manifest_path),
+        role="canonical_document_manifest",
+    )
+    if active_source_overlay_path is None:
+        overlay: dict[str, str | int] = {
+            "schema_version": 1,
+            "role": "active_source_overlay",
+            "state": "absent",
+        }
+        overlay_path = ""
+    else:
+        overlay = _source_descriptor(
+            Path(active_source_overlay_path),
+            role="active_source_overlay",
+        )
+        overlay_path = str(overlay["path"])
+    return {
+        "chunks_path": str(canonical["path"]),
+        "canonical_manifest_path": str(canonical["path"]),
+        "active_source_chunks_path": overlay_path,
+        "canonical_document_manifest_descriptor": json.dumps(
+            canonical,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        "active_source_overlay_descriptor": json.dumps(
+            overlay,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+    }
+
+
+def _source_descriptor_errors(
+    manifest: dict[str, str],
+    *,
+    label: str,
+) -> list[str]:
+    errors: list[str] = []
+    descriptors: dict[str, dict[str, Any]] = {}
+    for key, role, allow_absent in (
+        ("canonical_document_manifest_descriptor", "canonical_document_manifest", False),
+        ("active_source_overlay_descriptor", "active_source_overlay", True),
+    ):
+        raw = manifest.get(key)
+        if raw is None:
+            errors.append(f"{label} graph source descriptor is missing: {key}")
+            continue
+        try:
+            descriptor = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            errors.append(f"{label} graph source descriptor is invalid: {key}")
+            continue
+        if not isinstance(descriptor, dict):
+            errors.append(f"{label} graph source descriptor is invalid: {key}")
+            continue
+        if (
+            descriptor.get("schema_version") != 1
+            or descriptor.get("role") != role
+            or descriptor.get("state") not in ({"present", "absent"} if allow_absent else {"present"})
+        ):
+            errors.append(f"{label} graph source descriptor is invalid: {key}")
+            continue
+        if descriptor["state"] == "absent":
+            if "path" in descriptor or "sha256" in descriptor:
+                errors.append(f"{label} graph source descriptor is invalid: {key}")
+            descriptors[key] = descriptor
+            continue
+        source_path = descriptor.get("path")
+        source_hash = descriptor.get("sha256")
+        if not isinstance(source_path, str) or not source_path.strip():
+            errors.append(f"{label} graph source descriptor is invalid: {key}")
+            continue
+        if not isinstance(source_hash, str) or len(source_hash) != 64:
+            errors.append(f"{label} graph source descriptor is invalid: {key}")
+            continue
+        path = Path(source_path)
+        if not path.is_file() or _file_sha256(path) != source_hash:
+            errors.append(f"{label} graph source descriptor does not match source: {key}")
+            continue
+        descriptors[key] = descriptor
+
+    canonical = descriptors.get("canonical_document_manifest_descriptor")
+    if canonical is not None and canonical.get("state") == "present":
+        canonical_path = str(canonical["path"])
+        if manifest.get("chunks_path") != canonical_path:
+            errors.append(f"{label} graph source descriptor does not match chunks path")
+        if manifest.get("canonical_manifest_path") != canonical_path:
+            errors.append(f"{label} graph source descriptor does not match canonical path")
+    overlay = descriptors.get("active_source_overlay_descriptor")
+    if overlay is not None:
+        expected_overlay_path = str(overlay.get("path") or "")
+        if manifest.get("active_source_chunks_path", "") != expected_overlay_path:
+            errors.append(f"{label} graph source descriptor does not match overlay path")
+    return errors
+
+
+def _finalize_candidate_graph_database(path: Path) -> None:
+    """Checkpoint a candidate Graph DB before immutable verification and publish."""
+
+    if not path.is_file():
+        raise SafeBaselineError("prepared graph database is unavailable")
+    try:
+        with sqlite3.connect(f"file:{path.resolve()}?mode=rw", uri=True) as connection:
+            checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+    except sqlite3.Error as exc:
+        raise SafeBaselineError("prepared graph database could not be checkpointed") from exc
+    if checkpoint is None or int(checkpoint[0]) != 0:
+        raise SafeBaselineError("prepared graph database could not be checkpointed")
+    for suffix in _GRAPH_DATABASE_SIDECARS:
+        sidecar = Path(f"{path}{suffix}")
+        if sidecar.exists():
+            sidecar.unlink()
+
+
+def _set_candidate_release_permissions(release_path: Path) -> None:
+    """Keep candidate artifacts reviewable without granting group or world writes."""
+
+    directories = [release_path, *[path for path in release_path.rglob("*") if path.is_dir()]]
+    files = [path for path in release_path.rglob("*") if path.is_file()]
+    for path in files:
+        path.chmod(0o640)
+    for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        path.chmod(0o2750)
+
+
 def _load_graph_manifest(path: Path) -> dict[str, str]:
     try:
         with path.open(encoding="utf-8") as file:
@@ -219,8 +385,10 @@ def _read_graph_database_manifest_and_counts(path: Path) -> tuple[dict[str, str]
 
     from src.graph.store import GraphStore
 
+    if any(Path(f"{path}{suffix}").exists() for suffix in _GRAPH_DATABASE_SIDECARS):
+        raise SafeBaselineError("prepared graph database has uncheckpointed sidecars")
     try:
-        store = GraphStore(path, readonly=True)
+        store = GraphStore(path, readonly=True, immutable=True)
     except (OSError, sqlite3.Error) as exc:
         raise SafeBaselineError("prepared graph database is unreadable") from exc
 
@@ -285,12 +453,17 @@ def _graph_artifact_errors(
     actual_counts: dict[str, str],
 ) -> list[str]:
     errors = registry.graph_manifest_integrity_errors(internal_manifest)
-    for key, external_value in external_manifest.items():
+    errors.extend(_source_descriptor_errors(external_manifest, label="external"))
+    errors.extend(_source_descriptor_errors(internal_manifest, label="internal"))
+    for key in sorted(external_manifest):
+        external_value = external_manifest[key]
         internal_value = internal_manifest.get(key)
         if internal_value is None:
             errors.append(f"{key}: missing from graph database manifest")
         elif internal_value != external_value:
             errors.append(f"{key}: graph database manifest differs from external manifest")
+    for key in sorted(set(internal_manifest).difference(external_manifest)):
+        errors.append(f"{key}: unexpected in graph database manifest")
     for manifest_key, actual_count in actual_counts.items():
         for label, manifest in (("external", external_manifest), ("internal", internal_manifest)):
             expected_count = manifest.get(manifest_key)
@@ -319,6 +492,8 @@ def _verify_prepared_release(paths: SafeBaselineReleasePaths) -> "OntologyRegist
     if registry.integrity_report.state != "valid":
         raise SafeBaselineError("prepared active manifest did not pass integrity validation")
     external_manifest = _load_graph_manifest(paths.graph_manifest_path)
+    if _source_descriptor_errors(external_manifest, label="external"):
+        raise SafeBaselineError("graph source descriptor is invalid")
     if registry.graph_manifest_integrity_errors(external_manifest):
         raise SafeBaselineError("graph manifest does not match prepared ontology")
     internal_manifest, actual_counts = _read_graph_database_manifest_and_counts(
@@ -410,8 +585,16 @@ def prepare_safe_baseline_release(
         if registry.integrity_report.state != "valid":
             raise SafeBaselineError("prepared active manifest did not pass integrity validation")
         graph_builder(paths, registry)
+        if registry.graph_manifest_integrity_errors(_load_graph_manifest(paths.graph_manifest_path)):
+            raise SafeBaselineError("graph manifest does not match prepared ontology")
+        _finalize_candidate_graph_database(paths.graph_db_path)
         _verify_prepared_release(paths)
+        _set_candidate_release_permissions(staging)
         staging.replace(target)
+        # Build harnesses may place monitor logs beside the release directory.
+        # Normalize the entire candidate root after the final rename so none of
+        # those review artifacts retain inherited group or world write bits.
+        _set_candidate_release_permissions(root)
     except Exception:
         shutil.rmtree(staging, ignore_errors=True)
         raise

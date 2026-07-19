@@ -144,6 +144,9 @@ class OntologyConcept:
     retrieval_expansion_rules: tuple[RetrievalExpansionRule, ...] = field(default_factory=tuple)
     retrieval_lexical_priority_terms: tuple[str, ...] = field(default_factory=tuple)
     properties: dict[str, Any] = field(default_factory=dict)
+    planner_required_context: tuple[str, ...] = field(default_factory=tuple)
+    planner_clarification_fields: tuple[str, ...] = field(default_factory=tuple)
+    planner_evidence_categories: tuple[str, ...] = field(default_factory=tuple)
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "OntologyConcept":
@@ -161,6 +164,9 @@ class OntologyConcept:
             planner_claim_unit_terms=tuple(_as_str_list(planner.get("claim_unit_terms"))),
             planner_clarification_questions=tuple(_as_str_list(planner.get("clarification_questions"))),
             planner_required_evidence=tuple(_as_str_list(planner.get("required_evidence"))),
+            planner_required_context=tuple(_as_str_list(planner.get("required_context"))),
+            planner_clarification_fields=tuple(_as_str_list(planner.get("clarification_fields"))),
+            planner_evidence_categories=tuple(_as_str_list(planner.get("evidence_categories"))),
             candidate_aliases=tuple(_as_str_list(payload.get("candidate_aliases"))),
             evidence_tags=tuple(_as_str_list(payload.get("evidence_tags"))),
             retrieval_expansion_rules=tuple(

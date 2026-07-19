@@ -1,17 +1,40 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from src.config import ROOT_DIR
 from src.graph.query_planner import GraphQueryPlanner, GraphQueryPlan
 from src.ontology.registry import OntologyRegistry
 
 
-def _forensic_source_grounded_registry() -> OntologyRegistry:
-    return OntologyRegistry(
-        ROOT_DIR / "data" / "ontology" / "concepts.json",
-        enforce_integrity=False,
+def _forensic_source_grounded_registry(tmp_path: Path) -> OntologyRegistry:
+    manifest = {
+        "schema_version": "1.0",
+        "version": "forensic-fixture",
+        "concepts": [
+            {
+                "concept_id": "test.forensic_hair_loss",
+                "canonical_name": "탈모",
+                "node_type": "ClaimCondition",
+                "aliases": ["탈모"],
+                "planner": {
+                    "coverage_topics": ["탈모"],
+                    "clarification_questions": [
+                        "노화현상으로 인한 탈모인지, 질병성 탈모인지 확인이 필요합니다."
+                    ],
+                    "required_evidence": ["진단명 또는 진단코드", "의사소견"],
+                },
+            }
+        ],
+    }
+    manifest_path = tmp_path / "forensic_source_grounded_manifest.json"
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False),
+        encoding="utf-8",
     )
+    return OntologyRegistry(manifest_path, enforce_integrity=False)
 
 
 @pytest.mark.parametrize(
@@ -95,9 +118,9 @@ def test_query_planner_matches_attached_standalone_drinking_expression(query: st
     assert "음주 후 상해" in plan.conditions
 
 
-def test_query_planner_hair_loss_adds_source_grounded_cause_questions() -> None:
+def test_query_planner_hair_loss_adds_source_grounded_cause_questions(tmp_path: Path) -> None:
     plan = GraphQueryPlanner(
-        ontology_registry=_forensic_source_grounded_registry()
+        ontology_registry=_forensic_source_grounded_registry(tmp_path)
     ).plan("탈모 보상 가능?")
 
     assert "탈모" in plan.coverage_topics

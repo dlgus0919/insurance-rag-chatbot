@@ -1,0 +1,745 @@
+{
+  "artifact_type": "v1_2_0_practitioner_decision_audit",
+  "base_commit": "3cd661778059ca0901c32c3147b789de81518c0f",
+  "candidate_batch_hash": "dcd39884ea453a159096752a9b2dc32cb146036ef90350c30bba1ba2090ce3a0",
+  "candidate_batch_path": "docs/review_artifacts/2026-07-19-v1.2.0-general-query-ontology-candidate-batch.json",
+  "canonical_projection_content_hash": "ffad858ea1339bf5196a5445395aed5003a6344990f7ae32c0ef3a039e33861b",
+  "decision_record": "docs/reviews/2026-07-19-2336-v1.2.0-ontology-practitioner-decisions.md",
+  "decisions": [
+    {
+      "approved_field_paths": [
+        "canonical_name",
+        "node_type",
+        "aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ],
+      "candidate_id": "practitioner.v1_2_0.cond.claim_payment_timeline",
+      "candidate_payload_hash": "80fade9b2822d7e0803c560f25de21ffbbf49b94d978d0a1caa3cbe989764761",
+      "concept_id": "cond.claim_payment_timeline",
+      "decision": "approved",
+      "evidence": [
+        {
+          "chunk_id": "약관_ch_002353",
+          "doc_short": "약관",
+          "document_authority": "own_company_policy",
+          "is_own_company": true,
+          "page_end": 41,
+          "page_start": 40,
+          "policy_generation": "4th",
+          "source_hash": "4dd2c86101b41611206939c2d08311218ad65fd05ed6eeb99929824166be96bc"
+        }
+      ],
+      "excluded_terms": [],
+      "runtime_content_hash": "6ff826e65b8b7ab28dc7552fb8056912d6b4d655edfe40985cdd0035ccc79cd1",
+      "runtime_included": true
+    },
+    {
+      "approved_field_paths": [
+        "canonical_name",
+        "node_type",
+        "aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ],
+      "candidate_id": "practitioner.v1_2_0.cond.dental_treatment_classification",
+      "candidate_payload_hash": "c334ef45b4c77f5cd7df83c9e914d929b320074ad52183d4111eba0ffde517fe",
+      "concept_id": "cond.dental_treatment_classification",
+      "decision": "approved",
+      "evidence": [
+        {
+          "chunk_id": "약관_ch_002451",
+          "doc_short": "약관",
+          "document_authority": "own_company_policy",
+          "is_own_company": true,
+          "page_end": 84,
+          "page_start": 78,
+          "policy_generation": "4th",
+          "source_hash": "7295c1fbb010d53473650d59c955115f0f50a889a1a80acfc3b0a8439d8afc85"
+        }
+      ],
+      "excluded_terms": [],
+      "runtime_content_hash": "d02a880d97c72ce19e55e3d07d2d892619f45844f110ad070f46486e79a7f1cc",
+      "runtime_included": true
+    },
+    {
+      "approved_field_paths": [
+        "canonical_name",
+        "node_type",
+        "aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ],
+      "candidate_id": "practitioner.v1_2_0.cond.foreign_medical_institution",
+      "candidate_payload_hash": "0cf4811f5baec669b81c1838ec9dd91f938a23c8f68f0cace924cc3c7865fa8b",
+      "concept_id": "cond.foreign_medical_institution",
+      "decision": "approved",
+      "evidence": [
+        {
+          "chunk_id": "표준약관_ch_005463",
+          "doc_short": "표준약관",
+          "document_authority": "standard_policy",
+          "is_own_company": false,
+          "page_end": 313,
+          "page_start": 313,
+          "policy_generation": "5th",
+          "source_hash": "59629d229e961123d8c6c7f47ddd126d651c27975e5a25a90dd98d14275d97a8"
+        }
+      ],
+      "excluded_terms": [],
+      "runtime_content_hash": "72ecebab1c426ac5e240dfd755ca08a7098e74a65b4bc4e4dcf010ec41c68fb6",
+      "runtime_included": true
+    },
+    {
+      "approved_field_paths": [
+        "canonical_name",
+        "node_type",
+        "aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ],
+      "candidate_id": "practitioner.v1_2_0.cond.korean_medicine_treatment_context",
+      "candidate_payload_hash": "6a12e8813b4ebce734b7a3b50e590d3ebc4205efd4a6592335937071e3897dd7",
+      "concept_id": "cond.korean_medicine_treatment_context",
+      "decision": "approved",
+      "evidence": [
+        {
+          "chunk_id": "약관_ch_002421",
+          "doc_short": "약관",
+          "document_authority": "own_company_policy",
+          "is_own_company": true,
+          "page_end": 66,
+          "page_start": 62,
+          "policy_generation": "4th",
+          "source_hash": "da76da5117b534b9db2d25a80373262b27f23470f58a3b34927b6aa8805b3dbb"
+        },
+        {
+          "chunk_id": "약관_ch_002451",
+          "doc_short": "약관",
+          "document_authority": "own_company_policy",
+          "is_own_company": true,
+          "page_end": 84,
+          "page_start": 78,
+          "policy_generation": "4th",
+          "source_hash": "7295c1fbb010d53473650d59c955115f0f50a889a1a80acfc3b0a8439d8afc85"
+        }
+      ],
+      "excluded_terms": [],
+      "runtime_content_hash": "ade2cb31750458157ef5c75b3478c50a9a812ea7a2563aa61d9a84192ee8010e",
+      "runtime_included": true
+    },
+    {
+      "approved_field_paths": [
+        "canonical_name",
+        "node_type",
+        "aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ],
+      "candidate_id": "practitioner.v1_2_0.cond.nonclaim_history_discount",
+      "candidate_payload_hash": "14c81710c0ce9bc60706bf8568430ed1690e09bd6c75c0c118737304dbd0c9a9",
+      "concept_id": "cond.nonclaim_history_discount",
+      "decision": "partially_approved",
+      "evidence": [
+        {
+          "chunk_id": "약관_ch_002313",
+          "doc_short": "약관",
+          "document_authority": "own_company_policy",
+          "is_own_company": true,
+          "page_end": 31,
+          "page_start": 8,
+          "policy_generation": "4th",
+          "source_hash": "acd4696ff931b00383495c9499d7658b5c8c53d21a54dff2022bd91f6e8dfaf6"
+        }
+      ],
+      "excluded_terms": [
+        "비급여 보험료 차등제"
+      ],
+      "runtime_content_hash": "ed1b884db8159097fba08ab80802771dc1eeac7451db6cdfe1ffa719bb6ffe0b",
+      "runtime_included": true
+    },
+    {
+      "approved_field_paths": [
+        "canonical_name",
+        "node_type",
+        "aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ],
+      "candidate_id": "practitioner.v1_2_0.evidence.claim_document_requirements",
+      "candidate_payload_hash": "7606383fa134f13f6a23a00b597db807bb7175af2bc71db96524677fee9de1ab",
+      "concept_id": "evidence.claim_document_requirements",
+      "decision": "approved",
+      "evidence": [
+        {
+          "chunk_id": "약관_ch_002317",
+          "doc_short": "약관",
+          "document_authority": "own_company_policy",
+          "is_own_company": true,
+          "page_end": 31,
+          "page_start": 8,
+          "policy_generation": "4th",
+          "source_hash": "580f62c486939742c17875d1828a13e797cf534b5674bea64fe1f849130c8bfa"
+        },
+        {
+          "chunk_id": "약관_ch_002318",
+          "doc_short": "약관",
+          "document_authority": "own_company_policy",
+          "is_own_company": true,
+          "page_end": 31,
+          "page_start": 8,
+          "policy_generation": "4th",
+          "source_hash": "e50795a838b8c0693866d7b2c7ec4ebd8b301a429aea594a4da5c4a9969aa154"
+        }
+      ],
+      "excluded_terms": [],
+      "runtime_content_hash": "77757ec7fd7bff930b60c9b00851bae4ad532825eed08582463a5b8771380f80",
+      "runtime_included": true
+    },
+    {
+      "candidate_id": "practitioner.v1_2_0.cond.policy_source_authority",
+      "candidate_payload_hash": "ccc19ac98697166c089f56710f4c7133ff8a0f5e1f255a7a5066e6aa5093f4e9",
+      "concept_id": "cond.policy_source_authority",
+      "decision": "rejected",
+      "evidence": [
+        {
+          "chunk_id": "약관_ch_002286",
+          "doc_short": "약관",
+          "document_authority": "own_company_policy",
+          "is_own_company": true,
+          "page_end": 2,
+          "page_start": 1,
+          "policy_generation": "4th",
+          "source_hash": "6c3cd3a63a6582e0a357215d03e32bf96af17dc9977901c4e8ac285dd4ab1892"
+        },
+        {
+          "chunk_id": "표준약관_ch_004925",
+          "doc_short": "표준약관",
+          "document_authority": "standard_policy",
+          "is_own_company": false,
+          "page_end": 1,
+          "page_start": 1,
+          "policy_generation": "5th",
+          "source_hash": "d0b9b2f1067125d0007f3c95828be5357b8b2670aea3caf6d77970d849983300"
+        }
+      ],
+      "rejection_reason": "document authority and generation are not synonym expansions",
+      "runtime_included": false
+    },
+    {
+      "candidate_id": "dev.cond.motorcycle_riding.fc842c72db6f",
+      "concept_id": "cond.motorcycle_riding",
+      "decision": "rejected",
+      "legacy_held_snapshot": {
+        "aliases": [],
+        "candidate_aliases": [
+          "자동차사고",
+          "승용자동차",
+          "승합자동차",
+          "화물자동차",
+          "특수자동차",
+          "자동차 운전중 교통사고",
+          "자동차"
+        ],
+        "candidate_id": "dev.cond.motorcycle_riding.fc842c72db6f",
+        "canonical_name": "이륜자동차 운전/탑승",
+        "concept_id": "cond.motorcycle_riding",
+        "created_at": "2026-06-11T04:30:55+00:00",
+        "evidence_tags": [
+          "candidate:자동차사고",
+          "candidate:승용자동차",
+          "candidate:승합자동차"
+        ],
+        "extraction_run_id": "ontology-candidate-extract-2026-06-11T04:30:54+00:00",
+        "node_type": "ClaimCondition",
+        "planner": {
+          "conditions": [
+            "이륜자동차 운전/탑승"
+          ],
+          "intents": [
+            "claim_condition_lookup",
+            "session_claim_path_review"
+          ]
+        },
+        "properties": {
+          "candidate_type": "alias_or_expansion",
+          "codex_dev_review": {
+            "decision": "hold",
+            "development_only": true,
+            "domain_fit": true,
+            "evidence_fit": true,
+            "policy_id": "ontology-review-default",
+            "policy_version": "2026-06-10",
+            "reason": "지급/면책/감액/한도 관련 표현 포함",
+            "reason_codes": [
+              "risk_term_guardrail"
+            ],
+            "risk_level": "medium"
+          },
+          "display": {
+            "approval_prompt": "위 표현들을 같은 보험 업무 개념으로 묶어도 될까요?",
+            "example_questions": [
+              "이륜자동차 운전/탑승에 해당하면 보험금을 받을 수 있나요?",
+              "자동차사고도 이륜자동차 운전/탑승에 포함되나요?"
+            ],
+            "similar_expressions": [
+              "자동차사고",
+              "승용자동차",
+              "승합자동차",
+              "화물자동차",
+              "특수자동차",
+              "자동차 운전중 교통사고",
+              "자동차"
+            ],
+            "summary": "이륜자동차 운전/탑승 관련 표현을 상담사례집 근거와 연결합니다. 원문 근거에서 반복 확인된 표현을 기존 보험 업무 개념에 함께 묶어 검색하기 위한 후보입니다."
+          },
+          "extraction": {
+            "policy_id": "candidate-extraction-default",
+            "policy_version": "2026-06-10",
+            "source": "processed_chunks_or_graph_evidence",
+            "term_count": 7
+          },
+          "review_feedback": {
+            "created_at": "2026-06-11T06:37:15+00:00",
+            "hold_reason_codes": [
+              "evidence_mismatch"
+            ],
+            "hold_reason_labels": [
+              "원문 근거 연결 부적절"
+            ],
+            "reviewer": "june-kim-mac",
+            "reviewer_type": "practitioner_local_ui"
+          },
+          "target_canonical_name": "이륜자동차 운전/탑승",
+          "target_concept_id": "cond.motorcycle_riding"
+        },
+        "retrieval": {
+          "expansion_rules": [
+            {
+              "expansion_terms": [
+                "자동차사고",
+                "승용자동차",
+                "승합자동차",
+                "화물자동차",
+                "특수자동차",
+                "자동차 운전중 교통사고",
+                "자동차"
+              ],
+              "match_any": [
+                "이륜자동차 운전/탑승",
+                "이륜자동차",
+                "오토바이",
+                "원동기"
+              ]
+            }
+          ]
+        },
+        "risk_flags": [
+          "requires_practitioner_review"
+        ],
+        "source_evidence": [
+          {
+            "chunk_id": "chunks_canonical_manifest.jsonl:211",
+            "confidence": 1.0,
+            "doc_name": "소비자 상담 주요 사례집",
+            "doc_short": "상담사례집",
+            "excerpt": "험금의 지급사유) ① 회사는 피보험자가 보험증권에 기재된 이 특별약관의 보험기간(이하「보험기간」이라 합니다) 중에 자동차를 운전하던 중 급격하고도 우연히 발생한 자동차사고(이하「자동차 운전중 교통사고」라 합니다)로 타인(이하「피해자」라 합니다)에게 다음 각호의 어느 하나에 해당하는 상해를 입혀 형사합의를 한 경우 피보험자가 형사합",
+            "page": 45
+          },
+          {
+            "chunk_id": "chunks_canonical_manifest.jsonl:218",
+            "confidence": 1.0,
+            "doc_name": "소비자 상담 주요 사례집",
+            "doc_short": "상담사례집",
+            "excerpt": "험금의 지급사유) ① 회사는 피보험자가 보험증권에 기재된 이 특별약관의 보험기간(이하「보험기간」이라 합니다) 중에 자동차를 운전하던 중 급격하고도 우연히 발생한 자동차사고(이하「자동차 운전중 교통사고」라 합니다)로 타인(이하「피해자」라 합니다)에게 다음 각호의 어느 하나에 해당하는 상해를 입혀 형사합의를 한 경우 피보험자가 형사합",
+            "page": 45
+          },
+          {
+            "chunk_id": "chunks_canonical_manifest.jsonl:222",
+            "confidence": 1.0,
+            "doc_name": "소비자 상담 주요 사례집",
+            "doc_short": "상담사례집",
+            "excerpt": "1. \"자동차\"란 원동기에 의하여 육상에서 이동할 목적으로 제작한 용구 또는 이에 견인되어 육상을 이동할 목적으로 제작한 용구(이하 \"피견인자동차\"라 한다)를 말한다. 다만, 대통령령으로 정하는 것은 제외한다. <자동차관리법 시행령> 제2조(적용이 제외되는 자동차) 「자동차관리법」 제2조제1호 단서에서 \"대통령령으",
+            "page": 46
+          }
+        ],
+        "status": "held",
+        "test_candidate": false
+      },
+      "runtime_included": false
+    },
+    {
+      "candidate_id": "dev.cov.indemnity_medical.2f8f7057fb90",
+      "concept_id": "cov.indemnity_medical",
+      "decision": "rejected",
+      "legacy_held_snapshot": {
+        "aliases": [],
+        "candidate_aliases": [
+          "중지 입원의료비로 간주"
+        ],
+        "candidate_id": "dev.cov.indemnity_medical.2f8f7057fb90",
+        "canonical_name": "실손",
+        "concept_id": "cov.indemnity_medical",
+        "created_at": "2026-06-11T04:30:55+00:00",
+        "evidence_tags": [
+          "candidate:보험금지급여부",
+          "candidate:보장성보험",
+          "candidate:자동차보험외에도실손의료보험"
+        ],
+        "extraction_run_id": "ontology-candidate-extract-2026-06-11T04:30:54+00:00",
+        "node_type": "CoverageItem",
+        "planner": {
+          "coverage_topics": [
+            "실손"
+          ]
+        },
+        "properties": {
+          "candidate_type": "alias_or_expansion",
+          "codex_dev_review": {
+            "decision": "hold",
+            "development_only": true,
+            "domain_fit": true,
+            "evidence_fit": true,
+            "policy_id": "ontology-review-default",
+            "policy_version": "2026-06-10",
+            "reason": "지급/면책/감액/한도 관련 표현 포함",
+            "reason_codes": [
+              "risk_term_guardrail"
+            ],
+            "risk_level": "medium"
+          },
+          "display": {
+            "approval_prompt": "위 표현들을 같은 보험 업무 개념으로 묶어도 될까요?",
+            "example_questions": [
+              "실손에 해당하면 보험금을 받을 수 있나요?",
+              "보험금 지급여부도 실손에 포함되나요?"
+            ],
+            "similar_expressions": [
+              "보험금 지급여부",
+              "보장성보험",
+              "자동차보험 외에도 실손의료보험",
+              "중지 입원의료비로 간주"
+            ],
+            "summary": "실손 관련 표현을 상담사례집 근거와 연결합니다. 원문 근거에서 반복 확인된 표현을 기존 보험 업무 개념에 함께 묶어 검색하기 위한 후보입니다."
+          },
+          "extraction": {
+            "policy_id": "candidate-extraction-default",
+            "policy_version": "2026-06-10",
+            "source": "processed_chunks_or_graph_evidence",
+            "term_count": 4
+          },
+          "quality_repair": {
+            "removed_candidate_aliases": [
+              {
+                "alias": "보험금 지급여부",
+                "reason": "candidate_alias_multi_owner"
+              },
+              {
+                "alias": "보장성보험",
+                "reason": "candidate_alias_multi_owner"
+              },
+              {
+                "alias": "자동차보험 외에도 실손의료보험",
+                "reason": "candidate_alias_multi_owner"
+              }
+            ],
+            "repair_policy": "remove_sentence_fragments_and_multi_owner_aliases"
+          },
+          "review_feedback": {
+            "created_at": "2026-06-11T06:35:28+00:00",
+            "hold_reason_codes": [
+              "evidence_mismatch"
+            ],
+            "hold_reason_labels": [
+              "원문 근거 연결 부적절"
+            ],
+            "reviewer": "june-kim-mac",
+            "reviewer_type": "practitioner_local_ui"
+          },
+          "target_canonical_name": "실손",
+          "target_concept_id": "cov.indemnity_medical"
+        },
+        "retrieval": {
+          "expansion_rules": [
+            {
+              "expansion_terms": [
+                "보험금 지급여부",
+                "보장성보험",
+                "자동차보험 외에도 실손의료보험",
+                "중지 입원의료비로 간주"
+              ],
+              "match_any": [
+                "실손",
+                "실손",
+                "실비",
+                "실손보험"
+              ]
+            }
+          ]
+        },
+        "risk_flags": [
+          "requires_practitioner_review"
+        ],
+        "source_evidence": [
+          {
+            "chunk_id": "chunks_canonical_manifest.jsonl:12",
+            "confidence": 0.902,
+            "doc_name": "소비자 상담 주요 사례집",
+            "doc_short": "상담사례집",
+            "excerpt": "손해보험 소비자 상담 주요 사례집 63 자동차사고 과실비율 분쟁 처리절차 172 64 동일 보험사 가입 차량 간 사고의 과실비율 분쟁 해결 174 2. 보험금 지급여부 ⑥ 임직원 한정특약 자동차보험의 피보험자 범위 176 66 지정운전자의 보상범위 177 ⑥ 자동차보험과 사실혼 배우자 181 ⑧ 자전거와의 충돌시 자기차량손해 ",
+            "page": 7
+          },
+          {
+            "chunk_id": "chunks_canonical_manifest.jsonl:13",
+            "confidence": 0.902,
+            "doc_name": "소비자 상담 주요 사례집",
+            "doc_short": "상담사례집",
+            "excerpt": "손해보험 소비자 상담 주요 사례집 63 자동차사고 과실비율 분쟁 처리절차 172 64 동일 보험사 가입 차량 간 사고의 과실비율 분쟁 해결 174 2. 보험금 지급여부 ⑥ 임직원 한정특약 자동차보험의 피보험자 범위 176 66 지정운전자의 보상범위 177 ⑥ 자동차보험과 사실혼 배우자 181 ⑧ 자전거와의 충돌시 자기차량손해 ",
+            "page": 7
+          },
+          {
+            "chunk_id": "chunks_canonical_manifest.jsonl:22",
+            "confidence": 0.983,
+            "doc_name": "소비자 상담 주요 사례집",
+            "doc_short": "상담사례집",
+            "excerpt": "크되어 있어 상품을 고른 후 해당 보험회사로 이동하여 바로 가입할 수 있습니다. * 자동차보험, 실손의료보험, 여행자보험, 연금보험, 어린이/태아보험, 암보험, 보장성보험, 저축성보험 손해보험협회 3",
+            "page": 13
+          }
+        ],
+        "status": "held",
+        "test_candidate": false
+      },
+      "runtime_included": false
+    },
+    {
+      "candidate_id": "dev.cov.superior_room_difference.d1fad7d62df5",
+      "concept_id": "cov.superior_room_difference",
+      "decision": "rejected",
+      "legacy_held_snapshot": {
+        "aliases": [],
+        "candidate_aliases": [
+          "상급병실특약 등"
+        ],
+        "candidate_id": "dev.cov.superior_room_difference.d1fad7d62df5",
+        "canonical_name": "상급병실료 차액",
+        "concept_id": "cov.superior_room_difference",
+        "created_at": "2026-06-11T04:30:55+00:00",
+        "evidence_tags": [
+          "candidate:상급병실특약등"
+        ],
+        "extraction_run_id": "ontology-candidate-extract-2026-06-11T04:30:54+00:00",
+        "node_type": "CoverageItem",
+        "planner": {
+          "conditions": [
+            "상급병실료 차액"
+          ],
+          "coverage_topics": [
+            "상급병실료 차액"
+          ]
+        },
+        "properties": {
+          "candidate_type": "alias_or_expansion",
+          "codex_dev_review": {
+            "decision": "hold",
+            "development_only": true,
+            "domain_fit": true,
+            "evidence_fit": true,
+            "policy_id": "ontology-review-default",
+            "policy_version": "2026-06-10",
+            "reason": "지급/면책/감액/한도 관련 표현 포함",
+            "reason_codes": [
+              "risk_term_guardrail"
+            ],
+            "risk_level": "medium"
+          },
+          "display": {
+            "approval_prompt": "위 표현들을 같은 보험 업무 개념으로 묶어도 될까요?",
+            "example_questions": [
+              "상급병실료 차액에 해당하면 보험금을 받을 수 있나요?",
+              "상급병실특약 등도 상급병실료 차액에 포함되나요?"
+            ],
+            "similar_expressions": [
+              "상급병실특약 등"
+            ],
+            "summary": "상급병실료 차액 관련 표현을 상담사례집 근거와 연결합니다. 원문 근거에서 반복 확인된 표현을 기존 보험 업무 개념에 함께 묶어 검색하기 위한 후보입니다."
+          },
+          "extraction": {
+            "policy_id": "candidate-extraction-default",
+            "policy_version": "2026-06-10",
+            "source": "processed_chunks_or_graph_evidence",
+            "term_count": 1
+          },
+          "review_feedback": {
+            "created_at": "2026-06-11T06:40:19+00:00",
+            "hold_reason_codes": [
+              "needs_more_evidence"
+            ],
+            "hold_reason_labels": [
+              "추가 근거 필요"
+            ],
+            "reviewer": "june-kim-mac",
+            "reviewer_type": "practitioner_local_ui"
+          },
+          "target_canonical_name": "상급병실료 차액",
+          "target_concept_id": "cov.superior_room_difference"
+        },
+        "retrieval": {
+          "expansion_rules": [
+            {
+              "expansion_terms": [
+                "상급병실특약 등"
+              ],
+              "match_any": [
+                "상급병실료 차액",
+                "상급병실료 차액",
+                "상급병실",
+                "병실료 차액"
+              ]
+            }
+          ]
+        },
+        "risk_flags": [
+          "requires_practitioner_review"
+        ],
+        "source_evidence": [
+          {
+            "chunk_id": "chunks_canonical_manifest.jsonl:1082",
+            "confidence": 0.99,
+            "doc_name": "소비자 상담 주요 사례집",
+            "doc_short": "상담사례집",
+            "excerpt": "A. 자동차 보험 66. 지정운전자의 보상범위 1. 상담신청 내용 제가 자동차보험을 가입할 때 저를 기명피보험자, 저의 누나를 지정 1인으로 정하여 각종 특약(자동차상해, 무보험차상해, 상급병실특약 등)을 넣어 계약하면, 지정운전자가 차량을 운행하던 중 사고발생시 기명피보험자와 동일하게 보상을 받을 수 있는가요? 2. 검토 의견",
+            "page": 187
+          },
+          {
+            "chunk_id": "chunks_canonical_manifest.jsonl:1084",
+            "confidence": 0.99,
+            "doc_name": "소비자 상담 주요 사례집",
+            "doc_short": "상담사례집",
+            "excerpt": "A. 자동차 보험 66. 지정운전자의 보상범위 1. 상담신청 내용 제가 자동차보험을 가입할 때 저를 기명피보험자, 저의 누나를 지정 1인으로 정하여 각종 특약(자동차상해, 무보험차상해, 상급병실특약 등)을 넣어 계약하면, 지정운전자가 차량을 운행하던 중 사고발생시 기명피보험자와 동일하게 보상을 받을 수 있는가요? 2. 검토 의견",
+            "page": 187
+          },
+          {
+            "chunk_id": "chunks_canonical_manifest.jsonl:1087",
+            "confidence": 0.982,
+            "doc_name": "소비자 상담 주요 사례집",
+            "doc_short": "상담사례집",
+            "excerpt": "지 않으면 보험금을 지정 1인이 받을 수는 없습니다. 4) 자동차보험의 각 담보를 살펴보면, 대인배상 I 과 II, 대물배상, 자기차량손해, 자기신체 손해 또는 자동차상해, 무보험차상해, 타차운전특약, 상급병실 지원특약 등이 있습니다. 대인배상 I 과 II, 대물배상에서는 피보험자의 범위를 기명피보험자, 친족피보험자, 승낙피보험자",
+            "page": 188
+          }
+        ],
+        "status": "held",
+        "test_candidate": false
+      },
+      "runtime_included": false
+    },
+    {
+      "candidate_id": "",
+      "concept_id": "cond.age_related_hair_loss",
+      "decision": "rejected",
+      "rejection_reason": "provenance deficient base payload remains excluded",
+      "runtime_included": false
+    },
+    {
+      "candidate_id": "",
+      "concept_id": "cond.disease_related_hair_loss",
+      "decision": "rejected",
+      "rejection_reason": "provenance deficient base payload remains excluded",
+      "runtime_included": false
+    },
+    {
+      "candidate_id": "",
+      "concept_id": "cond.pay_nonpay_status",
+      "decision": "rejected",
+      "rejection_reason": "provenance deficient base payload remains excluded",
+      "runtime_included": false
+    },
+    {
+      "candidate_id": "",
+      "concept_id": "cond.treatment_side_effect_hair_loss",
+      "decision": "rejected",
+      "rejection_reason": "provenance deficient base payload remains excluded",
+      "runtime_included": false
+    },
+    {
+      "candidate_id": "",
+      "concept_id": "cond.work_daily_life_impairment",
+      "decision": "rejected",
+      "rejection_reason": "provenance deficient base payload remains excluded",
+      "runtime_included": false
+    },
+    {
+      "candidate_id": "",
+      "concept_id": "cov.hair_loss",
+      "decision": "rejected",
+      "rejection_reason": "provenance deficient base payload remains excluded",
+      "runtime_included": false
+    }
+  ],
+  "legacy_held_candidate_ids": [
+    "dev.cond.motorcycle_riding.fc842c72db6f",
+    "dev.cov.indemnity_medical.2f8f7057fb90",
+    "dev.cov.superior_room_difference.d1fad7d62df5"
+  ],
+  "rejected_runtime_concept_ids": [
+    "cond.age_related_hair_loss",
+    "cond.disease_related_hair_loss",
+    "cond.pay_nonpay_status",
+    "cond.policy_source_authority",
+    "cond.treatment_side_effect_hair_loss",
+    "cond.work_daily_life_impairment",
+    "cov.hair_loss"
+  ],
+  "runtime_projection": [
+    {
+      "calculation_hook": false,
+      "concept_id": "cond.claim_payment_timeline",
+      "runtime_content_hash": "6ff826e65b8b7ab28dc7552fb8056912d6b4d655edfe40985cdd0035ccc79cd1",
+      "runtime_decision_profile": false
+    },
+    {
+      "calculation_hook": false,
+      "concept_id": "cond.dental_treatment_classification",
+      "runtime_content_hash": "d02a880d97c72ce19e55e3d07d2d892619f45844f110ad070f46486e79a7f1cc",
+      "runtime_decision_profile": false
+    },
+    {
+      "calculation_hook": false,
+      "concept_id": "cond.foreign_medical_institution",
+      "runtime_content_hash": "72ecebab1c426ac5e240dfd755ca08a7098e74a65b4bc4e4dcf010ec41c68fb6",
+      "runtime_decision_profile": false
+    },
+    {
+      "calculation_hook": false,
+      "concept_id": "cond.korean_medicine_treatment_context",
+      "runtime_content_hash": "ade2cb31750458157ef5c75b3478c50a9a812ea7a2563aa61d9a84192ee8010e",
+      "runtime_decision_profile": false
+    },
+    {
+      "calculation_hook": false,
+      "concept_id": "cond.nonclaim_history_discount",
+      "runtime_content_hash": "ed1b884db8159097fba08ab80802771dc1eeac7451db6cdfe1ffa719bb6ffe0b",
+      "runtime_decision_profile": false
+    },
+    {
+      "calculation_hook": false,
+      "concept_id": "evidence.claim_document_requirements",
+      "runtime_content_hash": "77757ec7fd7bff930b60c9b00851bae4ad532825eed08582463a5b8771380f80",
+      "runtime_decision_profile": false
+    }
+  ],
+  "schema_version": 1,
+  "status": "implemented_in_isolated_candidate",
+  "trusted_baseline_content_hash": "ccfbf4faa15bbd34993e1f09aa7fe90fb72f519de2cf955f0bbfa80b290fe3b2"
+}

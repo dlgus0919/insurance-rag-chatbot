@@ -1,0 +1,1175 @@
+{
+  "artifact_type": "v1_2_0_general_query_ontology_candidate_batch",
+  "schema_version": 1,
+  "status": "pending_practitioner_decision",
+  "prepared_at": "2026-07-19T00:00:00+00:00",
+  "preparation_only": true,
+  "frozen_input_hashes": {
+    "data/rules/claim_deductible_rules.active.json": "ab4f75c34ad3e4e1859b7a299f403eb744df6cab8fee79907aee4367e3a2a818",
+    "data/rules/rule_links.active.json": "ab941d9ba6636e316f1e057d4cc388d7c99b1ce0cc1e89f4d54dd3f756ed26d9",
+    "src/claim_calculation/processing_policy.py": "5a479a7020fccd7f62cdfc7327a9da339fbad1b1a29faedef4e10dd8489bf72f"
+  },
+  "trusted_baseline": {
+    "raw_concept_count": 55,
+    "trusted_concept_count": 49,
+    "excluded_provenance_deficient_concept_ids": [
+      "cond.age_related_hair_loss",
+      "cond.disease_related_hair_loss",
+      "cond.pay_nonpay_status",
+      "cond.treatment_side_effect_hair_loss",
+      "cond.work_daily_life_impairment",
+      "cov.hair_loss"
+    ],
+    "trusted_base_content_hash": "ccfbf4faa15bbd34993e1f09aa7fe90fb72f519de2cf955f0bbfa80b290fe3b2",
+    "source_manifest_content_hash": "9700d288477ce2e9aa6e21d374849f56be00096b6a89bc8e7e1bc2c0463ff12c"
+  },
+  "extraction_method": {
+    "mode": "template_only",
+    "llm_server_action": "none",
+    "candidate_decision_action": "none",
+    "active_ontology_action": "none"
+  },
+  "evaluation_sources": [
+    {
+      "label": "phase4_weak20_final_answers_for_practitioner_review (2).xlsx",
+      "case_count": 20,
+      "raw_question_text_stored": false
+    },
+    {
+      "label": "테스트셋(추가56문항)_qwen80b (2).xlsx",
+      "case_count": 56,
+      "score_distribution": {
+        "5": 43,
+        "3": 2,
+        "2": 1,
+        "1": 9,
+        "unscored": 1
+      },
+      "raw_question_text_stored": false
+    }
+  ],
+  "proposals": [
+    {
+      "proposal_type": "new_concept",
+      "candidate": {
+        "candidate_id": "practitioner.v1_2_0.evidence.claim_document_requirements",
+        "concept_id": "evidence.claim_document_requirements",
+        "canonical_name": "보험금 청구 구비서류",
+        "node_type": "EvidenceRequirement",
+        "aliases": [],
+        "candidate_aliases": [
+          "보험금 청구 서류",
+          "청구 구비서류",
+          "추가 청구서류"
+        ],
+        "evidence_tags": [
+          "claim_document",
+          "source_grounded"
+        ],
+        "planner": {
+          "required_context": [
+            "claim_event_type",
+            "available_documents"
+          ],
+          "evidence_categories": [
+            "claim_document"
+          ]
+        },
+        "retrieval": {
+          "lexical_priority_terms": [
+            "보험금 청구 서류",
+            "청구 구비서류",
+            "추가 청구서류"
+          ],
+          "expansion_rules": [
+            {
+              "match_any": [
+                "보험금 청구 구비서류",
+                "보험금 청구 서류",
+                "청구 구비서류",
+                "추가 청구서류"
+              ],
+              "expansion_terms": [
+                "보험금 청구 서류",
+                "청구 구비서류",
+                "추가 청구서류"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "candidate_type": "new_concept",
+          "candidate_scope": "general_query"
+        },
+        "runtime_properties": {},
+        "source_evidence": [
+          {
+            "chunk_id": "약관_ch_002317",
+            "page_start": 8,
+            "page_end": 31,
+            "doc_short": "약관",
+            "doc_name": "신한 이지로운 실손의료보험(무배당) 약관",
+            "document_authority": "own_company_policy",
+            "policy_generation": "4th",
+            "is_own_company": true,
+            "excerpt": "보험금 청구절차 및 서류 [보통약관 제8조] 보험금은 청구서류 접수일부터 3영업일 이내에 지급하는 것이 원칙입니다. 단, 보험금 지급사유의 조사·확인이 필요한 경우 30영업일이 소요될 수 있습니다. 소액 보험금 청구시 진단서 제출이 면제되는 등 청구서류가 간소화되는 경우도 있으니, 보험금청구 전에 보험회사에 제출서류를 확인하시기 바랍니다. 보험금 청구서류 입ㆍ퇴원 확 수술 통원 진단사실 구분",
+            "source_hash": "580f62c486939742c17875d1828a13e797cf534b5674bea64fe1f849130c8bfa"
+          },
+          {
+            "chunk_id": "약관_ch_002318",
+            "page_start": 8,
+            "page_end": 31,
+            "doc_short": "약관",
+            "doc_name": "신한 이지로운 실손의료보험(무배당) 약관",
+            "document_authority": "own_company_policy",
+            "policy_generation": "4th",
+            "is_own_company": true,
+            "excerpt": "진료비 세부내역서 등 추가서류가 필요할 수 있습니다. 자세한 사항은 다음의 「보험금 청구시 구비서류 안내」를 참고하세요 19 보험금 청구시 구비서류 안내 ※ 아래의 보험금 청구서류 외에도 추가/대체 서류를 요청 드리",
+            "source_hash": "e50795a838b8c0693866d7b2c7ec4ebd8b301a429aea594a4da5c4a9969aa154"
+          }
+        ],
+        "status": "pending",
+        "risk_flags": [
+          "requires_practitioner_review",
+          "claim_event_context_required",
+          "no_runtime_decision"
+        ],
+        "test_candidate": false,
+        "created_at": "2026-07-19T00:00:00+00:00",
+        "extraction_run_id": "v1.2.0-general-query-template-only-20260719"
+      },
+      "evaluation_case_ids": [
+        "new_20260702_014",
+        "new_20260702_019",
+        "expanded_20260615_082"
+      ],
+      "evidence_note": "청구 유형과 보유 서류를 분리해 확인하도록 돕는 일반 증빙 개념이며, 서류 목록을 고정하지 않습니다.",
+      "proposed_field_approval_paths": [
+        "canonical_name",
+        "node_type",
+        "candidate_aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ]
+    },
+    {
+      "proposal_type": "new_concept",
+      "candidate": {
+        "candidate_id": "practitioner.v1_2_0.cond.claim_payment_timeline",
+        "concept_id": "cond.claim_payment_timeline",
+        "canonical_name": "보험금 지급 절차 및 지연 사유",
+        "node_type": "ClaimCondition",
+        "aliases": [],
+        "candidate_aliases": [
+          "보험금 지급기일",
+          "보험금 지급 지연 사유",
+          "지급예정일"
+        ],
+        "evidence_tags": [
+          "claim_payment_process",
+          "source_grounded"
+        ],
+        "planner": {
+          "required_context": [
+            "policy_source",
+            "claim_received_at",
+            "delay_notice_status"
+          ],
+          "clarification_fields": [
+            "policy_source",
+            "delay_notice_status"
+          ]
+        },
+        "retrieval": {
+          "lexical_priority_terms": [
+            "보험금 지급기일",
+            "보험금 지급 지연 사유",
+            "지급예정일"
+          ],
+          "expansion_rules": [
+            {
+              "match_any": [
+                "보험금 지급 절차 및 지연 사유",
+                "보험금 지급기일",
+                "보험금 지급 지연 사유",
+                "지급예정일"
+              ],
+              "expansion_terms": [
+                "보험금 지급기일",
+                "보험금 지급 지연 사유",
+                "지급예정일"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "candidate_type": "new_concept",
+          "candidate_scope": "general_query"
+        },
+        "runtime_properties": {},
+        "source_evidence": [
+          {
+            "chunk_id": "약관_ch_002353",
+            "page_start": 40,
+            "page_end": 41,
+            "doc_short": "약관",
+            "doc_name": "신한 이지로운 실손의료보험(무배당) 약관",
+            "document_authority": "own_company_policy",
+            "policy_generation": "4th",
+            "is_own_company": true,
+            "excerpt": "제10조(보험금의 지급절차) ① 회사는 제9조(보험금의 청구)에서 정한 서류를 접수한 때에는 접수증을 드리고 휴대전화 문자메시지 또는 전자 우편 등으로도 송부하며, 그 서류를 접수한 날부터 3영업일 이내에 보험금을 지급합니다. ② 제1항에도 불구하고 회사는 보험금 지급사유를 조사∙확인하기 위하여 제1항의 지급기일 이내에 보험금을 지급 하지 못할 것으로 명백히 예상되는 경우에는 그 구체적인 사유와 지급예정일 및 보험금 가지급제도(회사가 추정 하는 보험금의 50% 이내의 금액을 지급하는 제도를 말합니다)에 대하여 피보험자 또는 보험수익자에게 즉시 통 지하여 드립니다. 다만, 지급예정일은",
+            "source_hash": "4dd2c86101b41611206939c2d08311218ad65fd05ed6eeb99929824166be96bc"
+          }
+        ],
+        "status": "pending",
+        "risk_flags": [
+          "requires_practitioner_review",
+          "policy_generation_sensitive",
+          "no_runtime_decision"
+        ],
+        "test_candidate": false,
+        "created_at": "2026-07-19T00:00:00+00:00",
+        "extraction_run_id": "v1.2.0-general-query-template-only-20260719"
+      },
+      "evaluation_case_ids": [
+        "new_20260702_014",
+        "new_20260702_015",
+        "new_20260702_019",
+        "new_20260702_023",
+        "new_20260702_047"
+      ],
+      "evidence_note": "지급 기한과 지연 사유의 출처 확인을 위한 개념이며, 지급액 또는 지급 결론을 포함하지 않습니다.",
+      "proposed_field_approval_paths": [
+        "canonical_name",
+        "node_type",
+        "candidate_aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ]
+    },
+    {
+      "proposal_type": "new_concept",
+      "candidate": {
+        "candidate_id": "practitioner.v1_2_0.cond.policy_source_authority",
+        "concept_id": "cond.policy_source_authority",
+        "canonical_name": "약관 출처 및 실손 세대 확인",
+        "node_type": "ClaimCondition",
+        "aliases": [],
+        "candidate_aliases": [
+          "자사 상품 약관",
+          "표준약관",
+          "실손 세대"
+        ],
+        "evidence_tags": [
+          "source_authority",
+          "policy_generation",
+          "source_grounded"
+        ],
+        "planner": {
+          "required_context": [
+            "policy_generation",
+            "document_authority",
+            "product_document_presence"
+          ],
+          "clarification_fields": [
+            "policy_generation",
+            "document_authority"
+          ]
+        },
+        "retrieval": {
+          "lexical_priority_terms": [
+            "자사 상품 약관",
+            "표준약관",
+            "실손 세대"
+          ],
+          "expansion_rules": [
+            {
+              "match_any": [
+                "약관 출처 및 실손 세대 확인",
+                "자사 상품 약관",
+                "표준약관",
+                "실손 세대"
+              ],
+              "expansion_terms": [
+                "자사 상품 약관",
+                "표준약관",
+                "실손 세대"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "candidate_type": "new_concept",
+          "candidate_scope": "general_query"
+        },
+        "runtime_properties": {},
+        "source_evidence": [
+          {
+            "chunk_id": "약관_ch_002286",
+            "page_start": 1,
+            "page_end": 2,
+            "doc_short": "약관",
+            "doc_name": "신한 이지로운 실손의료보험(무배당) 약관",
+            "document_authority": "own_company_policy",
+            "policy_generation": "4th",
+            "is_own_company": true,
+            "excerpt": "신한 이지로운 실손의료보험 (무배당) (일반형),(전환·재개용) 2026년 4월부터 적용 보험약관 이 보험약관은 금융소비자보호법 및 소비자보호 내부통제기준에 따른 절차를 거쳐 제공됩니다. [ 목차 ] 약관이용 가이드북 ..........................................................",
+            "source_hash": "6c3cd3a63a6582e0a357215d03e32bf96af17dc9977901c4e8ac285dd4ab1892"
+          },
+          {
+            "chunk_id": "표준약관_ch_004925",
+            "page_start": 1,
+            "page_end": 1,
+            "doc_short": "표준약관",
+            "doc_name": "표준약관(제5-13조제1항관련)",
+            "document_authority": "standard_policy",
+            "policy_generation": "5th",
+            "is_own_company": false,
+            "excerpt": "4. 실손의료보험 ·································································· - 기본형 실손의료보험(급여) ······························ 202 - 실손의료보험 특별약관(비급여) ······················ 249 5. 해외여행 실손의료보험 - 기본형 실손의료보험(급여) ······························ 27",
+            "source_hash": "d0b9b2f1067125d0007f3c95828be5357b8b2670aea3caf6d77970d849983300"
+          }
+        ],
+        "status": "pending",
+        "risk_flags": [
+          "requires_practitioner_review",
+          "authority_resolution_required",
+          "no_runtime_decision"
+        ],
+        "test_candidate": false,
+        "created_at": "2026-07-19T00:00:00+00:00",
+        "extraction_run_id": "v1.2.0-general-query-template-only-20260719"
+      },
+      "evaluation_case_ids": [
+        "new_20260702_035",
+        "new_20260702_047"
+      ],
+      "evidence_note": "자사 약관과 표준약관의 문서 권위를 구분하기 위한 분류 개념이며, 어느 출처가 특정 고객 계약에 적용되는지 자동 확정하지 않습니다.",
+      "proposed_field_approval_paths": [
+        "canonical_name",
+        "node_type",
+        "candidate_aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ]
+    },
+    {
+      "proposal_type": "new_concept",
+      "candidate": {
+        "candidate_id": "practitioner.v1_2_0.cond.korean_medicine_treatment_context",
+        "concept_id": "cond.korean_medicine_treatment_context",
+        "canonical_name": "한방 치료 적용 맥락",
+        "node_type": "ClaimCondition",
+        "aliases": [],
+        "candidate_aliases": [
+          "한방 치료",
+          "한의원 진료",
+          "한방 의료기관"
+        ],
+        "evidence_tags": [
+          "korean_medicine",
+          "policy_clause_required",
+          "source_grounded"
+        ],
+        "planner": {
+          "required_context": [
+            "policy_generation",
+            "provider_type",
+            "benefit_status"
+          ],
+          "clarification_fields": [
+            "provider_type",
+            "benefit_status"
+          ]
+        },
+        "retrieval": {
+          "lexical_priority_terms": [
+            "한방 치료",
+            "한의원 진료",
+            "한방 의료기관"
+          ],
+          "expansion_rules": [
+            {
+              "match_any": [
+                "한방 치료 적용 맥락",
+                "한방 치료",
+                "한의원 진료",
+                "한방 의료기관"
+              ],
+              "expansion_terms": [
+                "한방 치료",
+                "한의원 진료",
+                "한방 의료기관"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "candidate_type": "new_concept",
+          "candidate_scope": "general_query"
+        },
+        "runtime_properties": {},
+        "source_evidence": [
+          {
+            "chunk_id": "약관_ch_002421",
+            "page_start": 62,
+            "page_end": 66,
+            "doc_short": "약관",
+            "doc_name": "신한 이지로운 실손의료보험(무배당) 약관",
+            "document_authority": "own_company_policy",
+            "policy_generation": "4th",
+            "is_own_company": true,
+            "excerpt": "의사 「의료법」제2조(의료인)에서 정한 의사, 한의사 및 치과의사의 면허를 가진 사람 약사 「약사법」제2조(정의)에서 정한 약사 및 한약사의 면허를 가진 사람 다음 각 호를 말한다. 1.「의료법」 제3조(의료기관) 제2항에서 정하는 의료기관을 말하며, 종합병원∙병원∙치과병 의료기관 원∙한방병원∙요양병원∙의원∙치과의원∙한의원(조산원 제외) 2. 「국민건강보험법」 제42조제1항제4호에 의한 보건소∙보건의료원∙보건지소 및 동법 제 42조제1항제5호에 의한 보건진료소 의사가 피보험자의 질병 또는 상해로 인하여 치료가 필요하다고 인정한 경우로서 자택 입원 등",
+            "source_hash": "da76da5117b534b9db2d25a80373262b27f23470f58a3b34927b6aa8805b3dbb"
+          },
+          {
+            "chunk_id": "약관_ch_002451",
+            "page_start": 78,
+            "page_end": 84,
+            "doc_short": "약관",
+            "doc_name": "신한 이지로운 실손의료보험(무배당) 약관",
+            "document_authority": "own_company_policy",
+            "policy_generation": "4th",
+            "is_own_company": true,
+            "excerpt": "치과치료(K00∼K08) 및 한방치료(다만, 「의료법」 제2조에 따른 한의사를 제외한 ‘의사’의 의료행위에 의해서 발생한 의료비는 보상합니다) 2. 영양제, 비타민제 등의 약제와",
+            "source_hash": "7295c1fbb010d53473650d59c955115f0f50a889a1a80acfc3b0a8439d8afc85"
+          }
+        ],
+        "status": "pending",
+        "risk_flags": [
+          "requires_practitioner_review",
+          "exact_policy_clause_required",
+          "no_runtime_decision"
+        ],
+        "test_candidate": false,
+        "created_at": "2026-07-19T00:00:00+00:00",
+        "extraction_run_id": "v1.2.0-general-query-template-only-20260719"
+      },
+      "evaluation_case_ids": [
+        "new_20260702_021"
+      ],
+      "evidence_note": "진료 주체와 급여 구분을 확인하는 검색·질문 분류 개념이며, 보장 여부를 단독으로 결정하지 않습니다.",
+      "proposed_field_approval_paths": [
+        "canonical_name",
+        "node_type",
+        "candidate_aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ]
+    },
+    {
+      "proposal_type": "new_concept",
+      "candidate": {
+        "candidate_id": "practitioner.v1_2_0.cond.dental_treatment_classification",
+        "concept_id": "cond.dental_treatment_classification",
+        "canonical_name": "치과 치료 질환 분류",
+        "node_type": "ClaimCondition",
+        "aliases": [],
+        "candidate_aliases": [
+          "치과 치료",
+          "치과 질환",
+          "치아 질환"
+        ],
+        "evidence_tags": [
+          "dental",
+          "diagnosis_code_range:K00-K08",
+          "policy_clause_required",
+          "source_grounded"
+        ],
+        "planner": {
+          "required_context": [
+            "policy_generation",
+            "diagnosis_classification",
+            "treatment_context"
+          ],
+          "clarification_fields": [
+            "diagnosis_classification",
+            "treatment_context"
+          ]
+        },
+        "retrieval": {
+          "lexical_priority_terms": [
+            "치과 치료",
+            "치과 질환",
+            "치아 질환"
+          ],
+          "expansion_rules": [
+            {
+              "match_any": [
+                "치과 치료 질환 분류",
+                "치과 치료",
+                "치과 질환",
+                "치아 질환"
+              ],
+              "expansion_terms": [
+                "치과 치료",
+                "치과 질환",
+                "치아 질환"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "candidate_type": "new_concept",
+          "candidate_scope": "general_query"
+        },
+        "runtime_properties": {},
+        "source_evidence": [
+          {
+            "chunk_id": "약관_ch_002451",
+            "page_start": 78,
+            "page_end": 84,
+            "doc_short": "약관",
+            "doc_name": "신한 이지로운 실손의료보험(무배당) 약관",
+            "document_authority": "own_company_policy",
+            "policy_generation": "4th",
+            "is_own_company": true,
+            "excerpt": "치과치료(K00∼K08) 및 한방치료(다만, 「의료법」 제2조에 따른 한의사를 제외한 ‘의사’의 의료행위에 의해서 발생한 의료비는 보상합니다) 2. 영양제, 비타민제 등의 약제와 관련하여 소요된 비용. 다만 약관상 보상하는 질병을 치료함에 있어 아래",
+            "source_hash": "7295c1fbb010d53473650d59c955115f0f50a889a1a80acfc3b0a8439d8afc85"
+          }
+        ],
+        "status": "pending",
+        "risk_flags": [
+          "requires_practitioner_review",
+          "diagnosis_classification_required",
+          "no_runtime_decision"
+        ],
+        "test_candidate": false,
+        "created_at": "2026-07-19T00:00:00+00:00",
+        "extraction_run_id": "v1.2.0-general-query-template-only-20260719"
+      },
+      "evaluation_case_ids": [
+        "new_20260702_022"
+      ],
+      "evidence_note": "질환 분류와 치료 맥락을 확인하기 위한 개념이며, 코드 범위를 별칭으로 등록하거나 보장 결론으로 사용하지 않습니다.",
+      "proposed_field_approval_paths": [
+        "canonical_name",
+        "node_type",
+        "candidate_aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ]
+    },
+    {
+      "proposal_type": "new_concept",
+      "candidate": {
+        "candidate_id": "practitioner.v1_2_0.cond.foreign_medical_institution",
+        "concept_id": "cond.foreign_medical_institution",
+        "canonical_name": "해외 의료기관 진료",
+        "node_type": "ClaimCondition",
+        "aliases": [],
+        "candidate_aliases": [
+          "해외 의료기관",
+          "해외 진료",
+          "외국 의료기관"
+        ],
+        "evidence_tags": [
+          "foreign_medical",
+          "standard_policy_reference",
+          "source_grounded"
+        ],
+        "planner": {
+          "required_context": [
+            "policy_generation",
+            "travel_context",
+            "provider_location"
+          ],
+          "clarification_fields": [
+            "travel_context",
+            "provider_location"
+          ]
+        },
+        "retrieval": {
+          "lexical_priority_terms": [
+            "해외 의료기관",
+            "해외 진료",
+            "외국 의료기관"
+          ],
+          "expansion_rules": [
+            {
+              "match_any": [
+                "해외 의료기관 진료",
+                "해외 의료기관",
+                "해외 진료",
+                "외국 의료기관"
+              ],
+              "expansion_terms": [
+                "해외 의료기관",
+                "해외 진료",
+                "외국 의료기관"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "candidate_type": "new_concept",
+          "candidate_scope": "general_query"
+        },
+        "runtime_properties": {},
+        "source_evidence": [
+          {
+            "chunk_id": "표준약관_ch_005463",
+            "page_start": 313,
+            "page_end": 313,
+            "doc_short": "표준약관",
+            "doc_name": "표준약관(제5-13조제1항관련)",
+            "document_authority": "standard_policy",
+            "policy_generation": "5th",
+            "is_own_company": false,
+            "excerpt": "해외의료기관은 해외소재 의료기관을 말하며, 해외소재약국을 포함합니다. 이하 동일합니다. 주2)「국민건강보험법」에서 정한 요양급여 또는 「의료급여법」에서 정한 의료급 여",
+            "source_hash": "59629d229e961123d8c6c7f47ddd126d651c27975e5a25a90dd98d14275d97a8"
+          }
+        ],
+        "status": "pending",
+        "risk_flags": [
+          "requires_practitioner_review",
+          "standard_reference_only",
+          "no_runtime_decision"
+        ],
+        "test_candidate": false,
+        "created_at": "2026-07-19T00:00:00+00:00",
+        "extraction_run_id": "v1.2.0-general-query-template-only-20260719"
+      },
+      "evaluation_case_ids": [
+        "new_20260702_025"
+      ],
+      "evidence_note": "해외 진료의 문서·지역 맥락을 구분하는 개념이며, 자사 상품 약관 부재 시 표준약관을 계약 결론으로 대체하지 않습니다.",
+      "proposed_field_approval_paths": [
+        "canonical_name",
+        "node_type",
+        "candidate_aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ]
+    },
+    {
+      "proposal_type": "new_concept",
+      "candidate": {
+        "candidate_id": "practitioner.v1_2_0.cond.nonclaim_history_discount",
+        "concept_id": "cond.nonclaim_history_discount",
+        "canonical_name": "무사고·무청구 할인 조건",
+        "node_type": "ClaimCondition",
+        "aliases": [],
+        "candidate_aliases": [
+          "무사고 할인",
+          "무청구 할인",
+          "비급여 보험료 차등제"
+        ],
+        "evidence_tags": [
+          "nonclaim_history",
+          "premium_adjustment",
+          "source_grounded"
+        ],
+        "planner": {
+          "required_context": [
+            "policy_generation",
+            "contract_history",
+            "premium_adjustment_context"
+          ],
+          "clarification_fields": [
+            "contract_history",
+            "premium_adjustment_context"
+          ]
+        },
+        "retrieval": {
+          "lexical_priority_terms": [
+            "무사고 할인",
+            "무청구 할인",
+            "비급여 보험료 차등제"
+          ],
+          "expansion_rules": [
+            {
+              "match_any": [
+                "무사고·무청구 할인 조건",
+                "무사고 할인",
+                "무청구 할인",
+                "비급여 보험료 차등제"
+              ],
+              "expansion_terms": [
+                "무사고 할인",
+                "무청구 할인",
+                "비급여 보험료 차등제"
+              ]
+            }
+          ]
+        },
+        "properties": {
+          "candidate_type": "new_concept",
+          "candidate_scope": "general_query"
+        },
+        "runtime_properties": {},
+        "source_evidence": [
+          {
+            "chunk_id": "약관_ch_002313",
+            "page_start": 8,
+            "page_end": 31,
+            "doc_short": "약관",
+            "doc_name": "신한 이지로운 실손의료보험(무배당) 약관",
+            "document_authority": "own_company_policy",
+            "policy_generation": "4th",
+            "is_own_company": true,
+            "excerpt": "무사고 판정기간' 동안 비급여 보험금 지 급실적이 없는 경우 영업보험료의 10%를 할인하여 드립니다. [단, 4대중증질환(암/뇌혈 무사고자 관/심장/희귀난치성 질환)으로 인한 비급여 의료비에 대한 보험금은",
+            "source_hash": "acd4696ff931b00383495c9499d7658b5c8c53d21a54dff2022bd91f6e8dfaf6"
+          }
+        ],
+        "status": "pending",
+        "risk_flags": [
+          "requires_practitioner_review",
+          "product_specific_terms",
+          "not_a_claim_outcome",
+          "no_runtime_decision"
+        ],
+        "test_candidate": false,
+        "created_at": "2026-07-19T00:00:00+00:00",
+        "extraction_run_id": "v1.2.0-general-query-template-only-20260719"
+      },
+      "evaluation_case_ids": [
+        "new_20260702_026",
+        "new_20260702_027"
+      ],
+      "evidence_note": "보험료 조정 맥락의 용어 분류만 제안하며, 격리된 급여/비급여 상태 개념 또는 지급 판단을 재도입하지 않습니다.",
+      "proposed_field_approval_paths": [
+        "canonical_name",
+        "node_type",
+        "candidate_aliases",
+        "evidence_tags",
+        "planner",
+        "retrieval.expansion_rules",
+        "retrieval.lexical_priority_terms"
+      ]
+    }
+  ],
+  "not_proposed": [
+    {
+      "topic": "수술 제외 목적",
+      "reason": "trusted 49 baseline의 cond.cosmetic_purpose, cond.treatment_purpose, cond.preventive_purpose가 이미 목적 분류를 담당합니다. 중복 후보를 만들지 않고 후속 검색 평가로 확인합니다.",
+      "baseline_concept_ids": [
+        "cond.cosmetic_purpose",
+        "cond.treatment_purpose",
+        "cond.preventive_purpose"
+      ]
+    },
+    {
+      "topic": "다수 실손보험 및 비례 처리",
+      "reason": "trusted 49 baseline의 cond.other_insurance_payment가 이미 타 보험·다른 보험 문맥을 담당합니다. 이번 배치에서는 별칭을 넓혀 지급 판단 범위를 넓히지 않습니다.",
+      "baseline_concept_ids": [
+        "cond.other_insurance_payment"
+      ]
+    },
+    {
+      "topic": "약관 모호성 및 근거 부족",
+      "reason": "trusted 49 baseline의 cond.insufficient_evidence가 증빙 부족 경로를 담당합니다. 후보를 중복 생성하지 않고 약관 출처 및 실손 세대 확인 후보로 문서 권위 판별을 보강합니다.",
+      "baseline_concept_ids": [
+        "cond.insufficient_evidence"
+      ]
+    },
+    {
+      "topic": "급여/비급여 상태",
+      "reason": "cond.pay_nonpay_status는 provenance-deficient excluded set에 속합니다. 별칭·판단 payload를 재도입하지 않으며, 별도의 무사고·무청구 할인 맥락만 독립 후보로 제한합니다.",
+      "baseline_concept_ids": [
+        "cond.pay_nonpay_status"
+      ]
+    }
+  ],
+  "legacy_held_disposition_appendix": [
+    {
+      "aliases": [],
+      "candidate_aliases": [
+        "중지 입원의료비로 간주"
+      ],
+      "candidate_id": "dev.cov.indemnity_medical.2f8f7057fb90",
+      "canonical_name": "실손",
+      "concept_id": "cov.indemnity_medical",
+      "created_at": "2026-06-11T04:30:55+00:00",
+      "evidence_tags": [
+        "candidate:보험금지급여부",
+        "candidate:보장성보험",
+        "candidate:자동차보험외에도실손의료보험"
+      ],
+      "extraction_run_id": "ontology-candidate-extract-2026-06-11T04:30:54+00:00",
+      "node_type": "CoverageItem",
+      "planner": {
+        "coverage_topics": [
+          "실손"
+        ]
+      },
+      "properties": {
+        "candidate_type": "alias_or_expansion",
+        "codex_dev_review": {
+          "decision": "hold",
+          "development_only": true,
+          "domain_fit": true,
+          "evidence_fit": true,
+          "policy_id": "ontology-review-default",
+          "policy_version": "2026-06-10",
+          "reason": "지급/면책/감액/한도 관련 표현 포함",
+          "reason_codes": [
+            "risk_term_guardrail"
+          ],
+          "risk_level": "medium"
+        },
+        "display": {
+          "approval_prompt": "위 표현들을 같은 보험 업무 개념으로 묶어도 될까요?",
+          "example_questions": [
+            "실손에 해당하면 보험금을 받을 수 있나요?",
+            "보험금 지급여부도 실손에 포함되나요?"
+          ],
+          "similar_expressions": [
+            "보험금 지급여부",
+            "보장성보험",
+            "자동차보험 외에도 실손의료보험",
+            "중지 입원의료비로 간주"
+          ],
+          "summary": "실손 관련 표현을 상담사례집 근거와 연결합니다. 원문 근거에서 반복 확인된 표현을 기존 보험 업무 개념에 함께 묶어 검색하기 위한 후보입니다."
+        },
+        "extraction": {
+          "policy_id": "candidate-extraction-default",
+          "policy_version": "2026-06-10",
+          "source": "processed_chunks_or_graph_evidence",
+          "term_count": 4
+        },
+        "quality_repair": {
+          "removed_candidate_aliases": [
+            {
+              "alias": "보험금 지급여부",
+              "reason": "candidate_alias_multi_owner"
+            },
+            {
+              "alias": "보장성보험",
+              "reason": "candidate_alias_multi_owner"
+            },
+            {
+              "alias": "자동차보험 외에도 실손의료보험",
+              "reason": "candidate_alias_multi_owner"
+            }
+          ],
+          "repair_policy": "remove_sentence_fragments_and_multi_owner_aliases"
+        },
+        "review_feedback": {
+          "created_at": "2026-06-11T06:35:28+00:00",
+          "hold_reason_codes": [
+            "evidence_mismatch"
+          ],
+          "hold_reason_labels": [
+            "원문 근거 연결 부적절"
+          ],
+          "reviewer": "june-kim-mac",
+          "reviewer_type": "practitioner_local_ui"
+        },
+        "target_canonical_name": "실손",
+        "target_concept_id": "cov.indemnity_medical"
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "expansion_terms": [
+              "보험금 지급여부",
+              "보장성보험",
+              "자동차보험 외에도 실손의료보험",
+              "중지 입원의료비로 간주"
+            ],
+            "match_any": [
+              "실손",
+              "실손",
+              "실비",
+              "실손보험"
+            ]
+          }
+        ]
+      },
+      "risk_flags": [
+        "requires_practitioner_review"
+      ],
+      "source_evidence": [
+        {
+          "chunk_id": "chunks_canonical_manifest.jsonl:12",
+          "confidence": 0.902,
+          "doc_name": "소비자 상담 주요 사례집",
+          "doc_short": "상담사례집",
+          "excerpt": "손해보험 소비자 상담 주요 사례집 63 자동차사고 과실비율 분쟁 처리절차 172 64 동일 보험사 가입 차량 간 사고의 과실비율 분쟁 해결 174 2. 보험금 지급여부 ⑥ 임직원 한정특약 자동차보험의 피보험자 범위 176 66 지정운전자의 보상범위 177 ⑥ 자동차보험과 사실혼 배우자 181 ⑧ 자전거와의 충돌시 자기차량손해 ",
+          "page": 7
+        },
+        {
+          "chunk_id": "chunks_canonical_manifest.jsonl:13",
+          "confidence": 0.902,
+          "doc_name": "소비자 상담 주요 사례집",
+          "doc_short": "상담사례집",
+          "excerpt": "손해보험 소비자 상담 주요 사례집 63 자동차사고 과실비율 분쟁 처리절차 172 64 동일 보험사 가입 차량 간 사고의 과실비율 분쟁 해결 174 2. 보험금 지급여부 ⑥ 임직원 한정특약 자동차보험의 피보험자 범위 176 66 지정운전자의 보상범위 177 ⑥ 자동차보험과 사실혼 배우자 181 ⑧ 자전거와의 충돌시 자기차량손해 ",
+          "page": 7
+        },
+        {
+          "chunk_id": "chunks_canonical_manifest.jsonl:22",
+          "confidence": 0.983,
+          "doc_name": "소비자 상담 주요 사례집",
+          "doc_short": "상담사례집",
+          "excerpt": "크되어 있어 상품을 고른 후 해당 보험회사로 이동하여 바로 가입할 수 있습니다. * 자동차보험, 실손의료보험, 여행자보험, 연금보험, 어린이/태아보험, 암보험, 보장성보험, 저축성보험 손해보험협회 3",
+          "page": 13
+        }
+      ],
+      "status": "held",
+      "test_candidate": false
+    },
+    {
+      "aliases": [],
+      "candidate_aliases": [
+        "자동차사고",
+        "승용자동차",
+        "승합자동차",
+        "화물자동차",
+        "특수자동차",
+        "자동차 운전중 교통사고",
+        "자동차"
+      ],
+      "candidate_id": "dev.cond.motorcycle_riding.fc842c72db6f",
+      "canonical_name": "이륜자동차 운전/탑승",
+      "concept_id": "cond.motorcycle_riding",
+      "created_at": "2026-06-11T04:30:55+00:00",
+      "evidence_tags": [
+        "candidate:자동차사고",
+        "candidate:승용자동차",
+        "candidate:승합자동차"
+      ],
+      "extraction_run_id": "ontology-candidate-extract-2026-06-11T04:30:54+00:00",
+      "node_type": "ClaimCondition",
+      "planner": {
+        "conditions": [
+          "이륜자동차 운전/탑승"
+        ],
+        "intents": [
+          "claim_condition_lookup",
+          "session_claim_path_review"
+        ]
+      },
+      "properties": {
+        "candidate_type": "alias_or_expansion",
+        "codex_dev_review": {
+          "decision": "hold",
+          "development_only": true,
+          "domain_fit": true,
+          "evidence_fit": true,
+          "policy_id": "ontology-review-default",
+          "policy_version": "2026-06-10",
+          "reason": "지급/면책/감액/한도 관련 표현 포함",
+          "reason_codes": [
+            "risk_term_guardrail"
+          ],
+          "risk_level": "medium"
+        },
+        "display": {
+          "approval_prompt": "위 표현들을 같은 보험 업무 개념으로 묶어도 될까요?",
+          "example_questions": [
+            "이륜자동차 운전/탑승에 해당하면 보험금을 받을 수 있나요?",
+            "자동차사고도 이륜자동차 운전/탑승에 포함되나요?"
+          ],
+          "similar_expressions": [
+            "자동차사고",
+            "승용자동차",
+            "승합자동차",
+            "화물자동차",
+            "특수자동차",
+            "자동차 운전중 교통사고",
+            "자동차"
+          ],
+          "summary": "이륜자동차 운전/탑승 관련 표현을 상담사례집 근거와 연결합니다. 원문 근거에서 반복 확인된 표현을 기존 보험 업무 개념에 함께 묶어 검색하기 위한 후보입니다."
+        },
+        "extraction": {
+          "policy_id": "candidate-extraction-default",
+          "policy_version": "2026-06-10",
+          "source": "processed_chunks_or_graph_evidence",
+          "term_count": 7
+        },
+        "review_feedback": {
+          "created_at": "2026-06-11T06:37:15+00:00",
+          "hold_reason_codes": [
+            "evidence_mismatch"
+          ],
+          "hold_reason_labels": [
+            "원문 근거 연결 부적절"
+          ],
+          "reviewer": "june-kim-mac",
+          "reviewer_type": "practitioner_local_ui"
+        },
+        "target_canonical_name": "이륜자동차 운전/탑승",
+        "target_concept_id": "cond.motorcycle_riding"
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "expansion_terms": [
+              "자동차사고",
+              "승용자동차",
+              "승합자동차",
+              "화물자동차",
+              "특수자동차",
+              "자동차 운전중 교통사고",
+              "자동차"
+            ],
+            "match_any": [
+              "이륜자동차 운전/탑승",
+              "이륜자동차",
+              "오토바이",
+              "원동기"
+            ]
+          }
+        ]
+      },
+      "risk_flags": [
+        "requires_practitioner_review"
+      ],
+      "source_evidence": [
+        {
+          "chunk_id": "chunks_canonical_manifest.jsonl:211",
+          "confidence": 1.0,
+          "doc_name": "소비자 상담 주요 사례집",
+          "doc_short": "상담사례집",
+          "excerpt": "험금의 지급사유) ① 회사는 피보험자가 보험증권에 기재된 이 특별약관의 보험기간(이하「보험기간」이라 합니다) 중에 자동차를 운전하던 중 급격하고도 우연히 발생한 자동차사고(이하「자동차 운전중 교통사고」라 합니다)로 타인(이하「피해자」라 합니다)에게 다음 각호의 어느 하나에 해당하는 상해를 입혀 형사합의를 한 경우 피보험자가 형사합",
+          "page": 45
+        },
+        {
+          "chunk_id": "chunks_canonical_manifest.jsonl:218",
+          "confidence": 1.0,
+          "doc_name": "소비자 상담 주요 사례집",
+          "doc_short": "상담사례집",
+          "excerpt": "험금의 지급사유) ① 회사는 피보험자가 보험증권에 기재된 이 특별약관의 보험기간(이하「보험기간」이라 합니다) 중에 자동차를 운전하던 중 급격하고도 우연히 발생한 자동차사고(이하「자동차 운전중 교통사고」라 합니다)로 타인(이하「피해자」라 합니다)에게 다음 각호의 어느 하나에 해당하는 상해를 입혀 형사합의를 한 경우 피보험자가 형사합",
+          "page": 45
+        },
+        {
+          "chunk_id": "chunks_canonical_manifest.jsonl:222",
+          "confidence": 1.0,
+          "doc_name": "소비자 상담 주요 사례집",
+          "doc_short": "상담사례집",
+          "excerpt": "1. \"자동차\"란 원동기에 의하여 육상에서 이동할 목적으로 제작한 용구 또는 이에 견인되어 육상을 이동할 목적으로 제작한 용구(이하 \"피견인자동차\"라 한다)를 말한다. 다만, 대통령령으로 정하는 것은 제외한다. <자동차관리법 시행령> 제2조(적용이 제외되는 자동차) 「자동차관리법」 제2조제1호 단서에서 \"대통령령으",
+          "page": 46
+        }
+      ],
+      "status": "held",
+      "test_candidate": false
+    },
+    {
+      "aliases": [],
+      "candidate_aliases": [
+        "상급병실특약 등"
+      ],
+      "candidate_id": "dev.cov.superior_room_difference.d1fad7d62df5",
+      "canonical_name": "상급병실료 차액",
+      "concept_id": "cov.superior_room_difference",
+      "created_at": "2026-06-11T04:30:55+00:00",
+      "evidence_tags": [
+        "candidate:상급병실특약등"
+      ],
+      "extraction_run_id": "ontology-candidate-extract-2026-06-11T04:30:54+00:00",
+      "node_type": "CoverageItem",
+      "planner": {
+        "conditions": [
+          "상급병실료 차액"
+        ],
+        "coverage_topics": [
+          "상급병실료 차액"
+        ]
+      },
+      "properties": {
+        "candidate_type": "alias_or_expansion",
+        "codex_dev_review": {
+          "decision": "hold",
+          "development_only": true,
+          "domain_fit": true,
+          "evidence_fit": true,
+          "policy_id": "ontology-review-default",
+          "policy_version": "2026-06-10",
+          "reason": "지급/면책/감액/한도 관련 표현 포함",
+          "reason_codes": [
+            "risk_term_guardrail"
+          ],
+          "risk_level": "medium"
+        },
+        "display": {
+          "approval_prompt": "위 표현들을 같은 보험 업무 개념으로 묶어도 될까요?",
+          "example_questions": [
+            "상급병실료 차액에 해당하면 보험금을 받을 수 있나요?",
+            "상급병실특약 등도 상급병실료 차액에 포함되나요?"
+          ],
+          "similar_expressions": [
+            "상급병실특약 등"
+          ],
+          "summary": "상급병실료 차액 관련 표현을 상담사례집 근거와 연결합니다. 원문 근거에서 반복 확인된 표현을 기존 보험 업무 개념에 함께 묶어 검색하기 위한 후보입니다."
+        },
+        "extraction": {
+          "policy_id": "candidate-extraction-default",
+          "policy_version": "2026-06-10",
+          "source": "processed_chunks_or_graph_evidence",
+          "term_count": 1
+        },
+        "review_feedback": {
+          "created_at": "2026-06-11T06:40:19+00:00",
+          "hold_reason_codes": [
+            "needs_more_evidence"
+          ],
+          "hold_reason_labels": [
+            "추가 근거 필요"
+          ],
+          "reviewer": "june-kim-mac",
+          "reviewer_type": "practitioner_local_ui"
+        },
+        "target_canonical_name": "상급병실료 차액",
+        "target_concept_id": "cov.superior_room_difference"
+      },
+      "retrieval": {
+        "expansion_rules": [
+          {
+            "expansion_terms": [
+              "상급병실특약 등"
+            ],
+            "match_any": [
+              "상급병실료 차액",
+              "상급병실료 차액",
+              "상급병실",
+              "병실료 차액"
+            ]
+          }
+        ]
+      },
+      "risk_flags": [
+        "requires_practitioner_review"
+      ],
+      "source_evidence": [
+        {
+          "chunk_id": "chunks_canonical_manifest.jsonl:1082",
+          "confidence": 0.99,
+          "doc_name": "소비자 상담 주요 사례집",
+          "doc_short": "상담사례집",
+          "excerpt": "A. 자동차 보험 66. 지정운전자의 보상범위 1. 상담신청 내용 제가 자동차보험을 가입할 때 저를 기명피보험자, 저의 누나를 지정 1인으로 정하여 각종 특약(자동차상해, 무보험차상해, 상급병실특약 등)을 넣어 계약하면, 지정운전자가 차량을 운행하던 중 사고발생시 기명피보험자와 동일하게 보상을 받을 수 있는가요? 2. 검토 의견",
+          "page": 187
+        },
+        {
+          "chunk_id": "chunks_canonical_manifest.jsonl:1084",
+          "confidence": 0.99,
+          "doc_name": "소비자 상담 주요 사례집",
+          "doc_short": "상담사례집",
+          "excerpt": "A. 자동차 보험 66. 지정운전자의 보상범위 1. 상담신청 내용 제가 자동차보험을 가입할 때 저를 기명피보험자, 저의 누나를 지정 1인으로 정하여 각종 특약(자동차상해, 무보험차상해, 상급병실특약 등)을 넣어 계약하면, 지정운전자가 차량을 운행하던 중 사고발생시 기명피보험자와 동일하게 보상을 받을 수 있는가요? 2. 검토 의견",
+          "page": 187
+        },
+        {
+          "chunk_id": "chunks_canonical_manifest.jsonl:1087",
+          "confidence": 0.982,
+          "doc_name": "소비자 상담 주요 사례집",
+          "doc_short": "상담사례집",
+          "excerpt": "지 않으면 보험금을 지정 1인이 받을 수는 없습니다. 4) 자동차보험의 각 담보를 살펴보면, 대인배상 I 과 II, 대물배상, 자기차량손해, 자기신체 손해 또는 자동차상해, 무보험차상해, 타차운전특약, 상급병실 지원특약 등이 있습니다. 대인배상 I 과 II, 대물배상에서는 피보험자의 범위를 기명피보험자, 친족피보험자, 승낙피보험자",
+          "page": 188
+        }
+      ],
+      "status": "held",
+      "test_candidate": false
+    }
+  ]
+}
