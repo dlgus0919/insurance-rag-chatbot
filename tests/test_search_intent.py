@@ -117,6 +117,8 @@ def test_policy_attribute_decision_inflections_keep_coverage_judgment() -> None:
         "검사X 보상한도 지급되는지 알려줘",
         "검사X 보상한도 보험금은?",
         "검사X 보상한도 보험금 지급 판단이 필요해",
+        "5세대 MRI 연간 보장되나요?",
+        "5세대 MRI 보상한도 지급 여부는?",
     ):
         plan = classify_search_intent(question)
 

@@ -1004,6 +1004,89 @@ async def test_general_chat_auto_routes_formal_and_records_strategy(db_session, 
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("policy_generation", "expected_amount"),
+    [("4th", "300만원"), ("5th", "200만원")],
+)
+async def test_general_policy_attribute_payload_uses_direct_retrieval_with_selected_generation(
+    db_session,
+    monkeypatch,
+    policy_generation,
+    expected_amount,
+) -> None:
+    captured = {"questions": [], "policy_generations": [], "conversation_contexts": []}
+
+    async def fake_retrieved_context(
+        _pipeline,
+        question,
+        _top_k,
+        _history,
+        _filters,
+        *,
+        auto_params=None,
+        policy_generation=None,
+        conversation_context=None,
+    ):
+        captured["questions"].append(question)
+        captured["policy_generations"].append(policy_generation)
+        captured["conversation_contexts"].append(conversation_context)
+        return (
+            [],
+            [{"filename": "policy.pdf", "page": 71, "snippet": f"연간 보상한도 {expected_amount}"}],
+            "direct prompt",
+            None,
+            [],
+            f"선택된 세대 기준 연간 보상한도는 {expected_amount}입니다.",
+            None,
+        )
+
+    async def unexpected_formal_context(*_args, **_kwargs):
+        raise AssertionError("pure policy attribute lookup must not bypass direct retrieval")
+
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
+    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_retrieved_context)
+    monkeypatch.setattr(chat, "prepare_formal_context", unexpected_formal_context)
+    generation_label = f"{policy_generation.removesuffix('th')}세대"
+    query = f"{generation_label} 자기공명영상진단(MRI/MRA)의 연간 보상한도는?"
+    for repeat in range(2):
+        created = await sessions.create_session(SessionCreateRequest(title=f"속성 조회 {repeat}"), _user(), db_session)
+        response = await chat.chat_stream(
+            ChatRequest(
+                query=query,
+                session_id=created.id,
+                mode="general",
+                policy_generation=policy_generation,
+                index_mode="v2_only",
+                model="gemma3:4b",
+                turn_id=f"policy-attribute-{policy_generation}-{repeat}",
+            ),
+            None,
+            _user(),
+            db_session,
+        )
+        streamed = await _stream_text(response)
+        assert expected_amount in streamed
+
+    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
+    audit_entries = list(audit_result.scalars())
+
+    assert captured["questions"] == [
+        f"[선택된 실손 세대 기준: {generation_label} 실손]\n{query}",
+        f"[선택된 실손 세대 기준: {generation_label} 실손]\n{query}",
+    ]
+    assert captured["policy_generations"] == [policy_generation, policy_generation]
+    assert all(context is not None for context in captured["conversation_contexts"])
+    assert len(audit_entries) == 2
+    for audit_entry in audit_entries:
+        assert audit_entry.detail["mode"] == "general"
+        assert audit_entry.detail["resolved_route"] == "general"
+        assert audit_entry.detail["resolved_intent"] == "policy_attribute_lookup"
+        assert audit_entry.detail["policy_generation"] == policy_generation
+        assert audit_entry.detail["effective_index_mode"] == "v2_only"
+        assert audit_entry.detail["source_count"] == 1
+
+
+@pytest.mark.anyio
 async def test_persist_turn_stores_graph_payload_for_history_restore(db_session) -> None:
     created = await sessions.create_session(SessionCreateRequest(title="진단코드"), _user(), db_session)
 
