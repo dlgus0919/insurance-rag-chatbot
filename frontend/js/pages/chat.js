@@ -1484,7 +1484,9 @@ function renderGraphReviewPathsHtml(graphResult) {
   const items = paths.slice(0, 4).map((path) => {
     const label = escapeHTML(path.path_type_label || path.path_type || '구조화 검토');
     const status = escapeHTML(path.status_label || path.status || '검토 필요');
-    const summary = path.summary ? `<div class="review-summary">${escapeHTML(path.summary)}</div>` : '';
+    const summary = String(path.status || '').trim().toLowerCase() === 'missing' || !path.summary
+      ? ''
+      : `<div class="review-summary">${escapeHTML(path.summary)}</div>`;
     const evidence = Array.isArray(path.required_evidence) && path.required_evidence.length
       ? `<div class="review-line"><strong>필요 증빙</strong>: ${path.required_evidence.map(escapeHTML).join(', ')}</div>`
       : '';

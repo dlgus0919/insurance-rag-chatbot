@@ -299,7 +299,11 @@ def test_retrieve_hits_crosswalks_rechunked_source_metadata_before_generation_fi
         },
     ]
     indexed_rows = [
-        {"id": "rechunked-4th", "text": canonical_rows[0]["text"], "metadata": common_metadata},
+        {
+            "id": "rechunked-4th",
+            "text": "재청크된 앞부분 " + canonical_rows[0]["text"] + " 재청크된 뒷부분",
+            "metadata": {**common_metadata, "canonical_chunk_id": "canonical-4th"},
+        },
         {
             "id": "rechunked-5th",
             "text": canonical_rows[1]["text"],
@@ -339,6 +343,112 @@ def test_retrieve_hits_crosswalks_rechunked_source_metadata_before_generation_fi
 
     assert [hit.id for hit in hits] == ["rechunked-4th"]
     assert hits[0].metadata["policy_generation"] == "4th"
+
+
+def test_source_metadata_lookup_uses_one_equivalent_stable_provenance_class(tmp_path) -> None:
+    canonical_path = tmp_path / "chunks.jsonl"
+    indexed_path = tmp_path / "chunks_v2_manual.jsonl"
+    stable_metadata = {
+        "doc_short": "약관",
+        "doc_name": "실손 약관",
+        "pdf_filename": "policy.pdf",
+        "page_start": 71,
+        "page_end": 71,
+        "chapter": "제3조(보장종목별 보상내용)",
+        "product_type": "실손",
+        "policy_generation": "4th",
+    }
+    canonical_rows = [
+        {"id": "canonical-a", "text": "직접 조항의 연간 한도", "metadata": stable_metadata},
+        {"id": "canonical-b", "text": "직접 조항의 연간 한도", "metadata": stable_metadata},
+    ]
+    indexed_row = {
+        "id": "rechunked-unknown-id",
+        "text": "재청크 경계가 달라진 직접 조항의 연간 한도 본문",
+        "metadata": {key: value for key, value in stable_metadata.items() if key != "policy_generation"},
+    }
+    canonical_path.write_text("".join(f"{json.dumps(row)}\n" for row in canonical_rows), encoding="utf-8")
+    indexed_path.write_text(f"{json.dumps(indexed_row)}\n", encoding="utf-8")
+
+    lookup = load_source_metadata_lookup(canonical_path, indexed_path)
+
+    assert lookup["rechunked-unknown-id"]["id"] == "canonical-a"
+    assert lookup["rechunked-unknown-id"]["metadata"]["policy_generation"] == "4th"
+
+
+def test_source_metadata_lookup_rejects_stable_provenance_generation_conflicts(tmp_path) -> None:
+    canonical_path = tmp_path / "chunks.jsonl"
+    indexed_path = tmp_path / "chunks_v2_manual.jsonl"
+    shared_metadata = {
+        "doc_short": "약관",
+        "doc_name": "실손 약관",
+        "pdf_filename": "policy.pdf",
+        "page_start": 71,
+        "page_end": 71,
+        "chapter": "제3조(보장종목별 보상내용)",
+        "product_type": "실손",
+    }
+    canonical_rows = [
+        {"id": "canonical-4th", "text": "동일 조항", "metadata": {**shared_metadata, "policy_generation": "4th"}},
+        {"id": "canonical-5th", "text": "동일 조항", "metadata": {**shared_metadata, "policy_generation": "5th"}},
+    ]
+    indexed_row = {
+        "id": "rechunked-ambiguous",
+        "text": "재청크된 동일 조항",
+        "metadata": shared_metadata,
+    }
+    canonical_path.write_text("".join(f"{json.dumps(row)}\n" for row in canonical_rows), encoding="utf-8")
+    indexed_path.write_text(f"{json.dumps(indexed_row)}\n", encoding="utf-8")
+
+    lookup = load_source_metadata_lookup(canonical_path, indexed_path)
+
+    assert "rechunked-ambiguous" not in lookup
+
+
+def test_source_metadata_lookup_rejects_conflicting_explicit_generation(tmp_path) -> None:
+    canonical_path = tmp_path / "chunks.jsonl"
+    indexed_path = tmp_path / "chunks_v2_manual.jsonl"
+    metadata = {
+        "doc_short": "약관",
+        "doc_name": "실손 약관",
+        "pdf_filename": "policy.pdf",
+        "page_start": 71,
+        "page_end": 71,
+        "chapter": "제3조(보장종목별 보상내용)",
+        "product_type": "실손",
+    }
+    canonical_row = {"id": "canonical-4th", "text": "직접 조항", "metadata": {**metadata, "policy_generation": "4th"}}
+    indexed_row = {
+        "id": "rechunked-conflict",
+        "text": canonical_row["text"],
+        "metadata": {**metadata, "canonical_chunk_id": "canonical-4th", "policy_generation": "5th"},
+    }
+    canonical_path.write_text(f"{json.dumps(canonical_row)}\n", encoding="utf-8")
+    indexed_path.write_text(f"{json.dumps(indexed_row)}\n", encoding="utf-8")
+
+    lookup = load_source_metadata_lookup(canonical_path, indexed_path)
+
+    assert "rechunked-conflict" not in lookup
+
+
+def test_source_metadata_lookup_keeps_unique_exact_provenance_without_stable_segment(tmp_path) -> None:
+    canonical_path = tmp_path / "chunks.jsonl"
+    indexed_path = tmp_path / "chunks_v2_manual.jsonl"
+    metadata = {
+        "doc_short": "약관",
+        "doc_name": "실손 약관",
+        "pdf_filename": "policy.pdf",
+        "product_type": "실손",
+        "policy_generation": "4th",
+    }
+    canonical_row = {"id": "canonical-exact", "text": "완전히 일치하는 직접 조항", "metadata": metadata}
+    indexed_row = {"id": "rechunked-exact", "text": canonical_row["text"], "metadata": {**metadata, "policy_generation": None}}
+    canonical_path.write_text(f"{json.dumps(canonical_row)}\n", encoding="utf-8")
+    indexed_path.write_text(f"{json.dumps(indexed_row)}\n", encoding="utf-8")
+
+    lookup = load_source_metadata_lookup(canonical_path, indexed_path)
+
+    assert lookup["rechunked-exact"]["id"] == "canonical-exact"
 
 
 def test_deterministic_guard_blocks_fake_robot_code() -> None:

@@ -55,6 +55,34 @@ test('strips duplicate model-written template when graph panel can render', () =
   assert.match(panelHtml, /진단코드 검토/);
 });
 
+test('does not render missing-path technical summaries in the structured panel', () => {
+  const html = renderGraphReviewPathsHtml({
+    graph_review_paths: [
+      {
+        path_type: 'claim_condition_review',
+        path_type_label: '보상 조건 검토',
+        status: 'missing',
+        status_label: '확인 필요',
+        summary: '직접 연결된 판단 조건 경로를 찾지 못했습니다.',
+        required_evidence: ['진단서'],
+      },
+      {
+        path_type: 'policy_clause_review',
+        path_type_label: '약관 조항 검토',
+        status: 'confirmed',
+        status_label: '확정',
+        summary: '등록된 약관 조항을 확인했습니다.',
+      },
+    ],
+  });
+
+  assert.match(html, /보상 조건 검토/);
+  assert.match(html, /확인 필요/);
+  assert.match(html, /필요 증빙/);
+  assert.doesNotMatch(html, /직접 연결된 판단 조건 경로를 찾지 못했습니다/);
+  assert.match(html, /등록된 약관 조항을 확인했습니다/);
+});
+
 test('treats facts and clarification questions as renderable graph payload', () => {
   assert.equal(hasRenderableGraphPayload({ facts: [{ subject: 'N39.3' }] }), true);
   assert.equal(
