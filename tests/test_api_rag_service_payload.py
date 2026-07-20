@@ -350,6 +350,26 @@ def test_finalize_answer_for_question_strips_internal_review_path_markers_when_g
     assert "---" not in finalized
 
 
+def test_strip_embedded_review_template_preserves_normal_bracket_tokens_and_surrounding_text() -> None:
+    raw_answer = (
+        "약어는 【mri】로 표기됩니다.\n"
+        "부연은 【note】로 남깁니다.\n"
+        "정상 선행 【claim_condition_review】 정상 후행\n"
+        "【generation_rule_review】 내부 검토 경로입니다.\n"
+        "---"
+    )
+
+    cleaned = strip_embedded_review_template(raw_answer)
+
+    assert "약어는 【mri】로 표기됩니다." in cleaned
+    assert "부연은 【note】로 남깁니다." in cleaned
+    assert "정상 선행 정상 후행" in cleaned
+    assert "【claim_condition_review】" not in cleaned
+    assert "【generation_rule_review】" not in cleaned
+    assert "내부 검토 경로입니다." not in cleaned
+    assert "---" not in cleaned
+
+
 def test_normalize_assistant_answer_for_display_keeps_template_without_renderable_graph_payload() -> None:
     text = (
         "■ 섹션 1️⃣ 【확정 근거】\n"
