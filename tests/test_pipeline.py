@@ -24,7 +24,10 @@ from src.rag.pipeline import (
     _is_low_value_wide_range,
     _merge_hits_preserving_order,
     _needs_doc_coverage,
+    _normalize_answer_text,
+    resolve_answer_disposition,
 )
+from src.rag.search_intent import classify_search_intent
 from src.rag.table_store import TableStore
 from src.parser.chunker import Chunk
 from src.retrieval import Hit
@@ -519,9 +522,9 @@ def test_clause_detail_deductible_answer_uses_source_rows() -> None:
     assert answer is not None
     assert "80%" in answer
     assert "20%" in answer
-    assert "제3조" in answer
-    assert "<표1>" in answer
-    assert "chunk=test" in answer
+    assert "근거: 약관, p.31" in answer
+    assert "chunk=" not in answer
+    assert "source=" not in answer
 
 
 @pytest.mark.parametrize(
@@ -560,7 +563,102 @@ def test_deterministic_guard_answers_selected_generation_annual_limit_from_sourc
     assert annual_limit in answer
     assert doc_short in answer
     assert f"p.{page_start}" in answer
-    assert f"chunk=mri-{policy_generation}" in answer
+    assert "chunk=" not in answer
+    assert "source=" not in answer
+
+
+def test_answer_disposition_keeps_attribute_and_coverage_authority_separate() -> None:
+    chunk = Chunk(
+        id="attribute-alpha",
+        text="검사X는 1년 단위 보상한도 123만원 이내로 보상합니다.",
+        metadata={
+            "doc_short": "약관A",
+            "page_start": 12,
+            "page_end": 12,
+            "policy_generation": "alpha",
+            "direct_policy_attribute": True,
+        },
+    )
+
+    attribute = resolve_answer_disposition(
+        "검사X의 연간 보상한도는?",
+        [chunk],
+        search_intent=classify_search_intent("검사X의 연간 보상한도는?"),
+        policy_generation="alpha",
+    )
+    coverage = resolve_answer_disposition(
+        "검사X 보상한도 지급 여부는?",
+        [chunk],
+        search_intent=classify_search_intent("검사X 보상한도 지급 여부는?"),
+        policy_generation="alpha",
+    )
+
+    assert attribute.origin == "policy_attribute"
+    assert attribute.grounding_state == "direct"
+    assert attribute.text is not None
+    assert "123만원" in attribute.text
+    assert "chunk=" not in attribute.text
+    assert "source=" not in attribute.text
+    assert coverage.origin == "coverage_insufficient"
+    assert coverage.grounding_state == "insufficient"
+    assert coverage.text is not None
+    assert "123만원" not in coverage.text
+    assert "확정할 수 없습니다" in coverage.text
+
+
+def _comparison_attribute_chunk(axis: str, amount: str) -> Chunk:
+    return Chunk(
+        id=f"attribute-{axis}",
+        text=f"검사X는 1년 단위 보상한도 {amount} 이내로 보상합니다.",
+        metadata={
+            "doc_short": f"약관-{axis}",
+            "page_start": 12,
+            "page_end": 12,
+            "policy_generation": axis,
+            "direct_policy_attribute": True,
+        },
+    )
+
+
+def test_answer_disposition_rejects_one_sided_generic_comparison() -> None:
+    disposition = resolve_answer_disposition(
+        "alpha와 beta 검사X의 연간 보상한도를 비교해줘.",
+        [_comparison_attribute_chunk("alpha", "123만원")],
+        search_intent=classify_search_intent("alpha와 beta 검사X의 연간 보상한도를 비교해줘."),
+    )
+
+    assert disposition.origin == "policy_comparison"
+    assert disposition.grounding_state == "insufficient"
+    assert disposition.text is not None
+    assert "123만원" not in disposition.text
+    assert disposition.source_chunk_ids == ()
+
+
+def test_answer_disposition_renders_generic_comparison_only_after_all_axes_have_direct_sources() -> None:
+    disposition = resolve_answer_disposition(
+        "alpha와 beta 검사X의 연간 보상한도를 비교해줘.",
+        [
+            _comparison_attribute_chunk("alpha", "123만원"),
+            _comparison_attribute_chunk("beta", "456만원"),
+        ],
+        search_intent=classify_search_intent("alpha와 beta 검사X의 연간 보상한도를 비교해줘."),
+    )
+
+    assert disposition.origin == "policy_comparison"
+    assert disposition.grounding_state == "direct"
+    assert disposition.text is not None
+    assert "123만원" in disposition.text
+    assert "456만원" in disposition.text
+    assert disposition.source_chunk_ids == ("attribute-alpha", "attribute-beta")
+
+
+def test_normalize_answer_text_removes_internal_provenance_from_guard_outputs() -> None:
+    answer = _normalize_answer_text(
+        "근거: 약관, p.12, chunk=attribute-alpha, source=table_json row=4\n"
+        "【claim_condition_review】 추가 확인 필요"
+    )
+
+    assert answer == "근거: 약관, p.12\n추가 확인 필요"
 
 
 def test_deterministic_guard_compares_annual_limits_only_when_both_generation_sources_are_selected() -> None:
@@ -630,8 +728,11 @@ def test_clause_detail_rows_prefer_table_json_source_rows() -> None:
     assert rows[0].numbers == ["80%", "20%"]
     assert rows[0].source_metadata["row_index"] == 0
     assert answer is not None
-    assert "보장종목: 급여(상해·질병) 입원치료" in answer
-    assert "source=table_json row=0" in answer
+    assert "80%" in answer
+    assert "20%" in answer
+    assert "근거: 약관, p.31" in answer
+    assert "source=" not in answer
+    assert "row_id=" not in answer
 
 
 def test_clause_detail_rows_require_source_numbers() -> None:

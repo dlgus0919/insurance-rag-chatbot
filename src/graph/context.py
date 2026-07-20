@@ -435,3 +435,43 @@ def build_graph_context(result: GraphRetrievalResult) -> str:
     if len(context_str) > GRAPH_CONTEXT_MAX_CHARS:
         context_str = context_str[:GRAPH_CONTEXT_MAX_CHARS] + "\n... [일부 근거 생략됨 (GRAPH_CONTEXT_MAX_CHARS 초과)]"
     return context_str
+
+
+def build_prompt_graph_context(result: GraphRetrievalResult) -> str:
+    """Build model context from grounded facts and safe clarification only.
+
+    The richer four-section review template is a practitioner-facing Graph UI
+    artifact.  It must not become model prompt text because a missing or review
+    path is not evidence that a policy document is absent.
+    """
+
+    if result is None:
+        return ""
+    lines: list[str] = []
+    grounded_facts = [
+        fact
+        for fact in list(getattr(result, "facts", []) or [])
+        if getattr(fact, "status", "") == "confirmed"
+        and bool(getattr(fact, "evidence", []) or [])
+        and not _is_candidate_confidence(fact)
+    ]
+    if grounded_facts:
+        lines.append("[구조화 그래프 직접 근거]")
+        for fact in grounded_facts:
+            source = _source_label(fact.evidence[0])
+            lines.append(
+                f"- {fact.subject} --({fact.relation})--> {fact.object} (출처: {source})"
+            )
+
+    clarification_questions = list(
+        getattr(getattr(result, "plan", None), "clarification_questions", []) or []
+    )
+    if clarification_questions:
+        lines.append("[추가 확인 필요]")
+        for question in clarification_questions:
+            lines.append(f"- {question}")
+
+    context_str = "\n".join(lines).strip()
+    if len(context_str) > GRAPH_CONTEXT_MAX_CHARS:
+        return context_str[:GRAPH_CONTEXT_MAX_CHARS].rstrip()
+    return context_str

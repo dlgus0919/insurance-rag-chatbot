@@ -15,7 +15,7 @@ from src.claim_calculation.thread_context import (
     contextualize_claim_query,
     extract_claim_snapshots,
 )
-from src.graph.context import build_graph_context
+from src.graph.context import build_prompt_graph_context
 from src.llm.factory import build_llm
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.ontology.registry import get_default_ontology_registry
@@ -32,7 +32,8 @@ from src.rag.evidence_assessment import (
     evaluate_registry_evidence,
     has_schema_v2_display_contract,
 )
-from src.rag.pipeline import RagPipeline, _deterministic_guard_answer, _hit_to_chunk
+from src.rag.pipeline import AnswerDisposition, RagPipeline, _hit_to_chunk, resolve_answer_disposition
+from src.rag.search_intent import classify_search_intent
 from src.rag.quick_code import build_quick_code_prompt, retrieve_quick_code_chunks
 from src.rag.source_grounded_answers import PolicyClauseDecision
 from src.rag.table_store import TableStore
@@ -76,6 +77,10 @@ _EMBEDDED_REVIEW_SECTION_PATTERN = re.compile(r"^\s*■\s*섹션\s*\d")
 _EMBEDDED_REVIEW_HEADING_PATTERN = re.compile(r"^\s*【[^】]+】\s*$")
 _EMBEDDED_REVIEW_BULLET_PATTERN = re.compile(r"^\s*(?:[-*•]\s+|☐\s*|→\s*\d+\.\s*|→\s*)")
 _INTERNAL_REVIEW_PATH_MARKER_PATTERN = re.compile(r"【[a-z][a-z0-9_]*_review】")
+_INTERNAL_PROVENANCE_PATTERN = re.compile(
+    r"(?:,?\s*)(?:chunk|source|row_id|row)\s*=\s*[^,;\n\]\)]+",
+    re.IGNORECASE,
+)
 _TEMPLATE_SEPARATOR_LINE_PATTERN = re.compile(r"^\s*---+\s*$")
 _SOURCE_CITATION_LINE_PATTERN = re.compile(r"^\s*\[출처:\s*.+\]\s*$")
 _TRAILING_SOURCE_NOTE_PATTERN = re.compile(r"^\s*\(참고:\s*.+\)\s*$")
@@ -315,7 +320,7 @@ async def prepare_retrieved_context(
                     clarification=clarification,
                     **graph_kwargs,
                 )
-            graph_context = build_graph_context(graph_result)
+            graph_context = build_prompt_graph_context(graph_result)
             source_chunk_ids = getattr(graph_result, "source_chunk_ids", []) or []
             if source_chunk_ids:
                 graph_hits = pipeline.vector_store.get_by_ids(source_chunk_ids)
@@ -335,7 +340,7 @@ async def prepare_retrieved_context(
                     "GraphDB 조회 중 예외가 발생해 직접 연결된 조항 경로를 확인하지 못했습니다.",
                     warning=f"Graph retrieval failed in API path: {exc}",
                 )
-                graph_context = build_graph_context(graph_result)
+                graph_context = build_prompt_graph_context(graph_result)
             else:
                 graph_result = None
                 graph_context = ""
@@ -394,16 +399,15 @@ async def prepare_retrieved_context(
         )
     if history_context:
         prompt = f"{history_context}\n\n{prompt}"
-    deterministic_answer = (
-        evidence_result.answer
-        if evidence_result is not None
-        else _deterministic_guard_answer(
-            route_question,
-            chunks,
-            graph_context=graph_context,
-            graph_result=graph_result,
-            table_store=_TABLE_STORE,
-        )
+    answer_disposition = resolve_answer_disposition(
+        route_question,
+        chunks,
+        search_intent=getattr(debug, "search_intent", None) if debug is not None else None,
+        policy_generation=policy_generation,
+        evidence_result=evidence_result,
+        graph_context=graph_context,
+        graph_result=graph_result,
+        table_store=_TABLE_STORE,
     )
     if debug is not None:
         debug.graph_result = graph_result
@@ -412,7 +416,43 @@ async def prepare_retrieved_context(
         evidence_result,
     )
     _log_graph_payload_visibility(question, graph_payload)
-    return chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug
+    return chunks, sources, prompt, graph_payload, warnings, answer_disposition, debug
+
+
+def resolve_specialized_coverage_disposition(
+    question: str,
+    chunks: list,
+    *,
+    policy_generation: str | None = None,
+    conversation_context: ResolvedConversationContext | None = None,
+) -> tuple[list, AnswerDisposition]:
+    """Apply the same fail-closed coverage gate after formal/quickcode retrieval.
+
+    Formal and quick-code remain ordinary LLM-assisted retrieval for code and
+    attribute questions.  A coverage/payout decision, however, must either use
+    selected registry evidence or render the public insufficient-evidence answer.
+    """
+
+    intent = classify_search_intent(question)
+    if not intent.requires_coverage_judgment:
+        return chunks, AnswerDisposition(origin="llm", grounding_state="none")
+
+    evidence_result = evaluate_registry_evidence(
+        question,
+        chunks,
+        policy_generation=policy_generation,
+        context=conversation_context,
+        registry=get_default_ontology_registry(),
+    )
+    selected_chunks = list(getattr(evidence_result, "selected_chunks", ()) or ()) if evidence_result else chunks
+    disposition = resolve_answer_disposition(
+        question,
+        selected_chunks,
+        search_intent=intent,
+        policy_generation=policy_generation,
+        evidence_result=evidence_result,
+    )
+    return selected_chunks, disposition
 
 
 def extract_structured_terms(query: str) -> list[str]:
@@ -1133,14 +1173,44 @@ def _strip_rendered_missing_review_summaries(text: str, graph_payload: dict | No
     ).strip()
 
 
+def _strip_internal_answer_provenance(text: str) -> str:
+    """Remove only implementation identifiers, leaving human source labels intact."""
+
+    cleaned = _INTERNAL_REVIEW_PATH_MARKER_PATTERN.sub("", text or "")
+    cleaned = _INTERNAL_PROVENANCE_PATTERN.sub("", cleaned)
+    cleaned = re.sub(r"[ \t]+,", ",", cleaned)
+    cleaned = re.sub(r",\s*,", ",", cleaned)
+    cleaned = re.sub(r"\(\s*\)", "", cleaned)
+    return "\n".join(line.rstrip(" ,") for line in cleaned.splitlines()).strip()
+
+
+def coerce_answer_disposition(value: Any, chunks: list | None = None) -> AnswerDisposition:
+    """Keep test/downgrade callers compatible while the route consumes dispositions."""
+
+    if isinstance(value, AnswerDisposition):
+        return value
+    if isinstance(value, str) and value.strip():
+        source_ids = tuple(
+            dict.fromkeys(str(getattr(chunk, "id", "") or "") for chunk in (chunks or []) if getattr(chunk, "id", ""))
+        )
+        return AnswerDisposition(
+            origin="clause_detail",
+            grounding_state="direct",
+            text=value.strip(),
+            source_chunk_ids=source_ids,
+        )
+    return AnswerDisposition(origin="llm", grounding_state="none")
+
+
 def normalize_assistant_answer_for_display(text: str, graph_payload: dict | None = None) -> str:
     """Normalize stored/generated assistant text for UI and export display."""
 
+    cleaned = _strip_internal_answer_provenance(text)
     if graph_payload_has_renderable_evidence(graph_payload):
-        cleaned = strip_embedded_review_template(text)
+        cleaned = strip_embedded_review_template(cleaned)
         cleaned = _strip_rendered_missing_review_summaries(cleaned, graph_payload)
         return strip_trailing_source_citation_lines(cleaned)
-    return strip_trailing_source_citation_lines(text)
+    return strip_trailing_source_citation_lines(cleaned)
 
 
 def finalize_answer_for_question(
@@ -1167,6 +1237,7 @@ __all__ = [
     "build_contextual_prompt",
     "chunk_to_source",
     "chunks_to_sources",
+    "coerce_answer_disposition",
     "finalize_answer",
     "finalize_answer_for_question",
     "formal_doc_filter",
@@ -1179,6 +1250,7 @@ __all__ = [
     "prepare_formal_context",
     "prepare_quickcode_context",
     "prepare_retrieved_context",
+    "resolve_specialized_coverage_disposition",
     "strip_embedded_review_template",
     "summarize_legacy_messages",
 ]

@@ -33,6 +33,8 @@ from src.api.public_payloads import (
 from src.api.rate_limit import limiter
 from src.api.rag_service import (
     SYSTEM_PROMPT,
+    coerce_answer_disposition,
+    chunks_to_sources,
     finalize_answer_for_question,
     graph_payload_has_renderable_evidence,
     get_rag_pipeline,
@@ -40,6 +42,7 @@ from src.api.rag_service import (
     prepare_quickcode_context,
     prepare_retrieved_context,
     resolve_effective_index_mode,
+    resolve_specialized_coverage_disposition,
 )
 from src.api.routes.claim import _claim_response_text, _claim_snapshot_source
 from src.api.schemas.chat import ChatRequest
@@ -545,7 +548,7 @@ async def chat_stream(
         sources: list[dict] = []
         graph_payload = None
         warnings: list[dict] = []
-        deterministic_answer: str | None = None
+        answer_disposition = coerce_answer_disposition(None)
         debug_info: DebugInfo | None = None
         tokens: list[str] = []
         selected_model = _select_model(chat_request)
@@ -733,7 +736,7 @@ async def chat_stream(
                 if selected_policy_generation:
                     retrieval_kwargs["policy_generation"] = selected_policy_generation
                 retrieval_kwargs["conversation_context"] = conversation_context
-                chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug_info = await prepare_retrieved_context(
+                chunks, sources, prompt, graph_payload, warnings, answer_disposition, debug_info = await prepare_retrieved_context(
                     pipeline,
                     context_query,
                     retrieval_top_k,
@@ -741,6 +744,16 @@ async def chat_stream(
                     effective_filters,
                     **retrieval_kwargs,
                 )
+            if resolved_mode in {"formal", "quickcode"}:
+                specialized_chunks, answer_disposition = resolve_specialized_coverage_disposition(
+                    conversation_context.route_query,
+                    chunks,
+                    policy_generation=selected_policy_generation,
+                    conversation_context=conversation_context,
+                )
+                if specialized_chunks is not chunks:
+                    sources = chunks_to_sources(specialized_chunks)
+                chunks = specialized_chunks
             conversation_scope = ConversationQueryScope(
                 route=resolved_mode,
                 intent=resolved_intent,
@@ -768,8 +781,9 @@ async def chat_stream(
             for warning in public_warnings(warnings):
                 yield _sse("warning", warning)
 
-            if deterministic_answer is not None:
-                for token in _chunk_text(deterministic_answer):
+            answer_disposition = coerce_answer_disposition(answer_disposition, chunks)
+            if answer_disposition.text is not None:
+                for token in _chunk_text(answer_disposition.text):
                     tokens.append(token)
                     yield _sse("token", {"t": token})
                     await asyncio.sleep(0)
@@ -872,6 +886,9 @@ async def chat_stream(
                     "turn_id": turn_id,
                     "conversation_kind": conversation_context.kind,
                     "source_count": len(sources),
+                    "answer_origin": answer_disposition.origin,
+                    "grounding_state": answer_disposition.grounding_state,
+                    "grounded_source_count": len(answer_disposition.source_chunk_ids),
                     "query_preview": chat_request.query.strip()[:200],
                     "doc_filter": doc_filter,
                     "rag_diagnostics": _build_rag_diagnostics(

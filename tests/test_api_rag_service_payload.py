@@ -17,6 +17,7 @@ from src.api.rag_service import (
 from src.graph.query_planner import GraphQueryPlan
 from src.graph.retriever import GraphPathStep, GraphRetrievalResult, GraphReviewPath
 from src.parser.chunker import Chunk
+from src.rag.evidence_assessment import GroundedDisplayResult
 from src.rag.source_grounded_answers import PolicyClauseDecision
 
 
@@ -503,6 +504,21 @@ def test_normalize_assistant_answer_for_display_preserves_mid_body_source_lines(
     assert normalized.endswith("위 조항은 본문 설명에 직접 필요한 인용입니다.")
 
 
+def test_normalize_assistant_answer_for_display_removes_internal_provenance_fields() -> None:
+    text = (
+        "선택한 문서 기준 보상한도는 123만원입니다.\n"
+        "근거: 약관A, p.12, chunk=attribute-alpha, source=table_json row=4"
+    )
+
+    normalized = normalize_assistant_answer_for_display(text)
+
+    assert "123만원" in normalized
+    assert "약관A, p.12" in normalized
+    assert "chunk=" not in normalized
+    assert "source=" not in normalized
+    assert "row=" not in normalized
+
+
 def test_get_rag_pipeline_reuses_shared_embedder_and_reranker_across_index_modes(monkeypatch) -> None:
     rag_service._load_shared_retrieval_components.cache_clear()
     rag_service._load_index_retrieval_components.cache_clear()
@@ -603,6 +619,39 @@ async def test_prepare_quickcode_context_reflects_ui_options(monkeypatch) -> Non
         "include_summary": False,
         "prompt_include_coverage": True,
     }
+
+
+def test_specialized_coverage_disposition_keeps_approved_direct_decision(monkeypatch) -> None:
+    chunk = Chunk(
+        id="approved-coverage",
+        text="검사X 치료비는 직접 조항의 적용 조건을 충족하는 경우 보상합니다.",
+        metadata={
+            "pdf_filename": "약관.pdf",
+            "doc_short": "약관",
+            "page_start": 18,
+            "page_end": 18,
+        },
+    )
+    result = GroundedDisplayResult(
+        status="supported",
+        answer="검사X 치료비는 직접 조항의 적용 조건을 충족하는 경우 보상합니다.",
+        payload={},
+        selected_chunks=(chunk,),
+    )
+
+    monkeypatch.setattr(rag_service, "evaluate_registry_evidence", lambda *_args, **_kwargs: result)
+    monkeypatch.setattr(rag_service, "get_default_ontology_registry", lambda: object())
+
+    selected_chunks, disposition = rag_service.resolve_specialized_coverage_disposition(
+        "검사X 보상 가능 여부를 알려줘.",
+        [chunk],
+    )
+
+    assert selected_chunks == [chunk]
+    assert disposition.origin == "coverage_grounded"
+    assert disposition.grounding_state == "direct"
+    assert disposition.text == result.answer
+    assert disposition.source_chunk_ids == ("approved-coverage",)
 
 
 @pytest.mark.anyio

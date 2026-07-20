@@ -27,6 +27,13 @@ _COVERAGE_CUES = (
     "입원",
     "처방조제",
 )
+_COVERAGE_DECISION_CUES = (
+    "보상돼",
+    "보장돼",
+    "돈나오",
+    "지급돼",
+    "가능해",
+)
 _COVERAGE_DECISION_PHRASE_RX = re.compile(
     r"(?:보상|보장)\s*(?:가능|되|받|대상)"
     r"|받을\s*수"
@@ -117,7 +124,7 @@ def _is_coverage_judgment(text: str) -> bool:
     )
     return bare_compensation or _contains_any(
         text,
-        tuple(cue for cue in _COVERAGE_CUES if cue != "보상"),
+        _COVERAGE_DECISION_CUES,
     ) or bool(_COVERAGE_DECISION_PHRASE_RX.search(text) or _CLAIM_DECISION_PHRASE_RX.search(text))
 
 
@@ -239,6 +246,7 @@ def classify_search_intent(
             top_k_dense=max(4, default_top_k_dense // 2),
             top_k_bm25=max(default_top_k_bm25, 16),
             requires_clause_lookup=True,
+            requires_coverage_judgment=requires_coverage,
             rule_strength=0.88,
             reason="조문/별표/약관 번호성 표현을 감지해 BM25 비중을 높입니다.",
         )
@@ -252,6 +260,7 @@ def classify_search_intent(
             top_k_dense=max(default_top_k_dense, 14),
             top_k_bm25=max(default_top_k_bm25, 14),
             requires_cross_document=True,
+            requires_coverage_judgment=requires_coverage,
             rule_strength=0.82,
             reason="복수 문서 비교 의도를 감지해 양쪽 검색을 균형 있게 사용합니다.",
         )
@@ -264,6 +273,7 @@ def classify_search_intent(
             bm25_weight=0.65,
             top_k_dense=default_top_k_dense,
             top_k_bm25=max(default_top_k_bm25, 16),
+            requires_coverage_judgment=requires_coverage,
             rule_strength=0.8,
             reason="수가/수술분류 질의로 판단해 표·코드 키워드 검색 비중을 높입니다.",
         )
