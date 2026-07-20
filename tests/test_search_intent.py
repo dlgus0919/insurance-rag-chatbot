@@ -87,6 +87,8 @@ def test_policy_attribute_noun_queries_stay_in_direct_lookup() -> None:
         "검사X 연간 보상한도는?",
         "검사X 횟수한도는?",
         "검사X 보장기간은?",
+        "검사X 지급한도는?",
+        "검사X 지급기간은?",
         "검사X 공제금액은?",
         "검사X 보상비율은?",
     ):
@@ -102,6 +104,19 @@ def test_policy_attribute_action_queries_keep_coverage_judgment() -> None:
         "검사X 연간 보상한도 청구하면?",
         "검사X 연간 보상한도 지급받을 수 있나요?",
         "검사X 연간 보상한도 보험금 판단이 필요해",
+    ):
+        plan = classify_search_intent(question)
+
+        assert plan.intent != "policy_attribute_lookup"
+        assert plan.requires_coverage_judgment is True
+
+
+def test_policy_attribute_decision_inflections_keep_coverage_judgment() -> None:
+    for question in (
+        "검사X 보상한도 지급 여부는?",
+        "검사X 보상한도 지급되는지 알려줘",
+        "검사X 보상한도 보험금은?",
+        "검사X 보상한도 보험금 지급 판단이 필요해",
     ):
         plan = classify_search_intent(question)
 

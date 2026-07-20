@@ -205,6 +205,29 @@ def test_chunk_to_source_preserves_raw_display_evidence() -> None:
     assert source["snippet"].endswith("200만원입니다.")
 
 
+def test_chunk_to_source_caps_display_evidence_without_losing_edges() -> None:
+    display_evidence = "검사X 원문 근거입니다.\n" + ("중간 설명 " * 40) + "\n선택 금액은 200만원입니다."
+    chunk = Chunk(
+        id="capped-display-evidence",
+        text="compact-evidence",
+        metadata={
+            "pdf_filename": "약관.pdf",
+            "doc_short": "약관",
+            "page_start": 12,
+            "page_end": 12,
+            "display_evidence": display_evidence,
+        },
+    )
+
+    source = chunk_to_source(chunk)
+
+    assert len(source["snippet"]) <= 180
+    assert "검사X" in source["snippet"]
+    assert "200만원" in source["snippet"]
+    assert "\n" in source["snippet"]
+    assert "\n...\n" in source["snippet"]
+
+
 def test_formal_doc_filter_merges_scope_and_category() -> None:
     filters = {
         "doc_filter": ["상담사례집"],

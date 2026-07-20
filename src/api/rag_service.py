@@ -193,6 +193,22 @@ def _log_graph_payload_visibility(question: str, graph_payload: dict | None) -> 
     )
 
 
+MAX_SOURCE_SNIPPET_CHARS = 180
+_SOURCE_SNIPPET_SEPARATOR = "\n...\n"
+
+
+def _bounded_display_evidence(text: object) -> str:
+    snippet = str(text or "").strip()
+    if len(snippet) <= MAX_SOURCE_SNIPPET_CHARS:
+        return snippet
+    available = MAX_SOURCE_SNIPPET_CHARS - len(_SOURCE_SNIPPET_SEPARATOR)
+    prefix_limit = available // 3
+    suffix_limit = available - prefix_limit
+    prefix = snippet[:prefix_limit].rstrip()
+    suffix = snippet[-suffix_limit:].lstrip()
+    return f"{prefix}{_SOURCE_SNIPPET_SEPARATOR}{suffix}"
+
+
 def chunk_to_source(chunk) -> dict:
     """Convert a retrieved chunk into frontend source metadata."""
 
@@ -200,14 +216,18 @@ def chunk_to_source(chunk) -> dict:
     page_start = metadata.get("page_start")
     page_end = metadata.get("page_end", page_start)
     display_evidence = metadata.get("display_evidence")
-    snippet = str(display_evidence or chunk.text or "").strip()
+    snippet = (
+        _bounded_display_evidence(display_evidence)
+        if display_evidence
+        else str(chunk.text or "").strip()[:MAX_SOURCE_SNIPPET_CHARS]
+    )
     return {
         "filename": metadata.get("pdf_filename") or metadata.get("source") or metadata.get("doc_short") or "문서",
         "doc_short": metadata.get("doc_short"),
         "page": page_start,
         "page_end": page_end,
         "chunk_id": chunk.id,
-        "snippet": snippet if display_evidence else snippet[:180],
+        "snippet": snippet,
     }
 
 

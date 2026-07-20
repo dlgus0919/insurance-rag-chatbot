@@ -764,6 +764,11 @@ def _compact_text(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
 
 
+MAX_DISPLAY_EVIDENCE_CHARS = 180
+_DISPLAY_EVIDENCE_SEPARATOR = "\n...\n"
+_DISPLAY_ADJACENT_MEASURE_PATTERN = re.compile(r"\d+(?:만원|원|회|%)")
+
+
 def _compact_text_with_offsets(text: str) -> tuple[str, list[int]]:
     compact: list[str] = []
     offsets: list[int] = []
@@ -775,12 +780,74 @@ def _compact_text_with_offsets(text: str) -> tuple[str, list[int]]:
     return "".join(compact), offsets
 
 
-def _raw_display_window(text: str, offsets: list[int], start: int, end: int) -> str:
-    if not offsets or start < 0 or end <= start or end > len(offsets):
+def _trim_raw_prefix(text: str, limit: int) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    boundary = max(text.rfind(marker, 0, limit) for marker in ("\n", ".", "。", " "))
+    if boundary <= 0:
+        return text[:limit].rstrip()
+    return text[:boundary].rstrip()
+
+
+def _trim_raw_suffix(text: str, limit: int) -> str:
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    start = len(text) - limit
+    boundaries = [text.find(marker, start) for marker in ("\n", ".", "。", " ")]
+    boundary = min((value for value in boundaries if value >= 0), default=-1)
+    if boundary < 0 or boundary + 1 >= len(text):
+        return text[-limit:].lstrip()
+    return text[boundary + 1:].lstrip()
+
+
+def _raw_selection_context(text: str, lower_bound: int, selection_start: int, selection_end: int) -> str:
+    context_start = selection_start
+    for _ in range(3):
+        boundary = max(text.rfind(marker, lower_bound, context_start - 1) for marker in ("\n", ".", "。"))
+        if boundary < lower_bound:
+            break
+        context_start = boundary + 1
+    context_end = text.find("\n", selection_end)
+    if context_end < 0:
+        context_end = min(len(text), selection_end + 48)
+    return text[context_start:context_end].strip()
+
+
+def _raw_display_window(
+    text: str,
+    offsets: list[int],
+    start: int,
+    selection_start: int,
+    selection_end: int,
+) -> str:
+    if (
+        not offsets
+        or start < 0
+        or selection_start < start
+        or selection_end <= selection_start
+        or selection_end > len(offsets)
+    ):
         return ""
-    raw_start = offsets[start]
-    raw_end = min(len(text), offsets[end - 1] + 81)
-    return text[raw_start:raw_end].strip()
+    raw_anchor_start = offsets[start]
+    raw_selection_start = offsets[selection_start]
+    raw_selection_end = offsets[selection_end - 1] + 1
+    full_window = text[raw_anchor_start:raw_selection_end].strip()
+    preceding_measures = _DISPLAY_ADJACENT_MEASURE_PATTERN.search(text[raw_anchor_start:raw_selection_start])
+    if len(full_window) <= MAX_DISPLAY_EVIDENCE_CHARS and preceding_measures is None:
+        return full_window
+
+    anchor_end = min(
+        (value for value in (text.find(marker, raw_anchor_start, raw_selection_start) for marker in ("\n", ".", "。")) if value >= 0),
+        default=raw_selection_start,
+    )
+    anchor_context = text[raw_anchor_start:anchor_end].strip()
+    selection_context = _raw_selection_context(text, raw_anchor_start, raw_selection_start, raw_selection_end)
+    available = MAX_DISPLAY_EVIDENCE_CHARS - len(_DISPLAY_EVIDENCE_SEPARATOR)
+    anchor_budget = min(64, max(24, available // 3))
+    selection_budget = available - anchor_budget
+    return f"{_trim_raw_prefix(anchor_context, anchor_budget)}{_DISPLAY_EVIDENCE_SEPARATOR}{_trim_raw_suffix(selection_context, selection_budget)}"
 
 
 def _split_evidence_lines(text: str) -> list[str]:
@@ -1889,6 +1956,7 @@ def _direct_policy_attribute_hits(
                         raw_text,
                         compact_offsets,
                         start,
+                        evidence_start + selected_number.start(),
                         evidence_start + selected_number.end(),
                     )
                     hit = Hit(

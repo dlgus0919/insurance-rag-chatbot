@@ -45,6 +45,23 @@ test('source hover preview preserves raw display evidence whitespace and amount'
   assert.doesNotMatch(html, /정밀영상검사계약일부터/);
 });
 
+test('source hover preview preserves the bounded API evidence text', () => {
+  const snippet = '검사X 원문 근거입니다.\n...\n선택 금액은 200만원입니다.';
+  const html = renderSourcesHtml([
+    {
+      filename: 'sample.pdf',
+      page: 12,
+      snippet,
+    },
+  ]);
+  const preview = html.match(/data-source-preview="([^"]*)"/)?.[1] || '';
+
+  assert.ok(snippet.length <= 180);
+  assert.ok(preview.length <= 180);
+  assert.match(preview, /검사X/);
+  assert.match(preview, /200만원/);
+});
+
 test('PDF source badges retain the hover preview and open the cited page safely', () => {
   const docShort = '표준 약관 & 안내';
   const html = renderSourcesHtml([

@@ -1608,6 +1608,50 @@ def test_direct_policy_attribute_hit_keeps_raw_display_window_for_selected_amoun
     assert "350만원" not in display_evidence
 
 
+def test_direct_policy_attribute_display_window_is_semantic_and_capped() -> None:
+    class EmptyStore:
+        def query(self, query_embedding, top_k: int, doc_filter: list[str] | None = None):
+            return []
+
+    class EmptyBM25:
+        def query(self, text: str, top_k: int):
+            return []
+
+    source_chunk_lookup = {
+        "annual-money-limit": {
+            "id": "annual-money-limit",
+            "text": (
+                "검사X 원문 행입니다.\n"
+                "공제금액은 3만원입니다.\n"
+                + "관련 설명입니다. " * 30
+                + "\n계약일부터 1년간 보상한도는 200만원입니다.\n"
+                "추가 보장 횟수는 10회입니다."
+            ),
+            "metadata": {"doc_short": "약관", "page_start": 11, "page_end": 11, "policy_generation": "5th"},
+        },
+    }
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        EmptyStore(),
+        EmptyBM25(),
+        DummyLLM(),
+        top_k_final=4,
+        reranker_enabled=False,
+        source_chunk_lookup=source_chunk_lookup,
+    )
+
+    hits, _ = pipeline.retrieve_hits("5세대 검사X 연간 보상한도는?", top_k=4, policy_generation="5th")
+
+    display_evidence = hits[0].metadata["display_evidence"]
+    assert len(display_evidence) <= pipeline_module.MAX_DISPLAY_EVIDENCE_CHARS
+    assert "검사X" in display_evidence
+    assert "200만원" in display_evidence
+    assert "\n" in display_evidence
+    assert "\n...\n" in display_evidence
+    assert "3만원" not in display_evidence
+    assert "10회" not in display_evidence
+
+
 def test_policy_attribute_number_selection_prefers_annual_limit_over_deductible() -> None:
     evidence_text = (
         "검사X공제금액1회당3만원과보장대상의료비의30%중큰금액"
