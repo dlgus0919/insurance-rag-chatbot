@@ -32,6 +32,48 @@ test('source badges expose snippet text as a hover preview', () => {
   assert.match(html, /상해 입원 의료비 지급 기준/);
 });
 
+test('PDF source badges retain the hover preview and open the cited page safely', () => {
+  const docShort = '표준 약관 & 안내';
+  const html = renderSourcesHtml([
+    {
+      filename: '표준 약관 & 안내.pdf',
+      doc_short: docShort,
+      page: 12,
+      snippet: '해당 약관 조항의 원문 청크입니다.',
+    },
+  ]);
+
+  const expectedHref = `/api/chat/sources/pdf?doc_short=${encodeURIComponent(docShort)}#page=12`;
+  assert.match(html, /<a class="src-badge src-badge--link"/);
+  assert.ok(html.includes(`href="${expectedHref}"`));
+  assert.match(html, /target="_blank"/);
+  assert.match(html, /rel="noopener noreferrer"/);
+  assert.match(html, /data-source-preview=/);
+});
+
+test('non-PDF or incomplete source badges stay nonclickable while retaining previews', () => {
+  const nonPdf = renderSourcesHtml([
+    {
+      filename: '비급여 표준 모델.xlsx',
+      doc_short: '비급여 표준 모델',
+      page: 4,
+      snippet: '스프레드시트 근거 미리보기입니다.',
+    },
+  ]);
+  const missingPage = renderSourcesHtml([
+    {
+      filename: '약관.pdf',
+      doc_short: '약관',
+      snippet: '페이지 정보가 없는 근거 미리보기입니다.',
+    },
+  ]);
+
+  assert.doesNotMatch(nonPdf, /<a\b/);
+  assert.match(nonPdf, /data-source-preview=/);
+  assert.doesNotMatch(missingPage, /<a\b/);
+  assert.match(missingPage, /data-source-preview=/);
+});
+
 test('document scope checklist sends selected doc_short filters', () => {
   const originalDocument = globalThis.document;
   globalThis.document = {

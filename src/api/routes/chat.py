@@ -10,10 +10,11 @@ import inspect
 import json
 import logging
 import time
+import unicodedata
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -102,6 +103,55 @@ async def chat_documents(
     """Return document filters available to the chat UI."""
 
     return {"documents": _document_filter_options()}
+
+
+def _normalized_source_identifier(value: str | None) -> str:
+    return unicodedata.normalize("NFC", str(value or "")).strip()
+
+
+def _registered_pdf_source(*, doc_short: str | None, filename: str | None) -> config.PdfSource | None:
+    """Resolve a configured PDF source without accepting a user-supplied path."""
+
+    requested_doc_short = _normalized_source_identifier(doc_short)
+    requested_filename = _normalized_source_identifier(filename)
+    if not requested_doc_short and not requested_filename:
+        return None
+    if requested_filename and ("/" in requested_filename or "\\" in requested_filename):
+        return None
+
+    matches: list[config.PdfSource] = []
+    for source in config.PDF_SOURCES:
+        if requested_doc_short and requested_doc_short != _normalized_source_identifier(source.doc_short):
+            continue
+        if requested_filename and requested_filename != _normalized_source_identifier(source.path.name):
+            continue
+        matches.append(source)
+
+    if len(matches) != 1:
+        return None
+    source = matches[0]
+    if source.path.suffix.casefold() != ".pdf" or not source.path.is_file():
+        return None
+    return source
+
+
+@router.get("/sources/pdf")
+async def chat_source_pdf(
+    doc_short: str | None = Query(default=None, max_length=240),
+    filename: str | None = Query(default=None, max_length=512),
+    user: User = Depends(require_permission("chat.stream")),
+) -> FileResponse:
+    """Return an allowlisted registered source PDF for an authenticated chat user."""
+
+    source = _registered_pdf_source(doc_short=doc_short, filename=filename)
+    if source is None:
+        raise HTTPException(status_code=404, detail="등록된 원문 PDF를 찾을 수 없습니다.")
+    return FileResponse(
+        source.path,
+        media_type="application/pdf",
+        filename=source.path.name,
+        content_disposition_type="inline",
+    )
 
 
 def _document_filter_options() -> list[dict[str, str]]:

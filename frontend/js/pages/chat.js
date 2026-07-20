@@ -1610,12 +1610,33 @@ function renderSourceBadgeHtml(source) {
   const previewAttrs = preview
     ? ` data-source-preview="${escapeHTML(preview)}" title="${escapeHTML(preview)}"`
     : '';
+  const citationUrl = sourcePdfCitationUrl(source);
+  if (citationUrl) {
+    const ariaLabel = escapeHTML(`${formatSource(source)} 원문 PDF 열기`);
+    return `<a class="src-badge src-badge--link" href="${escapeHTML(citationUrl)}" target="_blank" rel="noopener noreferrer" aria-label="${ariaLabel}"${previewAttrs}>${label}</a>`;
+  }
   return `<span class="src-badge"${previewAttrs}>${label}</span>`;
 }
 
 function sourcePreviewText(source) {
   if (!source || typeof source === 'string') return '';
   return String(source.snippet || source.content || source.text || '').trim();
+}
+
+function sourcePdfCitationUrl(source) {
+  if (!source || typeof source === 'string') return '';
+
+  const filename = String(source.filename || '').trim();
+  const docShort = String(source.doc_short || '').trim();
+  const page = Number(source.page);
+  if (!filename.toLowerCase().endsWith('.pdf') || !Number.isInteger(page) || page < 1) {
+    return '';
+  }
+
+  const query = docShort
+    ? `doc_short=${encodeURIComponent(docShort)}`
+    : `filename=${encodeURIComponent(filename)}`;
+  return `/api/chat/sources/pdf?${query}#page=${page}`;
 }
 
 function extractAssistantUiPayload(sources) {
