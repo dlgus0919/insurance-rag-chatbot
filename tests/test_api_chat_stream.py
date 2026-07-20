@@ -80,7 +80,15 @@ class FakePipeline:
         self.graph_retriever = None
         self.last_doc_filter = None
 
-    def retrieve_hits(self, question, top_k=None, doc_filter=None, return_debug=False, graph_hits=None):
+    def retrieve_hits(
+        self,
+        question,
+        top_k=None,
+        doc_filter=None,
+        return_debug=False,
+        graph_hits=None,
+        policy_generation=None,
+    ):
         self.last_retrieval_question = question
         self.last_doc_filter = doc_filter
         hits = [
@@ -298,6 +306,11 @@ def test_policy_generation_context_is_added_to_general_prompt() -> None:
     assert "사용자가 선택한 실손 세대는 5세대 실손" in prompt
 
 
+def test_policy_generation_comparison_does_not_apply_a_single_generation_scope() -> None:
+    assert chat._effective_policy_generation("4세대와 5세대 MRI 한도 차이는?", "5th") is None
+    assert chat._effective_policy_generation("4세대 MRI 한도는?", "5th") == "5th"
+
+
 @pytest.mark.anyio
 async def test_general_chat_forwards_selected_policy_generation_to_retrieval(db_session, monkeypatch) -> None:
     monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
@@ -395,6 +408,32 @@ class FakeGraphPipeline(FakePipeline):
         self.graph_enabled = True
         self.graph_retriever = FakeGraphRetriever()
         self.vector_store = FakeVectorStore()
+
+
+class CapturingGraphRetriever:
+    def __init__(self):
+        self.policy_generation: str | None = None
+
+    def retrieve(self, question, clarification=None, *, policy_generation=None):
+        self.policy_generation = policy_generation
+        return GraphRetrievalResult(plan=GraphQueryPlan())
+
+
+@pytest.mark.anyio
+async def test_prepare_retrieved_context_forwards_selected_generation_to_graph() -> None:
+    pipeline = FakeGraphPipeline()
+    graph_retriever = CapturingGraphRetriever()
+    pipeline.graph_retriever = graph_retriever
+
+    await prepare_retrieved_context(
+        pipeline,
+        "자기공명영상진단(MRI/MRA)의 연간 보상한도는?",
+        6,
+        [],
+        policy_generation="5th",
+    )
+
+    assert graph_retriever.policy_generation == "5th"
 
 
 class FailingGraphRetriever(GraphRetriever):

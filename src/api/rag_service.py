@@ -273,12 +273,16 @@ async def prepare_retrieved_context(
         try:
             graph_question = conversation_context.route_query if conversation_context else question
             clarification = conversation_context.graph_clarification if conversation_context else None
+            graph_kwargs: dict[str, str] = {}
+            if policy_generation:
+                graph_kwargs["policy_generation"] = policy_generation
             if clarification is None:
-                graph_result = pipeline.graph_retriever.retrieve(graph_question)
+                graph_result = pipeline.graph_retriever.retrieve(graph_question, **graph_kwargs)
             else:
                 graph_result = pipeline.graph_retriever.retrieve(
                     graph_question,
                     clarification=clarification,
+                    **graph_kwargs,
                 )
             graph_context = build_graph_context(graph_result)
             source_chunk_ids = getattr(graph_result, "source_chunk_ids", []) or []

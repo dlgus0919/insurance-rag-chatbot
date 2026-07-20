@@ -556,8 +556,12 @@ async def chat_stream(
             current_manifest_hash=manifest_hash,
             clarification=chat_request.clarification or None,
         )
-        selected_policy_generation = (
+        requested_policy_generation = (
             chat_request.policy_generation or conversation_context.query_scope.policy_generation
+        )
+        selected_policy_generation = _effective_policy_generation(
+            conversation_context.route_query,
+            requested_policy_generation,
         )
         requested_index_mode, effective_index_mode = _resolve_chat_index_modes(
             _query_with_policy_generation(conversation_context.route_query, selected_policy_generation),
@@ -952,6 +956,33 @@ def _policy_generation_label(policy_generation: str | None) -> str | None:
     if policy_generation == "4th":
         return "4세대"
     return None
+
+
+def _has_explicit_policy_generation_comparison(query: str) -> bool:
+    lowered_query = query.casefold()
+    has_fourth = "4세대" in query or "4th" in lowered_query
+    has_fifth = "5세대" in query or "5th" in lowered_query
+    comparison_tokens = ("비교", "차이", "각각", "대비", "vs")
+    paired_forms = (
+        "4세대와 5세대",
+        "5세대와 4세대",
+        "4세대 및 5세대",
+        "5세대 및 4세대",
+        "4세대/5세대",
+        "5세대/4세대",
+    )
+    return has_fourth and has_fifth and (
+        any(token in lowered_query for token in comparison_tokens)
+        or any(form in query for form in paired_forms)
+    )
+
+
+def _effective_policy_generation(query: str, selected_policy_generation: str | None) -> str | None:
+    """Use the UI selection unless the user explicitly asks for a generation comparison."""
+
+    if _has_explicit_policy_generation_comparison(query):
+        return None
+    return selected_policy_generation
 
 
 def _query_with_policy_generation(query: str, policy_generation: str | None) -> str:

@@ -1167,8 +1167,14 @@ class GraphRetriever:
         self,
         question: str,
         clarification: dict[str, list[dict[str, str]]] | None = None,
+        *,
+        policy_generation: str | None = None,
     ) -> GraphRetrievalResult:
-        plan = self.planner.plan(question, clarification=clarification)
+        plan = self.planner.plan(
+            question,
+            clarification=clarification,
+            policy_generation=policy_generation,
+        )
         result = GraphRetrievalResult(plan=plan)
 
         # fallback 대비: db_path가 없으면 경고만 남기고 리턴

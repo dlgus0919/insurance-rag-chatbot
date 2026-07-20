@@ -7,6 +7,13 @@ from typing import Any, List, Optional
 from src.ontology.registry import OntologyRegistry, get_default_ontology_registry, matches_ontology_alias
 
 
+_COVERAGE_DECISION_PHRASE_RX = re.compile(
+    r"(?:보상|보장)\s*(?:가능|되|받|대상)"
+    r"|받을\s*수"
+    r"|가능\s*(?:여부|한가|합니까|인가|인지)"
+)
+
+
 @dataclass
 class GraphQueryPlan:
     intents: List[str] = field(default_factory=list)
@@ -41,6 +48,7 @@ class GraphQueryPlan:
     ambiguous_terms: List[str] = field(default_factory=list)
     clarification_questions: List[str] = field(default_factory=list)
     required_evidence: List[str] = field(default_factory=list)
+    policy_generation_comparison: bool = False
 
 
 class GraphQueryPlanner:
@@ -129,11 +137,13 @@ class GraphQueryPlanner:
             f"'{raw}' 표현이 '{normalized}'을 의미하는지 확인해 주세요.",
         )
 
-    def _apply_aliases(self, query: str, plan: GraphQueryPlan) -> None:
+    def _apply_aliases(self, query: str, plan: GraphQueryPlan) -> dict[str, set[str]]:
+        confirmed_aliases: dict[str, set[str]] = {}
         for canonical, aliases in self.term_aliases.items():
             for alias in aliases:
                 if matches_ontology_alias(query, alias):
                     self._append_unique(plan.coverage_topics, canonical)
+                    confirmed_aliases.setdefault(canonical, set()).add(alias)
                     if alias != canonical:
                         plan.normalized_terms[alias] = canonical
         for canonical, aliases in self.condition_aliases.items():
@@ -142,11 +152,31 @@ class GraphQueryPlanner:
                     self._append_unique(plan.conditions, canonical)
                     if alias != canonical:
                         plan.normalized_terms[alias] = canonical
+        return confirmed_aliases
 
-    def _apply_term_correction_candidates(self, query: str, plan: GraphQueryPlan) -> None:
+    @staticmethod
+    def _is_dominated_candidate_alias(
+        normalized: str,
+        alias: str,
+        confirmed_aliases: dict[str, set[str]],
+    ) -> bool:
+        return any(
+            alias != confirmed and alias in confirmed
+            for confirmed in confirmed_aliases.get(normalized, set())
+        )
+
+    def _apply_term_correction_candidates(
+        self,
+        query: str,
+        plan: GraphQueryPlan,
+        confirmed_aliases: dict[str, set[str]],
+    ) -> None:
         for normalized, aliases in self.term_candidate_aliases.items():
             for alias in aliases:
-                if matches_ontology_alias(query, alias):
+                if (
+                    matches_ontology_alias(query, alias)
+                    and not self._is_dominated_candidate_alias(normalized, alias, confirmed_aliases)
+                ):
                     self._append_candidate(
                         plan,
                         raw=alias,
@@ -228,22 +258,76 @@ class GraphQueryPlanner:
         if resolved:
             plan.ambiguous_terms = [term for term in plan.ambiguous_terms if term not in resolved]
 
+    @staticmethod
+    def _is_policy_attribute_lookup(plan: GraphQueryPlan, query: str) -> bool:
+        attribute_tokens = ("한도", "횟수", "기간", "연간", "매년", "계약해당일")
+        decision_action_tokens = (
+            "청구",
+            "계산",
+            "보험금",
+            "지급",
+            "공제",
+            "자기부담",
+        )
+        return (
+            bool(plan.coverage_topics)
+            and (bool(plan.policy_generation) or plan.policy_generation_comparison)
+            and any(
+                token in query for token in attribute_tokens
+            )
+            and not (
+                any(token in query for token in decision_action_tokens)
+                or bool(_COVERAGE_DECISION_PHRASE_RX.search(query))
+            )
+        )
+
+    @staticmethod
+    def _has_policy_generation_comparison(query: str) -> bool:
+        lowered_query = query.casefold()
+        has_fourth = "4세대" in query or "4th" in lowered_query
+        has_fifth = "5세대" in query or "5th" in lowered_query
+        comparison_tokens = ("비교", "차이", "각각", "대비", "vs")
+        paired_forms = (
+            "4세대와 5세대",
+            "5세대와 4세대",
+            "4세대 및 5세대",
+            "5세대 및 4세대",
+            "4세대/5세대",
+            "5세대/4세대",
+        )
+        return has_fourth and has_fifth and (
+            any(token in lowered_query for token in comparison_tokens)
+            or any(form in query for form in paired_forms)
+        )
+
     def _add_clarification_questions(self, plan: GraphQueryPlan, query: str) -> None:
         judgment_tokens = (
             "보상", "청구", "계산", "지급", "가능", "한도", "공제", "자기부담",
             "검토", "판단", "확인", "봐야", "되나요", "받을 수",
         )
-        if any(token in query for token in judgment_tokens):
+        if (
+            any(token in query for token in judgment_tokens)
+            or bool(_COVERAGE_DECISION_PHRASE_RX.search(query))
+        ):
             generation_sensitive = {
                 "실손", "도수치료", "체외충격파치료", "증식치료", "비급여 주사료",
                 "MRI", "MRA", "자기공명영상진단", "상급병실료 차액", "3대비급여",
             }
-            if generation_sensitive.intersection(plan.coverage_topics) and not plan.policy_generation:
+            policy_attribute_lookup = self._is_policy_attribute_lookup(plan, query)
+            if (
+                generation_sensitive.intersection(plan.coverage_topics)
+                and not plan.policy_generation
+                and not plan.policy_generation_comparison
+            ):
                 self._append_unique(plan.clarification_questions, "어느 실손 세대(예: 4세대/5세대) 기준인지 확인해 주세요.")
                 self._append_unique(plan.ambiguous_terms, "실손 세대")
 
             visit_sensitive = generation_sensitive | {"건강보험 미적용"}
-            if visit_sensitive.intersection(plan.coverage_topics) and not plan.visit_type:
+            if (
+                visit_sensitive.intersection(plan.coverage_topics)
+                and not plan.visit_type
+                and not policy_attribute_lookup
+            ):
                 self._append_unique(plan.clarification_questions, "입원/통원/처방조제 중 어떤 방문 구분인지 확인해 주세요.")
                 self._append_unique(plan.ambiguous_terms, "방문 구분")
 
@@ -260,7 +344,11 @@ class GraphQueryPlanner:
                 self._append_unique(plan.clarification_questions, "치료 목적인지 미용/예방 목적인지 확인할 수 있는 진단서 또는 의사소견이 있는지 확인해 주세요.")
                 self._append_unique(plan.ambiguous_terms, "치료 목적")
 
-            if not plan.evidence_tags and any(topic in plan.coverage_topics for topic in generation_sensitive | {"실손", "건강보험 미적용"}):
+            if (
+                not plan.evidence_tags
+                and not policy_attribute_lookup
+                and any(topic in plan.coverage_topics for topic in generation_sensitive | {"실손", "건강보험 미적용"})
+            ):
                 self._append_unique(plan.clarification_questions, "진료비 영수증, 진료비 세부내역서, 진단서 등 어떤 증빙이 있는지 확인해 주세요.")
                 self._append_unique(plan.ambiguous_terms, "증빙 서류")
 
@@ -273,7 +361,13 @@ class GraphQueryPlanner:
         for item in evidence:
             self._append_unique(plan.required_evidence, item)
 
-    def plan(self, query: str, clarification: dict | None = None) -> GraphQueryPlan:
+    def plan(
+        self,
+        query: str,
+        clarification: dict | None = None,
+        *,
+        policy_generation: str | None = None,
+    ) -> GraphQueryPlan:
         plan = GraphQueryPlan()
 
         # 1. Entity Extraction
@@ -394,8 +488,8 @@ class GraphQueryPlanner:
         for condition in self.conditions:
             if condition.lower() in lowered_query and condition not in plan.conditions:
                 plan.conditions.append(condition)
-        self._apply_aliases(query, plan)
-        self._apply_term_correction_candidates(query, plan)
+        confirmed_aliases = self._apply_aliases(query, plan)
+        self._apply_term_correction_candidates(query, plan, confirmed_aliases)
         for tag in self.evidence_tags:
             if tag.lower() in lowered_query and tag not in plan.evidence_tags:
                 plan.evidence_tags.append(tag)
@@ -448,6 +542,11 @@ class GraphQueryPlanner:
             plan.treatment_purpose = "preventive"
 
         self._apply_clarification(plan, clarification)
+        if self._has_policy_generation_comparison(query):
+            plan.policy_generation = None
+            plan.policy_generation_comparison = True
+        elif policy_generation in {"4th", "5th"}:
+            plan.policy_generation = policy_generation
 
         # 2. Intent Classification
         intents = []
