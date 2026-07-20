@@ -20,7 +20,11 @@ from src.llm.factory import build_llm
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
 from src.ontology.registry import get_default_ontology_registry
 from src.rag.auto_params import AutoRagParams, apply_adaptive_k_to_hits
-from src.rag.clause_detail_rows import ClauseDetailRowStore, resolve_clause_detail_rows_path
+from src.rag.clause_detail_rows import (
+    ClauseDetailRowStore,
+    resolve_clause_detail_rows_path,
+    resolve_clause_detail_source_chunks_path,
+)
 from src.rag.conversation_context import ResolvedConversationContext
 from src.rag.evidence import append_evidence_validation_warning
 from src.rag.evidence_assessment import (
@@ -36,7 +40,7 @@ from src.retrieval.bm25 import BM25Index
 from src.retrieval.embedder import Embedder
 from src.retrieval.index_mode import INDEX_MODES, resolve_effective_index_mode, resolve_index_paths, resolve_index_profile
 from src.retrieval.reranker import build_reranker
-from src.retrieval.pair_mapping import load_chunk_lookup
+from src.retrieval.pair_mapping import load_source_metadata_lookup
 from src.retrieval.vector_store import VectorStore
 
 
@@ -118,13 +122,16 @@ def _load_index_retrieval_components(index_mode: str):
     return vector_store, bm25
 
 
-@lru_cache(maxsize=1)
-def _load_source_chunk_lookup() -> dict[str, dict]:
+@lru_cache(maxsize=4)
+def _load_source_chunk_lookup(index_mode: str = "default") -> dict[str, dict]:
     """Load canonical chunk metadata used to repair legacy index records."""
 
     if not config.CHUNKS_PATH.exists():
         return {}
-    return load_chunk_lookup(config.CHUNKS_PATH)
+    return load_source_metadata_lookup(
+        config.CHUNKS_PATH,
+        resolve_clause_detail_source_chunks_path(index_mode),
+    )
 
 
 @lru_cache(maxsize=16)
@@ -149,7 +156,7 @@ def get_rag_pipeline(
         rrf_k=config.RRF_K,
         reranker=reranker,
         clause_detail_row_store=ClauseDetailRowStore(resolve_clause_detail_rows_path(index_mode)),
-        source_chunk_lookup=_load_source_chunk_lookup(),
+        source_chunk_lookup=_load_source_chunk_lookup(index_mode),
     )
 
 
@@ -1083,11 +1090,34 @@ def graph_payload_has_renderable_evidence(graph_payload: dict | None) -> bool:
     )
 
 
+def _strip_rendered_missing_review_summaries(text: str, graph_payload: dict | None) -> str:
+    """Keep Graph missing-path summaries in the structured panel, not the answer body."""
+
+    if not isinstance(graph_payload, dict):
+        return text
+    summaries = {
+        str(path.get("summary")).strip()
+        for path in graph_payload.get("graph_review_paths", [])
+        if isinstance(path, dict)
+        and path.get("status") == "missing"
+        and str(path.get("summary") or "").strip()
+    }
+    if not summaries:
+        return text
+    return "\n".join(
+        raw_line
+        for raw_line in text.splitlines()
+        if raw_line.strip() not in summaries
+    ).strip()
+
+
 def normalize_assistant_answer_for_display(text: str, graph_payload: dict | None = None) -> str:
     """Normalize stored/generated assistant text for UI and export display."""
 
     if graph_payload_has_renderable_evidence(graph_payload):
-        return strip_trailing_source_citation_lines(strip_embedded_review_template(text))
+        cleaned = strip_embedded_review_template(text)
+        cleaned = _strip_rendered_missing_review_summaries(cleaned, graph_payload)
+        return strip_trailing_source_citation_lines(cleaned)
     return strip_trailing_source_citation_lines(text)
 
 

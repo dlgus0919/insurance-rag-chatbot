@@ -28,6 +28,7 @@ from src.rag.pipeline import (
 from src.rag.table_store import TableStore
 from src.parser.chunker import Chunk
 from src.retrieval import Hit
+from src.retrieval.pair_mapping import load_source_metadata_lookup
 
 
 class DummyEmbedder:
@@ -265,6 +266,78 @@ def test_retrieve_hits_hydrates_missing_generation_from_source_chunk_lookup() ->
     )
 
     assert [hit.id for hit in hits] == ["hair-4th"]
+    assert hits[0].metadata["policy_generation"] == "4th"
+
+
+def test_retrieve_hits_crosswalks_rechunked_source_metadata_before_generation_filter(tmp_path) -> None:
+    canonical_path = tmp_path / "chunks.jsonl"
+    indexed_path = tmp_path / "chunks_v2_manual.jsonl"
+    common_metadata = {
+        "doc_short": "약관",
+        "doc_name": "실손 약관",
+        "pdf_filename": "policy.pdf",
+        "page_start": 71,
+        "page_end": 71,
+        "chapter": "제3조(보장종목별 보상내용)",
+        "product_type": "실손",
+    }
+    canonical_rows = [
+        {
+            "id": "canonical-4th",
+            "text": "선택 세대의 연간 보상한도는 300만원입니다.",
+            "metadata": {**common_metadata, "policy_generation": "4th"},
+        },
+        {
+            "id": "canonical-5th",
+            "text": "선택 세대의 연간 보상한도는 200만원입니다.",
+            "metadata": {
+                **common_metadata,
+                "doc_short": "표준약관",
+                "pdf_filename": "standard.pdf",
+                "policy_generation": "5th",
+            },
+        },
+    ]
+    indexed_rows = [
+        {"id": "rechunked-4th", "text": canonical_rows[0]["text"], "metadata": common_metadata},
+        {
+            "id": "rechunked-5th",
+            "text": canonical_rows[1]["text"],
+            "metadata": canonical_rows[1]["metadata"] | {"policy_generation": None},
+        },
+        {
+            "id": "generation-unverified",
+            "text": "다른 문서의 연간 보상한도 예시입니다.",
+            "metadata": {"doc_short": "상담사례집", "page_start": 1, "page_end": 1},
+        },
+    ]
+    canonical_path.write_text("".join(f"{json.dumps(row)}\n" for row in canonical_rows), encoding="utf-8")
+    indexed_path.write_text("".join(f"{json.dumps(row)}\n" for row in indexed_rows), encoding="utf-8")
+
+    class RechunkedVectorStore:
+        def query(self, query_embedding, top_k: int, doc_filter: list[str] | None = None):
+            return [
+                Hit(id=row["id"], score=1.0, document=row["text"], metadata=dict(row["metadata"]))
+                for row in indexed_rows
+            ]
+
+    class RechunkedBM25:
+        def query(self, text: str, top_k: int):
+            return RechunkedVectorStore().query(None, top_k)
+
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        RechunkedVectorStore(),
+        RechunkedBM25(),
+        DummyLLM(),
+        top_k_final=4,
+        reranker_enabled=False,
+        source_chunk_lookup=load_source_metadata_lookup(canonical_path, indexed_path),
+    )
+
+    hits, _ = pipeline.retrieve_hits("연간 보상한도는?", top_k=4, policy_generation="4th")
+
+    assert [hit.id for hit in hits] == ["rechunked-4th"]
     assert hits[0].metadata["policy_generation"] == "4th"
 
 

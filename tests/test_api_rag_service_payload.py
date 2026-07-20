@@ -350,6 +350,37 @@ def test_finalize_answer_for_question_strips_internal_review_path_markers_when_g
     assert "---" not in finalized
 
 
+def test_finalize_answer_for_question_strips_missing_graph_review_summary_from_answer_body() -> None:
+    internal_summary = "직접 연결된 판단 조건 경로를 찾지 못했습니다."
+    raw_answer = (
+        "선택한 약관 기준의 수치를 확인했습니다.\n"
+        f"{internal_summary}\n"
+        "실제 지급 판단에는 추가 사실관계 확인이 필요합니다."
+    )
+    chunks = [
+        Chunk(
+            id="chunk-1",
+            text="약관 근거",
+            metadata={"pdf_filename": "약관.pdf", "doc_short": "약관", "page_start": 71, "page_end": 71},
+        )
+    ]
+
+    finalized = finalize_answer_for_question(
+        "선택 약관의 보상한도는?",
+        raw_answer,
+        chunks,
+        {
+            "graph_review_paths": [
+                {"path_type": "claim_condition_review", "status": "missing", "summary": internal_summary},
+            ]
+        },
+    )
+
+    assert "선택한 약관 기준의 수치를 확인했습니다." in finalized
+    assert "실제 지급 판단에는 추가 사실관계 확인이 필요합니다." in finalized
+    assert internal_summary not in finalized
+
+
 def test_strip_embedded_review_template_preserves_normal_bracket_tokens_and_surrounding_text() -> None:
     raw_answer = (
         "약어는 【mri】로 표기됩니다.\n"

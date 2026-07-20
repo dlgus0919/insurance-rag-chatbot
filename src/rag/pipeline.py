@@ -1687,6 +1687,22 @@ def _filter_hits_by_policy_generation(hits: list[Hit], policy_generation: str | 
     ]
 
 
+def _filter_generation_scoped_clause_detail_hits(
+    hits: list[Hit],
+    question: str,
+    policy_generation: str | None,
+) -> list[Hit]:
+    """Fail closed for direct clause attributes without verified selected-generation evidence."""
+
+    if policy_generation not in {"4th", "5th"} or not _clause_detail_categories(question):
+        return hits
+    return [
+        hit
+        for hit in hits
+        if str((hit.metadata or {}).get("policy_generation") or "") == policy_generation
+    ]
+
+
 def _hit_dedupe_key(hit: Hit) -> tuple[str, str, str, str, str]:
     """같은 문서/페이지/본문이 다른 chunk id로 반복되는 것을 제거하기 위한 키."""
 
@@ -2240,6 +2256,11 @@ class RagPipeline:
             final_hits = self._restore_doc_coverage(final_hits, coverage_hits, final_top_k)
         final_hits = self._hydrate_source_metadata(final_hits)
         final_hits = _filter_hits_by_policy_generation(final_hits, policy_generation)
+        final_hits = _filter_generation_scoped_clause_detail_hits(
+            final_hits,
+            question,
+            policy_generation,
+        )
         final_hits = _prefer_exact_text_hits(final_hits, named_code_terms)
         debug = (
             DebugInfo(
