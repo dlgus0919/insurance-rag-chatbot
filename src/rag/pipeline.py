@@ -104,6 +104,10 @@ _CLAUSE_DETAIL_QUERY_CUES = (
     "구비서류",
     "자기부담금",
     "자기부담",
+    "공제금액",
+    "공제",
+    "보상비율",
+    "비율",
     "보상한도",
     "보장한도",
     "지급한도",
@@ -1184,6 +1188,7 @@ def _extract_clause_detail_text_rows(
             or ""
         )
         source_label = _extract_clause_detail_source_label(chunk.text)
+        direct_policy_attribute = bool(chunk.metadata.get("direct_policy_attribute"))
         article, table_label = _clause_detail_source_parts(source_label)
         if source_label and source_label not in metadata_section:
             section = f"{source_label}, {metadata_section}" if metadata_section else source_label
@@ -1194,7 +1199,7 @@ def _extract_clause_detail_text_rows(
             numbers = _extract_clause_detail_numbers(row_text)
             if "deductible" in categories and not numbers:
                 continue
-            if not _clause_detail_row_matches_required_groups(
+            if not direct_policy_attribute and not _clause_detail_row_matches_required_groups(
                 compact_row,
                 question_facets,
                 required_facet_groups,
@@ -1211,9 +1216,11 @@ def _extract_clause_detail_text_rows(
             )
             if source_label:
                 score += _clause_detail_score_weight("source_label")
+            if direct_policy_attribute:
+                score = max(score, _clause_detail_score_weight("min_score"))
             if score < _clause_detail_score_weight("min_score"):
                 continue
-            if question_facets and not any(
+            if not direct_policy_attribute and question_facets and not any(
                 _clause_detail_contains_facet(compact_row, facet) for facet in question_facets
             ):
                 continue
@@ -1610,7 +1617,7 @@ def _clause_detail_categories(question: str) -> list[str]:
         categories.append("diagnosis")
     if any(term in compact for term in ("필요서류", "필요한서류", "청구서류", "제출서류", "구비서류")):
         categories.append("documents")
-    if any(term in compact for term in ("자기부담금", "자기부담")):
+    if any(term in compact for term in ("자기부담금", "자기부담", "공제금액", "공제", "보상비율", "비율")):
         categories.append("deductible")
     if any(
         term in compact
@@ -1685,6 +1692,163 @@ def _filter_hits_by_policy_generation(hits: list[Hit], policy_generation: str | 
         if not hit.metadata.get("policy_generation")
         or str(hit.metadata.get("policy_generation")) == policy_generation
     ]
+
+
+def _requested_policy_generations(question: str, policy_generation: str | None) -> list[str]:
+    if policy_generation:
+        return [policy_generation]
+    values: list[str] = []
+    for value in re.findall(r"(?<!\d)(\d+)\s*(?:세대|th)", question, flags=re.IGNORECASE):
+        generation = f"{int(value)}th"
+        if generation not in values:
+            values.append(generation)
+    return values
+
+
+def _policy_attribute_anchor_terms(question: str, retrieval_query: str) -> list[str]:
+    generic_terms = (
+        "세대",
+        "보상한도",
+        "보장한도",
+        "지급한도",
+        "연간한도",
+        "횟수한도",
+        "보장기간",
+        "지급기간",
+        "연간",
+        "매년",
+        "계약해당일",
+        "자기부담금",
+        "자기부담",
+        "공제금액",
+        "공제",
+        "보상비율",
+        "비율",
+    )
+    terms: list[str] = []
+    for term in _question_anchor_terms(f"{question} {retrieval_query}"):
+        compact = _compact_text(term)
+        if (
+            not compact
+            or compact.isdigit()
+            or re.fullmatch(r"\d+(?:세대|th)", compact, flags=re.IGNORECASE)
+            or any(generic in compact for generic in generic_terms)
+        ):
+            continue
+        if compact not in terms:
+            terms.append(compact)
+    return terms
+
+
+def _policy_attribute_anchor_positions(text: str, anchor: str) -> list[int]:
+    """Return exact or bounded OCR-fragmented anchor positions."""
+
+    positions: list[int] = []
+    start = text.find(anchor)
+    while start >= 0:
+        positions.append(start)
+        start = text.find(anchor, start + len(anchor))
+    if positions or len(anchor) < 6:
+        return positions
+
+    segment_size = max(2, len(anchor) // 3)
+    segments = [anchor[index:index + segment_size] for index in range(0, len(anchor), segment_size)]
+    first = segments[0]
+    start = text.find(first)
+    while start >= 0:
+        cursor = start + len(first)
+        for segment in segments[1:]:
+            next_start = text.find(segment, cursor)
+            if next_start < 0 or next_start - cursor > 96:
+                break
+            cursor = next_start + len(segment)
+        else:
+            positions.append(start)
+        start = text.find(first, start + 1)
+    return positions
+
+
+def _policy_attribute_number_matches(question: str, categories: list[str], text: str) -> list[re.Match[str]]:
+    matches = list(_CLAUSE_DETAIL_NUMBER_PATTERN.finditer(text))
+    compact_question = _compact_text(question)
+    if "limit" not in categories:
+        return matches
+    if any(term in compact_question for term in ("횟수", "회차")):
+        return [match for match in matches if "회" in match.group(0)]
+    if any(term in compact_question for term in ("보장기간", "지급기간")):
+        return [match for match in matches if any(unit in match.group(0) for unit in ("년", "일"))]
+    if any(term in compact_question for term in ("보상한도", "보장한도", "지급한도", "연간한도", "금액")):
+        return [match for match in matches if any(unit in match.group(0) for unit in ("만원", "원"))]
+    return matches
+
+
+def _policy_attribute_context_score(text: str, categories: list[str]) -> int:
+    compact = _compact_text(text)
+    score = 0
+    for category in categories:
+        terms = _clause_detail_context_terms(category)
+        if category == "limit":
+            terms = (*terms, "한도", "1년", "매년", "계약해당일")
+        if any(_compact_text(term) in compact for term in terms):
+            score += 1
+    return score
+
+
+def _direct_policy_attribute_hits(
+    source_chunk_lookup: dict[str, dict],
+    question: str,
+    retrieval_query: str,
+    policy_generation: str | None,
+    doc_filter: list[str] | None,
+) -> list[Hit]:
+    """Recall selected-generation direct clauses without depending on index rank."""
+
+    targets = _requested_policy_generations(question, policy_generation)
+    categories = _clause_detail_categories(question)
+    anchors = _policy_attribute_anchor_terms(question, retrieval_query)
+    if not targets or not categories or not anchors:
+        return []
+
+    allowed_docs = set(doc_filter or [])
+    best_by_generation: dict[str, tuple[int, Hit]] = {}
+    seen_source_ids: set[str] = set()
+    for source_row in source_chunk_lookup.values():
+        if not isinstance(source_row, dict):
+            continue
+        source_id = str(source_row.get("id") or "")
+        if not source_id or source_id in seen_source_ids:
+            continue
+        seen_source_ids.add(source_id)
+        metadata = source_row.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        generation = str(metadata.get("policy_generation") or "")
+        if generation not in targets:
+            continue
+        if allowed_docs and metadata.get("doc_short") not in allowed_docs:
+            continue
+        compact_text = _compact_text(str(source_row.get("text") or ""))
+        for term in anchors:
+            for start in _policy_attribute_anchor_positions(compact_text, term):
+                evidence_text = compact_text[max(0, start - 240): start + len(term) + 480]
+                context_score = _policy_attribute_context_score(evidence_text, categories)
+                number_matches = _policy_attribute_number_matches(question, categories, evidence_text)
+                if context_score and number_matches:
+                    anchor_start = evidence_text.find(term)
+                    nearest_number = min(abs(match.start() - anchor_start) for match in number_matches)
+                    direct_metadata = dict(metadata)
+                    direct_metadata["direct_policy_attribute"] = True
+                    hit = Hit(
+                        id=source_id,
+                        score=float(len(term) * 1000 + context_score * 100 + max(0, 480 - nearest_number)),
+                        document=evidence_text,
+                        metadata=direct_metadata,
+                    )
+                    current = best_by_generation.get(generation)
+                    rank = int(hit.score)
+                    if current is None or rank > current[0] or (rank == current[0] and hit.id < current[1].id):
+                        best_by_generation[generation] = (rank, hit)
+    return [best_by_generation[target][1] for target in targets if target in best_by_generation]
 
 
 def _filter_generation_scoped_clause_detail_hits(
@@ -2167,6 +2331,16 @@ class RagPipeline:
 
         dense_hits = _exclude_irrelevant_travel_insurance(dense_hits, question)
         bm25_hits = _exclude_irrelevant_travel_insurance(bm25_hits, question)
+        direct_policy_attribute_hits: list[Hit] = []
+        if search_intent.intent == "policy_attribute_lookup":
+            direct_policy_attribute_hits = _direct_policy_attribute_hits(
+                self._source_chunk_lookup,
+                question,
+                retrieval_query,
+                policy_generation,
+                doc_filter,
+            )
+
         clause_detail_hits: list[Hit] = []
         if _is_clause_detail_query(question):
             focus_docs = _ordered_unique(doc_filter or _focus_docs_from_clause_hits(question, dense_hits + bm25_hits))
@@ -2223,6 +2397,12 @@ class RagPipeline:
                 fused_hits,
                 _filter_hits_by_policy_generation(graph_hits, policy_generation),
             )
+        if direct_policy_attribute_hits:
+            fused_hits = _merge_hits_preserving_order(
+                direct_policy_attribute_hits,
+                fused_hits,
+                limit=max(rrf_top_k, final_top_k),
+            )
         if clause_detail_hits:
             fused_hits = _merge_hits_preserving_order(
                 clause_detail_hits,
@@ -2246,6 +2426,12 @@ class RagPipeline:
 
         if clause_detail_hits:
             final_hits = _merge_hits_preserving_order(clause_detail_hits, final_hits, limit=final_top_k)
+        if direct_policy_attribute_hits:
+            final_hits = _merge_hits_preserving_order(
+                direct_policy_attribute_hits,
+                final_hits,
+                limit=final_top_k,
+            )
         if graph_hits:
             final_hits = _merge_hits_preserving_order(
                 final_hits,

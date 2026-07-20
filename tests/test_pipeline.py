@@ -1435,3 +1435,135 @@ def test_append_retrieved_source_citations_skips_existing_citation() -> None:
     answer = append_retrieved_source_citations(f"AA157 답변입니다.\n{citation}", [chunk])
 
     assert answer.count(citation) == 1
+
+
+def test_retrieve_hits_recalls_selected_generation_direct_attribute_clause_when_indexes_miss_it() -> None:
+    class CasebookOnlyStore:
+        def query(self, query_embedding, top_k: int, doc_filter: list[str] | None = None):
+            return [
+                Hit(
+                    id="casebook-only",
+                    score=1.0,
+                    document="상담사례집의 일반 안내 문장입니다.",
+                    metadata={"doc_short": "상담사례집", "page_start": 1, "page_end": 1},
+                )
+            ]
+
+    class CasebookOnlyBM25:
+        def query(self, text: str, top_k: int):
+            return CasebookOnlyStore().query(None, top_k)
+
+    source_chunk_lookup = {
+        "canonical-fourth": {
+            "id": "canonical-fourth",
+            "text": "비급여 자기공명영상진단은 1년간 보험가입금액 300만원 한도입니다.",
+            "metadata": {"doc_short": "약관", "page_start": 71, "page_end": 71, "policy_generation": "4th"},
+        },
+        "canonical-fifth": {
+            "id": "canonical-fifth",
+            "text": "비급여 자기공명영상진단은 1년 단위 합산 200만원 이내에서 보상합니다.",
+            "metadata": {"doc_short": "표준약관", "page_start": 400, "page_end": 400, "policy_generation": "5th"},
+        },
+    }
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        CasebookOnlyStore(),
+        CasebookOnlyBM25(),
+        DummyLLM(),
+        top_k_final=4,
+        reranker_enabled=False,
+        source_chunk_lookup=source_chunk_lookup,
+    )
+
+    hits, debug = pipeline.retrieve_hits(
+        "4세대 자기공명영상진단(MRI/MRA)의 연간 보상한도는?",
+        top_k=4,
+        return_debug=True,
+        policy_generation="4th",
+    )
+
+    assert debug is not None
+    assert debug.search_intent is not None
+    assert debug.search_intent.intent == "policy_attribute_lookup"
+    assert [hit.id for hit in hits] == ["canonical-fourth"]
+    assert hits[0].metadata["policy_generation"] == "4th"
+    assert "300만원" in hits[0].document
+    answer = _deterministic_guard_answer(
+        "4세대 자기공명영상진단(MRI/MRA)의 연간 보상한도는?",
+        [Chunk(id=hits[0].id, text=hits[0].document, metadata=hits[0].metadata)],
+    )
+    assert answer is not None
+    assert "300만원" in answer
+
+
+def test_retrieve_hits_keeps_generation_sources_separate_for_attribute_comparison() -> None:
+    class EmptyStore:
+        def query(self, query_embedding, top_k: int, doc_filter: list[str] | None = None):
+            return []
+
+    class EmptyBM25:
+        def query(self, text: str, top_k: int):
+            return []
+
+    source_chunk_lookup = {
+        "canonical-fourth": {
+            "id": "canonical-fourth",
+            "text": "정밀영상검사의 1년간 한도는 300만원입니다.",
+            "metadata": {"doc_short": "약관", "page_start": 71, "page_end": 71, "policy_generation": "4th"},
+        },
+        "canonical-fifth": {
+            "id": "canonical-fifth",
+            "text": "정밀영상검사의 1년간 한도는 200만원입니다.",
+            "metadata": {"doc_short": "표준약관", "page_start": 400, "page_end": 400, "policy_generation": "5th"},
+        },
+    }
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        EmptyStore(),
+        EmptyBM25(),
+        DummyLLM(),
+        top_k_final=4,
+        reranker_enabled=False,
+        source_chunk_lookup=source_chunk_lookup,
+    )
+
+    hits, _ = pipeline.retrieve_hits("4세대와 5세대 정밀영상검사의 연간 보상한도를 비교해줘.", top_k=4)
+
+    assert [hit.id for hit in hits] == ["canonical-fourth", "canonical-fifth"]
+    assert [hit.metadata["policy_generation"] for hit in hits] == ["4th", "5th"]
+
+
+def test_retrieve_hits_requires_money_measure_for_monetary_limit() -> None:
+    class EmptyStore:
+        def query(self, query_embedding, top_k: int, doc_filter: list[str] | None = None):
+            return []
+
+    class EmptyBM25:
+        def query(self, text: str, top_k: int):
+            return []
+
+    source_chunk_lookup = {
+        "per-session-limit": {
+            "id": "per-session-limit",
+            "text": "정밀영상검사는 1회당 보장한도를 적용합니다.",
+            "metadata": {"doc_short": "약관", "page_start": 10, "page_end": 10, "policy_generation": "5th"},
+        },
+        "annual-money-limit": {
+            "id": "annual-money-limit",
+            "text": "정밀영상 적용대상 검사의 1년간 보상한도는 200만원입니다.",
+            "metadata": {"doc_short": "약관", "page_start": 11, "page_end": 11, "policy_generation": "5th"},
+        },
+    }
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        EmptyStore(),
+        EmptyBM25(),
+        DummyLLM(),
+        top_k_final=4,
+        reranker_enabled=False,
+        source_chunk_lookup=source_chunk_lookup,
+    )
+
+    hits, _ = pipeline.retrieve_hits("5세대 정밀영상검사 연간 보상한도는?", top_k=4, policy_generation="5th")
+
+    assert [hit.id for hit in hits] == ["annual-money-limit"]

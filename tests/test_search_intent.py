@@ -68,6 +68,20 @@ def test_mri_transliteration_is_classified_as_ambiguous_medical_term() -> None:
     assert plan.dense_weight > plan.bm25_weight
 
 
+def test_pure_policy_attribute_lookup_outranks_ambiguous_medical_term() -> None:
+    plan = classify_search_intent("자기공명영상진단(MRI/MRA)의 연간 보상한도는?")
+
+    assert plan.intent == "policy_attribute_lookup"
+    assert plan.requires_clause_lookup is True
+    assert plan.requires_coverage_judgment is False
+
+
+def test_policy_attribute_coverage_question_keeps_coverage_judgment() -> None:
+    plan = classify_search_intent("5세대 MRI의 연간 보상한도는 보장되나요?")
+
+    assert plan.requires_coverage_judgment is True
+
+
 def test_cross_doc_compare_keeps_balanced_search() -> None:
     plan = classify_search_intent("심평원과 SOL 건강보험 기준을 문서별로 비교해줘")
 

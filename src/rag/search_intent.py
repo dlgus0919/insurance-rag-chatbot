@@ -27,6 +27,29 @@ _COVERAGE_CUES = (
     "입원",
     "처방조제",
 )
+_COVERAGE_DECISION_PHRASE_RX = re.compile(
+    r"(?:보상|보장)\s*(?:가능|되|받|대상)"
+    r"|받을\s*수"
+    r"|가능\s*(?:여부|한가|합니까|인가|인지)"
+)
+_POLICY_ATTRIBUTE_CUES = (
+    "보상한도",
+    "보장한도",
+    "지급한도",
+    "연간한도",
+    "횟수한도",
+    "보장기간",
+    "지급기간",
+    "연간",
+    "매년",
+    "계약해당일",
+    "자기부담금",
+    "자기부담",
+    "공제금액",
+    "공제",
+    "보상비율",
+    "비율",
+)
 _CLAUSE_DETAIL_CUES = (
     "진단확정",
     "확정기준",
@@ -79,6 +102,17 @@ def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
     return any(keyword in text for keyword in keywords)
 
 
+def _is_coverage_judgment(text: str) -> bool:
+    bare_compensation = "보상" in text and not _contains_any(
+        text,
+        ("보상한도", "보상비율", "보상기간", "보상횟수"),
+    )
+    return bare_compensation or _contains_any(
+        text,
+        tuple(cue for cue in _COVERAGE_CUES if cue != "보상"),
+    ) or bool(_COVERAGE_DECISION_PHRASE_RX.search(text))
+
+
 def extract_code_terms(question: str) -> list[str]:
     """Extract explicit medical/fee code terms without expanding external ontologies."""
 
@@ -128,7 +162,8 @@ def classify_search_intent(
     has_clause_detail = _contains_any(compact, _CLAUSE_DETAIL_CUES)
     has_rider_or_coverage_unit = _contains_any(compact, _RIDER_OR_COVERAGE_UNIT_CUES)
     requires_cross_doc = _contains_any(compact, ("문서별", "출처별", "기준별", "각각", "비교", "차이")) or bool(doc_filter and len(doc_filter) >= 2)
-    requires_coverage = _contains_any(compact, _COVERAGE_CUES)
+    requires_coverage = _is_coverage_judgment(compact)
+    has_policy_attribute = _contains_any(compact, _POLICY_ATTRIBUTE_CUES)
     has_ambiguous = _contains_any(lower_compact, ("mri", "mra", "엠알아이", "엠알에이")) or _contains_any(
         compact.lower(),
         ("도수", "충격파", "체외충격파"),
@@ -157,6 +192,20 @@ def classify_search_intent(
                 if compound
                 else "질문에서 코드 패턴을 감지해 코드 필터 검색과 BM25를 우선합니다."
             ),
+        )
+
+    if has_policy_attribute and not requires_coverage:
+        return SearchIntentPlan(
+            intent="policy_attribute_lookup",
+            confidence=0.84,
+            dense_weight=0.4,
+            bm25_weight=0.6,
+            top_k_dense=max(default_top_k_dense, 14),
+            top_k_bm25=max(default_top_k_bm25, 20),
+            requires_clause_lookup=True,
+            requires_cross_document=requires_cross_doc,
+            rule_strength=0.84,
+            reason="보상한도·횟수·기간·공제·비율 등 약관 속성 조회를 감지해 직접 조항 검색을 함께 사용합니다.",
         )
 
     if has_clause_detail and (has_rider_or_coverage_unit or has_clause or requires_coverage):
@@ -219,6 +268,7 @@ def classify_search_intent(
             bm25_weight=0.28,
             top_k_dense=max(default_top_k_dense, 14),
             top_k_bm25=max(6, default_top_k_bm25 // 2),
+            requires_coverage_judgment=requires_coverage,
             has_ambiguous_term=True,
             rule_strength=0.76,
             reason="사용자 표현이 MRI/MRA 등 약관 canonical 용어와 다를 수 있어 의미 기반 검색을 우선합니다.",
@@ -245,6 +295,7 @@ def classify_search_intent(
             bm25_weight=0.28,
             top_k_dense=max(default_top_k_dense, 14),
             top_k_bm25=max(6, default_top_k_bm25 // 2),
+            requires_coverage_judgment=requires_coverage,
             has_ambiguous_term=True,
             rule_strength=0.72,
             reason="사용자 표현이 약관 canonical 용어와 다를 수 있어 의미 기반 검색을 우선합니다.",
