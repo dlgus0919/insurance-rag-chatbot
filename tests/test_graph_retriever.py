@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -245,6 +247,81 @@ def populated_db() -> str:
         Path(path).unlink()
     except OSError:
         pass
+
+
+def _prepare_wal_graph_without_sidecars(graph_path: Path) -> None:
+    with sqlite3.connect(graph_path) as connection:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    for suffix in ("-wal", "-shm"):
+        Path(f"{graph_path}{suffix}").unlink(missing_ok=True)
+
+
+def test_safe_baseline_graph_queries_use_immutable_readonly_without_sidecars(
+    populated_db: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime_root = tmp_path / "safe-baseline"
+    graph_path = runtime_root / "graph" / "insurance_graph.sqlite"
+    graph_path.parent.mkdir(parents=True)
+    shutil.copy2(populated_db, graph_path)
+    _prepare_wal_graph_without_sidecars(graph_path)
+    retriever = GraphRetriever(graph_path)
+
+    captured_options: list[tuple[bool, bool]] = []
+    original_graph_store = GraphStore
+
+    class CapturingGraphStore(original_graph_store):
+        def __init__(self, *args, **kwargs):
+            captured_options.append(
+                (bool(kwargs.get("readonly")), bool(kwargs.get("immutable")))
+            )
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr("src.graph.retriever.GraphStore", CapturingGraphStore)
+    monkeypatch.setenv("INSURANCE_SAFE_BASELINE_RUNTIME_ROOT", str(runtime_root))
+
+    first = retriever.retrieve("기관지승인폐쇄술의 신1-5종 수술종수는?")
+    second = retriever.retrieve("기관지승인폐쇄술의 신1-5종 수술종수는?")
+
+    assert not any("Failed to connect" in warning for warning in first.warnings)
+    assert not any(
+        "Failed to connect" in warning
+        for warning in second.warnings
+    )
+    assert captured_options == [(True, True), (True, True)]
+    assert not Path(f"{graph_path}-wal").exists()
+    assert not Path(f"{graph_path}-shm").exists()
+
+
+def test_local_graph_queries_keep_existing_nonimmutable_readonly_mode(
+    populated_db: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    retriever = GraphRetriever(populated_db)
+    monkeypatch.setenv(
+        "INSURANCE_SAFE_BASELINE_RUNTIME_ROOT",
+        str(tmp_path / "different-safe-baseline"),
+    )
+    captured_options: list[tuple[bool, bool]] = []
+    original_graph_store = GraphStore
+
+    class CapturingGraphStore(original_graph_store):
+        def __init__(self, *args, **kwargs):
+            captured_options.append(
+                (bool(kwargs.get("readonly")), bool(kwargs.get("immutable")))
+            )
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr("src.graph.retriever.GraphStore", CapturingGraphStore)
+
+    result = retriever.retrieve("기관지승인폐쇄술의 신1-5종 수술종수는?")
+
+    assert not any("Failed to connect" in warning for warning in result.warnings)
+    assert captured_options == [(True, False)]
 
 
 def test_retriever_hard_query_1(populated_db: str) -> None:
