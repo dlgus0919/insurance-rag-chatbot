@@ -71,6 +71,8 @@ _EMBEDDED_REVIEW_TEMPLATE_MARKERS = (
 _EMBEDDED_REVIEW_SECTION_PATTERN = re.compile(r"^\s*■\s*섹션\s*\d")
 _EMBEDDED_REVIEW_HEADING_PATTERN = re.compile(r"^\s*【[^】]+】\s*$")
 _EMBEDDED_REVIEW_BULLET_PATTERN = re.compile(r"^\s*(?:[-*•]\s+|☐\s*|→\s*\d+\.\s*|→\s*)")
+_INTERNAL_REVIEW_PATH_MARKER_PATTERN = re.compile(r"【[a-z][a-z0-9_]*】")
+_TEMPLATE_SEPARATOR_LINE_PATTERN = re.compile(r"^\s*---+\s*$")
 _SOURCE_CITATION_LINE_PATTERN = re.compile(r"^\s*\[출처:\s*.+\]\s*$")
 _TRAILING_SOURCE_NOTE_PATTERN = re.compile(r"^\s*\(참고:\s*.+\)\s*$")
 _CLAIM_CONTEXT_RECENT_SNAPSHOT_LIMIT = 3
@@ -952,7 +954,18 @@ def finalize_answer(raw_answer: str, chunks: list) -> str:
 def strip_embedded_review_template(raw_answer: str) -> str:
     """Remove model-written review template blocks so frontend can render authoritative panels."""
 
-    text = raw_answer.strip()
+    cleaned_lines: list[str] = []
+    for raw_line in raw_answer.splitlines():
+        if _TEMPLATE_SEPARATOR_LINE_PATTERN.fullmatch(raw_line):
+            continue
+        marker = _INTERNAL_REVIEW_PATH_MARKER_PATTERN.search(raw_line)
+        if marker:
+            leading = raw_line[: marker.start()].rstrip()
+            if leading:
+                cleaned_lines.append(leading)
+            continue
+        cleaned_lines.append(raw_line)
+    text = "\n".join(cleaned_lines).strip()
     if not text:
         return ""
 

@@ -322,6 +322,34 @@ def test_finalize_answer_for_question_strips_embedded_review_template_when_graph
     assert "[출처:" not in finalized
 
 
+def test_finalize_answer_for_question_strips_internal_review_path_markers_when_graph_payload_is_renderable() -> None:
+    raw_answer = (
+        "선택한 약관 기준으로 연간 보상한도를 확인했습니다.\n"
+        "【claim_condition_review】 직접 연결된 판단 조건 경로를 찾지 못했습니다.\n"
+        "【generation_rule_review】 세대별 기준을 검토합니다.\n"
+        "---"
+    )
+    chunks = [
+        Chunk(
+            id="chunk-1",
+            text="약관 근거",
+            metadata={"pdf_filename": "약관.pdf", "doc_short": "약관", "page_start": 71, "page_end": 71},
+        )
+    ]
+
+    finalized = finalize_answer_for_question(
+        "자기공명영상진단의 연간 보상한도는?",
+        raw_answer,
+        chunks,
+        {"graph_review_paths": [{"path_type": "claim_condition_review", "status": "missing"}]},
+    )
+
+    assert "선택한 약관 기준으로 연간 보상한도를 확인했습니다." in finalized
+    assert "【claim_condition_review】" not in finalized
+    assert "【generation_rule_review】" not in finalized
+    assert "---" not in finalized
+
+
 def test_normalize_assistant_answer_for_display_keeps_template_without_renderable_graph_payload() -> None:
     text = (
         "■ 섹션 1️⃣ 【확정 근거】\n"

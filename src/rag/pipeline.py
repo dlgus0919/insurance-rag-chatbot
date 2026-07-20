@@ -104,6 +104,13 @@ _CLAUSE_DETAIL_QUERY_CUES = (
     "구비서류",
     "자기부담금",
     "자기부담",
+    "보상한도",
+    "보장한도",
+    "지급한도",
+    "연간한도",
+    "횟수한도",
+    "보장기간",
+    "지급기간",
 )
 _FALLBACK_CLAUSE_DETAIL_CONTEXT_TERMS = {
     "diagnosis": ("진단확정", "정의 및 진단확정", "병력", "신경학적 검진", "CT", "MRI", "의사"),
@@ -118,6 +125,17 @@ _FALLBACK_CLAUSE_DETAIL_CONTEXT_TERMS = {
         "지급한도",
         "대물",
         "대인",
+    ),
+    "limit": (
+        "보험금 등의 지급한도",
+        "보상한도",
+        "보장한도",
+        "지급한도",
+        "연간",
+        "1년 단위",
+        "횟수",
+        "보장기간",
+        "지급기간",
     ),
 }
 _CLAUSE_DETAIL_NUMBER_PATTERN = re.compile(
@@ -1411,6 +1429,7 @@ def _build_clause_detail_evidence_answer(
         "diagnosis": "진단확정 기준",
         "documents": "청구 필요 서류",
         "deductible": "자기부담금/공제 기준",
+        "limit": "보상한도/횟수/기간 기준",
     }
     label = " / ".join(category_labels.get(category, "조항 세부 기준") for category in categories)
     displayed_rows = rows[:2]
@@ -1485,6 +1504,7 @@ def _deterministic_clause_detail_answer(
         "diagnosis": "진단확정 기준",
         "documents": "청구 필요 서류",
         "deductible": "자기부담금 기준",
+        "limit": "보상한도/횟수/기간 기준",
     }
     evidence_lines: list[str] = []
     seen_evidence_line_keys: set[str] = set()
@@ -1592,6 +1612,11 @@ def _clause_detail_categories(question: str) -> list[str]:
         categories.append("documents")
     if any(term in compact for term in ("자기부담금", "자기부담")):
         categories.append("deductible")
+    if any(
+        term in compact
+        for term in ("보상한도", "보장한도", "지급한도", "연간한도", "횟수한도", "보장기간", "지급기간")
+    ):
+        categories.append("limit")
     return categories
 
 

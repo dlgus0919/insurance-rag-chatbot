@@ -341,6 +341,71 @@ def test_clause_detail_deductible_answer_uses_source_rows() -> None:
     assert "chunk=test" in answer
 
 
+@pytest.mark.parametrize(
+    ("policy_generation", "doc_short", "page_start", "annual_limit"),
+    [
+        ("4th", "약관", 71, "300만원"),
+        ("5th", "표준약관", 400, "200만원"),
+    ],
+)
+def test_deterministic_guard_answers_selected_generation_annual_limit_from_source_rows(
+    policy_generation: str,
+    doc_short: str,
+    page_start: int,
+    annual_limit: str,
+) -> None:
+    selected_chunk = Chunk(
+        id=f"mri-{policy_generation}",
+        text=(
+            "제3조(보장종목별 보상내용) 비급여 자기공명영상진단(MRI/MRA)은 "
+            f"계약일 또는 매년 계약해당일부터 1년 단위로 합산하여 보상한도 {annual_limit} 이내로 보상합니다."
+        ),
+        metadata={
+            "doc_short": doc_short,
+            "page_start": page_start,
+            "page_end": page_start,
+            "policy_generation": policy_generation,
+        },
+    )
+
+    answer = _deterministic_guard_answer(
+        "자기공명영상진단(MRI/MRA)의 연간 보상한도는?",
+        [selected_chunk],
+    )
+
+    assert answer is not None
+    assert annual_limit in answer
+    assert doc_short in answer
+    assert f"p.{page_start}" in answer
+    assert f"chunk=mri-{policy_generation}" in answer
+
+
+def test_deterministic_guard_compares_annual_limits_only_when_both_generation_sources_are_selected() -> None:
+    chunks = [
+        Chunk(
+            id="mri-4th",
+            text="비급여 자기공명영상진단(MRI/MRA)은 1년 단위 보상한도 300만원 이내로 보상합니다.",
+            metadata={"doc_short": "약관", "page_start": 71, "page_end": 71, "policy_generation": "4th"},
+        ),
+        Chunk(
+            id="mri-5th",
+            text="비급여 자기공명영상진단(MRI/MRA)은 1년 단위 보상한도 200만원 이내로 보상합니다.",
+            metadata={"doc_short": "표준약관", "page_start": 400, "page_end": 400, "policy_generation": "5th"},
+        ),
+    ]
+
+    answer = _deterministic_guard_answer(
+        "4세대와 5세대 자기공명영상진단(MRI/MRA)의 연간 보상한도 차이는?",
+        chunks,
+    )
+
+    assert answer is not None
+    assert "300만원" in answer
+    assert "200만원" in answer
+    assert "약관, p.71" in answer
+    assert "표준약관, p.400" in answer
+
+
 def test_clause_detail_rows_prefer_table_json_source_rows() -> None:
     chunk = make_chunk(
         doc_short="약관",
