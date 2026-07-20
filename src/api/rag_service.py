@@ -199,13 +199,15 @@ def chunk_to_source(chunk) -> dict:
     metadata = chunk.metadata
     page_start = metadata.get("page_start")
     page_end = metadata.get("page_end", page_start)
+    display_evidence = metadata.get("display_evidence")
+    snippet = str(display_evidence or chunk.text or "").strip()
     return {
         "filename": metadata.get("pdf_filename") or metadata.get("source") or metadata.get("doc_short") or "문서",
         "doc_short": metadata.get("doc_short"),
         "page": page_start,
         "page_end": page_end,
         "chunk_id": chunk.id,
-        "snippet": chunk.text[:180],
+        "snippet": snippet if display_evidence else snippet[:180],
     }
 
 

@@ -32,6 +32,19 @@ test('source badges expose snippet text as a hover preview', () => {
   assert.match(html, /상해 입원 의료비 지급 기준/);
 });
 
+test('source hover preview preserves raw display evidence whitespace and amount', () => {
+  const html = renderSourcesHtml([
+    {
+      filename: 'sample.pdf',
+      page: 12,
+      snippet: '정밀영상검사  \n  계약일부터 1년간 보상한도는 200만원입니다.',
+    },
+  ]);
+
+  assert.match(html, /정밀영상검사\s+계약일부터 1년간 보상한도는 200만원/);
+  assert.doesNotMatch(html, /정밀영상검사계약일부터/);
+});
+
 test('PDF source badges retain the hover preview and open the cited page safely', () => {
   const docShort = '표준 약관 & 안내';
   const html = renderSourcesHtml([

@@ -4,6 +4,7 @@ from src.api import rag_service
 from src.api.rag_service import (
     apply_policy_clause_decision,
     build_formal_retrieval_query,
+    chunk_to_source,
     chunks_to_sources,
     extract_doc_filter,
     finalize_answer_for_question,
@@ -181,6 +182,27 @@ def test_chunks_to_sources_deduplicates_same_doc_page_snippet() -> None:
 
     assert len(sources) == 1
     assert sources[0]["chunk_id"] == "driver-1"
+
+
+def test_chunk_to_source_preserves_raw_display_evidence() -> None:
+    chunk = Chunk(
+        id="display-evidence",
+        text="정밀영상검사계약일부터1년간보상한도는200만원입니다.",
+        metadata={
+            "pdf_filename": "약관.pdf",
+            "doc_short": "약관",
+            "page_start": 11,
+            "page_end": 11,
+            "display_evidence": "정밀영상검사  \n  계약일부터 1년간 보상한도는 200만원입니다.",
+        },
+    )
+
+    source = chunk_to_source(chunk)
+
+    assert source["page"] == 11
+    assert "정밀영상검사  \n  계약일부터 1년간 보상한도는 200만원" in source["snippet"]
+    assert "정밀영상검사계약일부터" not in source["snippet"]
+    assert source["snippet"].endswith("200만원입니다.")
 
 
 def test_formal_doc_filter_merges_scope_and_category() -> None:

@@ -32,6 +32,11 @@ _COVERAGE_DECISION_PHRASE_RX = re.compile(
     r"|받을\s*수"
     r"|가능\s*(?:여부|한가|합니까|인가|인지)"
 )
+_CLAIM_DECISION_PHRASE_RX = re.compile(
+    r"청구\s*(?:하|하면|할|해|가능|되)"
+    r"|계산\s*(?:하|하면|할|해)"
+    r"|(?:보험금|지급)\s*(?:을|를)?\s*(?:받|되|가능|판단|계산|청구)"
+)
 _POLICY_ATTRIBUTE_CUES = (
     "보상한도",
     "보장한도",
@@ -110,7 +115,7 @@ def _is_coverage_judgment(text: str) -> bool:
     return bare_compensation or _contains_any(
         text,
         tuple(cue for cue in _COVERAGE_CUES if cue != "보상"),
-    ) or bool(_COVERAGE_DECISION_PHRASE_RX.search(text))
+    ) or bool(_COVERAGE_DECISION_PHRASE_RX.search(text) or _CLAIM_DECISION_PHRASE_RX.search(text))
 
 
 def extract_code_terms(question: str) -> list[str]:

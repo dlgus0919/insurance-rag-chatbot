@@ -764,6 +764,25 @@ def _compact_text(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
 
 
+def _compact_text_with_offsets(text: str) -> tuple[str, list[int]]:
+    compact: list[str] = []
+    offsets: list[int] = []
+    for offset, char in enumerate(text or ""):
+        if char.isspace():
+            continue
+        compact.append(char)
+        offsets.append(offset)
+    return "".join(compact), offsets
+
+
+def _raw_display_window(text: str, offsets: list[int], start: int, end: int) -> str:
+    if not offsets or start < 0 or end <= start or end > len(offsets):
+        return ""
+    raw_start = offsets[start]
+    raw_end = min(len(text), offsets[end - 1] + 81)
+    return text[raw_start:raw_end].strip()
+
+
 def _split_evidence_lines(text: str) -> list[str]:
     normalized = re.sub(r"[ \t]+", " ", text or "")
     lines = [line.strip(" \t-•*") for line in re.split(r"[\r\n]+", normalized) if line.strip()]
@@ -1782,6 +1801,30 @@ def _policy_attribute_number_matches(question: str, categories: list[str], text:
     return matches
 
 
+def _select_policy_attribute_number(
+    question: str,
+    evidence_text: str,
+    anchor_start: int,
+    matches: list[re.Match[str]],
+) -> re.Match[str] | None:
+    if not matches:
+        return None
+    compact_question = _compact_text(question)
+    candidates = [match for match in matches if match.start() >= anchor_start]
+    if not candidates:
+        return None
+    if any(term in compact_question for term in ("연간", "매년", "계약해당일")):
+        annual_terms = ("연간", "매년", "1년", "계약해당일")
+        annual_matches = [
+            match
+            for match in candidates
+            if any(term in evidence_text[max(anchor_start, match.start() - 96):match.start()] for term in annual_terms)
+        ]
+        if annual_matches:
+            candidates = annual_matches
+    return min(candidates, key=lambda match: abs(match.start() - anchor_start))
+
+
 def _policy_attribute_context_score(text: str, categories: list[str]) -> int:
     compact = _compact_text(text)
     score = 0
@@ -1827,17 +1870,27 @@ def _direct_policy_attribute_hits(
             continue
         if allowed_docs and metadata.get("doc_short") not in allowed_docs:
             continue
-        compact_text = _compact_text(str(source_row.get("text") or ""))
+        raw_text = str(source_row.get("text") or "")
+        compact_text, compact_offsets = _compact_text_with_offsets(raw_text)
         for term in anchors:
             for start in _policy_attribute_anchor_positions(compact_text, term):
-                evidence_text = compact_text[max(0, start - 240): start + len(term) + 480]
+                evidence_start = max(0, start - 240)
+                evidence_end = start + len(term) + 480
+                evidence_text = compact_text[evidence_start:evidence_end]
                 context_score = _policy_attribute_context_score(evidence_text, categories)
                 number_matches = _policy_attribute_number_matches(question, categories, evidence_text)
-                if context_score and number_matches:
-                    anchor_start = evidence_text.find(term)
-                    nearest_number = min(abs(match.start() - anchor_start) for match in number_matches)
+                anchor_start = start - evidence_start
+                selected_number = _select_policy_attribute_number(question, evidence_text, anchor_start, number_matches)
+                if context_score and selected_number is not None:
+                    nearest_number = abs(selected_number.start() - anchor_start)
                     direct_metadata = dict(metadata)
                     direct_metadata["direct_policy_attribute"] = True
+                    direct_metadata["display_evidence"] = _raw_display_window(
+                        raw_text,
+                        compact_offsets,
+                        start,
+                        evidence_start + selected_number.end(),
+                    )
                     hit = Hit(
                         id=source_id,
                         score=float(len(term) * 1000 + context_score * 100 + max(0, 480 - nearest_number)),

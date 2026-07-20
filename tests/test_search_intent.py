@@ -82,6 +82,33 @@ def test_policy_attribute_coverage_question_keeps_coverage_judgment() -> None:
     assert plan.requires_coverage_judgment is True
 
 
+def test_policy_attribute_noun_queries_stay_in_direct_lookup() -> None:
+    for question in (
+        "검사X 연간 보상한도는?",
+        "검사X 횟수한도는?",
+        "검사X 보장기간은?",
+        "검사X 공제금액은?",
+        "검사X 보상비율은?",
+    ):
+        plan = classify_search_intent(question)
+
+        assert plan.intent == "policy_attribute_lookup"
+        assert plan.requires_coverage_judgment is False
+
+
+def test_policy_attribute_action_queries_keep_coverage_judgment() -> None:
+    for question in (
+        "검사X 연간 보상한도 계산해줘",
+        "검사X 연간 보상한도 청구하면?",
+        "검사X 연간 보상한도 지급받을 수 있나요?",
+        "검사X 연간 보상한도 보험금 판단이 필요해",
+    ):
+        plan = classify_search_intent(question)
+
+        assert plan.intent != "policy_attribute_lookup"
+        assert plan.requires_coverage_judgment is True
+
+
 def test_cross_doc_compare_keeps_balanced_search() -> None:
     plan = classify_search_intent("심평원과 SOL 건강보험 기준을 문서별로 비교해줘")
 

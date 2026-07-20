@@ -1567,3 +1567,64 @@ def test_retrieve_hits_requires_money_measure_for_monetary_limit() -> None:
     hits, _ = pipeline.retrieve_hits("5세대 정밀영상검사 연간 보상한도는?", top_k=4, policy_generation="5th")
 
     assert [hit.id for hit in hits] == ["annual-money-limit"]
+
+
+def test_direct_policy_attribute_hit_keeps_raw_display_window_for_selected_amount() -> None:
+    class EmptyStore:
+        def query(self, query_embedding, top_k: int, doc_filter: list[str] | None = None):
+            return []
+
+    class EmptyBM25:
+        def query(self, text: str, top_k: int):
+            return []
+
+    source_chunk_lookup = {
+        "annual-money-limit": {
+            "id": "annual-money-limit",
+            "text": (
+                "다른 항목의 연간 보상한도는 350만원입니다.\n\n"
+                "정밀영상검사  \n"
+                "  계약일부터 1년간 보상한도는 200만원입니다."
+            ),
+            "metadata": {"doc_short": "약관", "page_start": 11, "page_end": 11, "policy_generation": "5th"},
+        },
+    }
+    pipeline = RagPipeline(
+        DummyEmbedder(),
+        EmptyStore(),
+        EmptyBM25(),
+        DummyLLM(),
+        top_k_final=4,
+        reranker_enabled=False,
+        source_chunk_lookup=source_chunk_lookup,
+    )
+
+    hits, _ = pipeline.retrieve_hits("5세대 정밀영상검사 연간 보상한도는?", top_k=4, policy_generation="5th")
+
+    assert [hit.id for hit in hits] == ["annual-money-limit"]
+    assert "정밀영상검사계약일부터1년간보상한도는200만원" in hits[0].document
+    display_evidence = hits[0].metadata["display_evidence"]
+    assert "정밀영상검사  \n  계약일부터 1년간 보상한도는 200만원" in display_evidence
+    assert "350만원" not in display_evidence
+
+
+def test_policy_attribute_number_selection_prefers_annual_limit_over_deductible() -> None:
+    evidence_text = (
+        "검사X공제금액1회당3만원과보장대상의료비의30%중큰금액"
+        "계약일부터1년단위로보상한도하여200만원이내에서보상"
+    )
+    matches = pipeline_module._policy_attribute_number_matches(
+        "검사X의 연간 보상한도는?",
+        ["limit"],
+        evidence_text,
+    )
+
+    selected = pipeline_module._select_policy_attribute_number(
+        "검사X의 연간 보상한도는?",
+        evidence_text,
+        0,
+        matches,
+    )
+
+    assert selected is not None
+    assert selected.group() == "200만원"
