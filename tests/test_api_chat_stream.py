@@ -478,6 +478,51 @@ async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkey
 
 
 @pytest.mark.anyio
+async def test_chat_stream_uses_qwen_stream_when_retrieval_has_deterministic_artifact(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
+    calls = {"count": 0}
+    deterministic_artifact = "검색 단계의 결정형 산출물은 최종 답변으로 노출되면 안 됩니다."
+    source = {
+        "filename": "직접조항.pdf",
+        "doc_short": "직접조항",
+        "page": 78,
+        "page_end": 78,
+        "chunk_id": "direct-clause-78",
+        "snippet": "직접 조항 근거",
+    }
+
+    async def fake_prepare(*_args, **_kwargs):
+        return [], [source], "Qwen prompt", {"graph_review_paths": [], "facts": [], "plan": {}}, [], deterministic_artifact, None
+
+    def fake_qwen_stream(*_args, **_kwargs):
+        calls["count"] += 1
+        return iter(["Qwen 최종 답변"])
+
+    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_prepare)
+    monkeypatch.setattr(chat, "_generate_llm_stream", fake_qwen_stream)
+    created = await sessions.create_session(SessionCreateRequest(title="결정형 산출물"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(query="검사X 보상 기준을 알려주세요", session_id=created.id, model="gemma3:4b"),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert calls["count"] == 1
+    assert "Qwen 최종 답변" in stream
+    assert deterministic_artifact not in stream
+    assert messages[-1].content == "Qwen 최종 답변"
+    assert deterministic_artifact not in messages[-1].content
+    assert messages[-1].sources[0]["filename"] == source["filename"]
+
+
+@pytest.mark.anyio
 async def test_chat_stream_does_not_emit_done_when_turn_persistence_fails(db_session, monkeypatch) -> None:
     monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
 
@@ -1913,4 +1958,5 @@ async def test_fifth_standard_authority_reply_persists_without_mutating_history(
 
     assert captured["policy_generation"] == "5th"
     assert messages[0].content == prior_content
-    assert messages[-1].content == authority_answer
+    assert messages[-1].content == "실손 답변"
+    assert authority_answer not in messages[-1].content

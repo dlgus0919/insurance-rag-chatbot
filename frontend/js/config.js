@@ -73,7 +73,7 @@ export const SESSION_KEYS = {
 // ===== 애플리케이션 상수 =====
 export const APP_CONFIG = {
   APP_NAME: '신한EZ손해보험 보상지원 AI 챗봇',
-  VERSION: '1.2.0',
+  VERSION: '1.2.0.b',
   POLLING_INTERVAL: 5000,
   MESSAGE_BATCH_SIZE: 50,
   SESSION_TIMEOUT: 30 * 60 * 1000,

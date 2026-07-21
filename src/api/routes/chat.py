@@ -495,7 +495,7 @@ async def chat_stream(
         sources: list[dict] = []
         graph_payload = None
         warnings: list[dict] = []
-        deterministic_answer: str | None = None
+        _deterministic_answer: str | None = None
         debug_info: DebugInfo | None = None
         tokens: list[str] = []
         selected_model = _select_model(chat_request)
@@ -679,7 +679,7 @@ async def chat_stream(
                 if selected_policy_generation:
                     retrieval_kwargs["policy_generation"] = selected_policy_generation
                 retrieval_kwargs["conversation_context"] = conversation_context
-                chunks, sources, prompt, graph_payload, warnings, deterministic_answer, debug_info = await prepare_retrieved_context(
+                chunks, sources, prompt, graph_payload, warnings, _deterministic_answer, debug_info = await prepare_retrieved_context(
                     pipeline,
                     context_query,
                     retrieval_top_k,
@@ -714,32 +714,26 @@ async def chat_stream(
             for warning in public_warnings(warnings):
                 yield _sse("warning", warning)
 
-            if deterministic_answer is not None:
-                for token in _chunk_text(deterministic_answer):
-                    tokens.append(token)
+            # Retrieved-document answers always pass through the selected LLM. The
+            # deterministic artifact remains retrieval metadata and is not a final reply.
+            suppress_live_tokens = graph_payload_has_renderable_evidence(graph_payload)
+            llm_stream = _generate_llm_stream(
+                pipeline.llm,
+                prompt,
+                system_prompt,
+                effective_temperature,
+                chat_request.reasoning_mode,
+            )
+            for token in llm_stream:
+                tokens.append(token)
+                if not suppress_live_tokens:
                     yield _sse("token", {"t": token})
-                    await asyncio.sleep(0)
-            else:
-                # A renderable Graph/canonical panel can replace model templates. Buffer it so
-                # no streamed text disappears when the final normalized answer is emitted.
-                suppress_live_tokens = graph_payload_has_renderable_evidence(graph_payload)
-                llm_stream = _generate_llm_stream(
-                    pipeline.llm,
-                    prompt,
-                    system_prompt,
-                    effective_temperature,
-                    chat_request.reasoning_mode,
-                )
-                for token in llm_stream:
-                    tokens.append(token)
-                    if not suppress_live_tokens:
-                        yield _sse("token", {"t": token})
-                    await asyncio.sleep(0)
-                for warning in _llm_safety_warnings(pipeline.llm):
-                    warnings.append(warning)
-                    public_warning = public_warnings([warning])
-                    if public_warning:
-                        yield _sse("warning", public_warning[0])
+                await asyncio.sleep(0)
+            for warning in _llm_safety_warnings(pipeline.llm):
+                warnings.append(warning)
+                public_warning = public_warnings([warning])
+                if public_warning:
+                    yield _sse("warning", public_warning[0])
 
             raw_answer = "".join(tokens).strip()
             if not raw_answer:
