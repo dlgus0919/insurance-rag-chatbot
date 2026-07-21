@@ -298,6 +298,17 @@ def test_retriever_requires_ontology_registry_alias_for_confirmed_grade(populate
     )
 
 
+def test_retriever_immutable_read_does_not_create_sqlite_sidecars(tmp_path: Path) -> None:
+    db_path = tmp_path / "graph.sqlite"
+    store = GraphStore(db_path)
+    store.close()
+
+    GraphRetriever(db_path).retrieve("일반 보험 약관을 확인해 주세요.")
+
+    assert not Path(f"{db_path}-wal").exists()
+    assert not Path(f"{db_path}-shm").exists()
+
+
 def test_retriever_hard_query_2(populated_db: str) -> None:
     retriever = GraphRetriever(populated_db)
     query = (

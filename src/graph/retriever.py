@@ -1179,7 +1179,7 @@ class GraphRetriever:
 
         try:
             # 116번 라인의 read-only 연결 사용
-            store = GraphStore(self.db_path, readonly=True)
+            store = GraphStore(self.db_path, readonly=True, immutable=True)
         except Exception as e:
             result.warnings.append(f"Failed to connect to Graph DB: {e}. Running with empty graph fallback.")
             self._apply_session_fallback_review_paths(result, "GraphDB 연결 실패로 직접 연결된 조항 경로를 확인하지 못했습니다.")
