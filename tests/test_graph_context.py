@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.graph.context import build_graph_context, build_graph_summary, build_prompt_graph_context
+from src.graph.context import build_graph_context, build_graph_summary
 from src.graph.query_planner import GraphQueryPlan
 from src.graph.retriever import GraphEvidence, GraphFact, GraphRetrievalResult
 
@@ -151,29 +151,6 @@ def test_graph_context_includes_unconfirmed_term_correction_candidates() -> None
     assert "입력 용어 보정 후보 (미확정)" in context
     assert "엠알아이 -> MRI" in context
     assert "확인 전에는 보상 판단의 전제로 삼지 마십시오" in context
-
-
-def test_prompt_graph_context_omits_missing_review_content_but_keeps_safe_clarification() -> None:
-    result = GraphRetrievalResult(
-        plan=GraphQueryPlan(
-            intents=["ordinary_rag"],
-            clarification_questions=["진료 목적을 확인해 주세요."],
-        ),
-        review_paths=[
-            type(
-                "ReviewPath",
-                (),
-                {"status": "missing", "summary": "internal missing path"},
-            )()
-        ],
-    )
-
-    prompt_context = build_prompt_graph_context(result)
-    ui_context = build_graph_context(result)
-
-    assert "internal missing path" not in prompt_context
-    assert "진료 목적을 확인해 주세요." in prompt_context
-    assert "internal missing path" in ui_context
 
 
 def test_graph_context_always_renders_four_review_sections_with_na() -> None:

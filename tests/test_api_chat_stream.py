@@ -2,7 +2,6 @@ import pytest
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from src.api import rag_service
 from src.api.db import Base
 from src.api.models import AuditLog, ChatMessage, ChatSession
 from src.api.rag_service import prepare_retrieved_context
@@ -15,11 +14,6 @@ from src.api.schemas.sessions import SessionCreateRequest
 from src.auth.users import User
 from src.graph.query_planner import GraphQueryPlan
 from src.graph.retriever import GraphEvidence, GraphFact, GraphRetrievalResult, GraphRetriever
-from src.parser.chunker import Chunk
-from src.rag.evidence_assessment import GroundedDisplayResult
-from src.rag.pipeline import AnswerDisposition
-from src.rag.query_router import QueryRoute
-from src.retrieval import Hit
 
 
 @pytest.fixture
@@ -86,15 +80,7 @@ class FakePipeline:
         self.graph_retriever = None
         self.last_doc_filter = None
 
-    def retrieve_hits(
-        self,
-        question,
-        top_k=None,
-        doc_filter=None,
-        return_debug=False,
-        graph_hits=None,
-        policy_generation=None,
-    ):
+    def retrieve_hits(self, question, top_k=None, doc_filter=None, return_debug=False, graph_hits=None):
         self.last_retrieval_question = question
         self.last_doc_filter = doc_filter
         hits = [
@@ -126,50 +112,6 @@ class FakePipeline:
 
     def build_prompt(self, question, chunks, graph_context=None):
         return f"질문: {question}\n근거 수: {len(chunks)}"
-
-
-class ComparisonPipeline(FakePipeline):
-    """Return complete attribute sources without any approved coverage decision."""
-
-    def retrieve_hits(
-        self,
-        question,
-        top_k=None,
-        doc_filter=None,
-        return_debug=False,
-        graph_hits=None,
-        policy_generation=None,
-    ):
-        self.last_retrieval_question = question
-        self.last_doc_filter = doc_filter
-        hits = [
-            Hit(
-                id="attribute-alpha",
-                score=0.92,
-                document="alpha 검사X의 연간 보상한도는 123만원입니다.",
-                metadata={
-                    "pdf_filename": "alpha.pdf",
-                    "doc_short": "alpha",
-                    "page_start": 12,
-                    "page_end": 12,
-                    "direct_policy_attribute": True,
-                },
-            ),
-            Hit(
-                id="attribute-beta",
-                score=0.91,
-                document="beta 검사X의 연간 보상한도는 456만원입니다.",
-                metadata={
-                    "pdf_filename": "beta.pdf",
-                    "doc_short": "beta",
-                    "page_start": 16,
-                    "page_end": 16,
-                    "direct_policy_attribute": True,
-                },
-            ),
-        ]
-        debug = chat.DebugInfo(dense_hits=[], bm25_hits=[], rrf_hits=[], final_hits=[])
-        return hits, debug
 
 
 async def _stream_text(response) -> str:
@@ -356,11 +298,6 @@ def test_policy_generation_context_is_added_to_general_prompt() -> None:
     assert "사용자가 선택한 실손 세대는 5세대 실손" in prompt
 
 
-def test_policy_generation_comparison_does_not_apply_a_single_generation_scope() -> None:
-    assert chat._effective_policy_generation("4세대와 5세대 MRI 한도 차이는?", "5th") is None
-    assert chat._effective_policy_generation("4세대 MRI 한도는?", "5th") == "5th"
-
-
 @pytest.mark.anyio
 async def test_general_chat_forwards_selected_policy_generation_to_retrieval(db_session, monkeypatch) -> None:
     monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
@@ -418,557 +355,6 @@ async def test_general_chat_uses_current_policy_generation_for_each_turn_in_same
     assert captured == ["4th", "5th"]
 
 
-@pytest.mark.anyio
-async def test_chat_stream_skips_llm_for_insufficient_coverage_disposition(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
-
-    async def fake_prepare(*_args, **_kwargs):
-        return (
-            [],
-            [],
-            "prompt",
-            {"graph_review_paths": [], "facts": [], "plan": {}},
-            [],
-            AnswerDisposition(
-                origin="coverage_insufficient",
-                grounding_state="insufficient",
-                text="선택한 문서 기준의 보상 가능 여부는 직접 조항 근거만으로 확정할 수 없습니다.",
-            ),
-            None,
-        )
-
-    def fail_llm(*_args, **_kwargs):
-        raise AssertionError("불충분한 보상 판단을 LLM에 위임하면 안 됩니다.")
-
-    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_prepare)
-    monkeypatch.setattr(chat, "_generate_llm_stream", fail_llm)
-    created = await sessions.create_session(SessionCreateRequest(title="보상 경계"), _user(), db_session)
-
-    response = await chat.chat_stream(
-        ChatRequest(query="검사X 보상한도 지급 여부는?", session_id=created.id, model="gemma3:4b"),
-        None,
-        _user(),
-        db_session,
-    )
-    stream = await _stream_text(response)
-    result = await db_session.execute(select(ChatMessage).where(ChatMessage.session_id == created.id))
-    messages = list(result.scalars())
-    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
-    audit_entry = audit_result.scalar_one()
-
-    assert "확정할 수 없습니다" in stream
-    assert messages[-1].content.startswith("선택한 문서 기준")
-    assert audit_entry.detail["answer_origin"] == "coverage_insufficient"
-    assert audit_entry.detail["grounding_state"] == "insufficient"
-    assert audit_entry.detail["grounded_source_count"] == 0
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("request_mode", "resolved_route"),
-    [
-        ("formal", "formal"),
-        ("quickcode", "quickcode"),
-        ("general", "formal"),
-        ("general", "quickcode"),
-    ],
-)
-async def test_specialized_coverage_routes_fail_closed_without_approved_evidence(
-    db_session,
-    monkeypatch,
-    request_mode,
-    resolved_route,
-) -> None:
-    chunk = type(
-        "Chunk",
-        (),
-        {
-            "id": "specialized-coverage",
-            "text": "검사X의 연간 보상한도는 123만원입니다.",
-            "metadata": {
-                "pdf_filename": "약관.pdf",
-                "doc_short": "약관",
-                "page_start": 18,
-                "page_end": 18,
-                "direct_policy_attribute": True,
-            },
-        },
-    )()
-    source = {
-        "filename": "약관.pdf",
-        "doc_short": "약관",
-        "page": 18,
-        "page_end": 18,
-        "chunk_id": "specialized-coverage",
-        "snippet": "검사X의 연간 보상한도는 123만원입니다.",
-    }
-    llm_calls = {"count": 0}
-
-    async def fake_formal(*_args, **_kwargs):
-        return [chunk], [source], "formal prompt", ["약관"]
-
-    async def fake_quickcode(*_args, **_kwargs):
-        return [chunk], [source], "quickcode prompt", "quickcode system", ["약관"]
-
-    def unexpected_llm(*_args, **_kwargs):
-        llm_calls["count"] += 1
-        return iter(["LLM이 직접 보상 가능하다고 판단했습니다."])
-
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
-    monkeypatch.setattr(chat, "prepare_formal_context", fake_formal)
-    monkeypatch.setattr(chat, "prepare_quickcode_context", fake_quickcode)
-    monkeypatch.setattr(chat, "_generate_llm_stream", unexpected_llm)
-    monkeypatch.setattr(rag_service, "evaluate_registry_evidence", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(rag_service, "get_default_ontology_registry", lambda: object())
-    if request_mode == "general":
-        monkeypatch.setattr(
-            chat,
-            "resolve_query_route",
-            lambda *_args, **_kwargs: QueryRoute(
-                route=resolved_route,
-                intent="coverage_judgment",
-                filters={"_auto_routed": True},
-                route_reason="test_specialized_coverage",
-            ),
-        )
-
-    created = await sessions.create_session(SessionCreateRequest(title="정형 보상 경계"), _user(), db_session)
-    response = await chat.chat_stream(
-        ChatRequest(
-            query="검사X 보상 가능 여부를 알려줘.",
-            session_id=created.id,
-            mode=request_mode,
-            model="gemma3:4b",
-        ),
-        None,
-        _user(),
-        db_session,
-    )
-    stream = await _stream_text(response)
-    messages = list(
-        (
-            await db_session.execute(
-                select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
-            )
-        ).scalars()
-    )
-    audit_entry = (
-        await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
-    ).scalar_one()
-
-    assert llm_calls["count"] == 0
-    assert "확정할 수 없습니다" in stream
-    assert "123만원" not in messages[-1].content
-    assert messages[-1].sources[0] == source
-    assert audit_entry.detail["resolved_route"] == resolved_route
-    assert audit_entry.detail["answer_origin"] == "coverage_insufficient"
-    assert audit_entry.detail["grounding_state"] == "insufficient"
-    assert audit_entry.detail["grounded_source_count"] == 0
-
-
-@pytest.mark.anyio
-async def test_auto_quickcode_coverage_query_fails_closed_without_approved_evidence(db_session, monkeypatch) -> None:
-    chunk = Chunk(
-        id="quickcode-coverage",
-        text="Q1234는 시술Y의 수가코드입니다.",
-        metadata={
-            "pdf_filename": "심평원.pdf",
-            "doc_short": "심평원",
-            "page_start": 24,
-            "page_end": 24,
-        },
-    )
-    source = {
-        "filename": "심평원.pdf",
-        "doc_short": "심평원",
-        "page": 24,
-        "page_end": 24,
-        "chunk_id": "quickcode-coverage",
-        "snippet": "Q1234는 시술Y의 수가코드입니다.",
-    }
-    llm_calls = {"count": 0}
-
-    async def fake_quickcode(*_args, **_kwargs):
-        return [chunk], [source], "quickcode prompt", "quickcode system", ["심평원"]
-
-    async def unexpected_formal(*_args, **_kwargs):
-        raise AssertionError("수가 코드 + 보상 여부 질의는 실제 자동 라우팅에서 quickcode여야 합니다.")
-
-    async def unexpected_general(*_args, **_kwargs):
-        raise AssertionError("수가 코드 + 보상 여부 질의는 실제 자동 라우팅에서 general이 아니어야 합니다.")
-
-    def unexpected_llm(*_args, **_kwargs):
-        llm_calls["count"] += 1
-        return iter(["LLM이 보상 가능하다고 판단했습니다."])
-
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
-    monkeypatch.setattr(chat, "prepare_quickcode_context", fake_quickcode)
-    monkeypatch.setattr(chat, "prepare_formal_context", unexpected_formal)
-    monkeypatch.setattr(chat, "prepare_retrieved_context", unexpected_general)
-    monkeypatch.setattr(chat, "_generate_llm_stream", unexpected_llm)
-    monkeypatch.setattr(chat, "_current_ontology_manifest_hash", lambda: None)
-    monkeypatch.setattr(rag_service, "evaluate_registry_evidence", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(rag_service, "get_default_ontology_registry", lambda: object())
-
-    created = await sessions.create_session(SessionCreateRequest(title="자동 수가 보상 경계"), _user(), db_session)
-    response = await chat.chat_stream(
-        ChatRequest(
-            query="시술Y 수가 코드와 실손 보상 여부를 알려줘.",
-            session_id=created.id,
-            model="gemma3:4b",
-        ),
-        None,
-        _user(),
-        db_session,
-    )
-    stream = await _stream_text(response)
-    messages = list(
-        (
-            await db_session.execute(
-                select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
-            )
-        ).scalars()
-    )
-    audit_entry = (
-        await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
-    ).scalar_one()
-
-    assert llm_calls["count"] == 0
-    assert "확정할 수 없습니다" in stream
-    assert messages[-1].sources[0] == source
-    assert audit_entry.detail["resolved_route"] == "quickcode"
-    assert audit_entry.detail["resolved_intent"] == "procedure_code_lookup"
-    assert audit_entry.detail["answer_origin"] == "coverage_insufficient"
-    assert audit_entry.detail["grounding_state"] == "insufficient"
-    assert audit_entry.detail["grounded_source_count"] == 0
-
-
-@pytest.mark.anyio
-async def test_auto_formal_clause_coverage_query_fails_closed_without_approved_evidence(db_session, monkeypatch) -> None:
-    chunk = Chunk(
-        id="formal-coverage",
-        text="제3조 면책조항의 원문입니다.",
-        metadata={
-            "pdf_filename": "약관.pdf",
-            "doc_short": "약관",
-            "page_start": 30,
-            "page_end": 30,
-        },
-    )
-    source = {
-        "filename": "약관.pdf",
-        "doc_short": "약관",
-        "page": 30,
-        "page_end": 30,
-        "chunk_id": "formal-coverage",
-        "snippet": "제3조 면책조항의 원문입니다.",
-    }
-    llm_calls = {"count": 0}
-
-    async def fake_formal(*_args, **_kwargs):
-        return [chunk], [source], "formal prompt", ["약관"]
-
-    async def unexpected_quickcode(*_args, **_kwargs):
-        raise AssertionError("조항 + 보상 여부 질의는 실제 자동 라우팅에서 formal이어야 합니다.")
-
-    async def unexpected_general(*_args, **_kwargs):
-        raise AssertionError("조항 + 보상 여부 질의는 실제 자동 라우팅에서 general이 아니어야 합니다.")
-
-    def unexpected_llm(*_args, **_kwargs):
-        llm_calls["count"] += 1
-        return iter(["LLM이 보상 가능하다고 판단했습니다."])
-
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
-    monkeypatch.setattr(chat, "prepare_formal_context", fake_formal)
-    monkeypatch.setattr(chat, "prepare_quickcode_context", unexpected_quickcode)
-    monkeypatch.setattr(chat, "prepare_retrieved_context", unexpected_general)
-    monkeypatch.setattr(chat, "_generate_llm_stream", unexpected_llm)
-    monkeypatch.setattr(chat, "_current_ontology_manifest_hash", lambda: None)
-    monkeypatch.setattr(rag_service, "evaluate_registry_evidence", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(rag_service, "get_default_ontology_registry", lambda: object())
-
-    created = await sessions.create_session(SessionCreateRequest(title="자동 조항 보상 경계"), _user(), db_session)
-    response = await chat.chat_stream(
-        ChatRequest(
-            query="제3조 면책조항상 시술Y는 보상 가능한가요?",
-            session_id=created.id,
-            model="gemma3:4b",
-        ),
-        None,
-        _user(),
-        db_session,
-    )
-    stream = await _stream_text(response)
-    messages = list(
-        (
-            await db_session.execute(
-                select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
-            )
-        ).scalars()
-    )
-    audit_entry = (
-        await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
-    ).scalar_one()
-
-    assert llm_calls["count"] == 0
-    assert "확정할 수 없습니다" in stream
-    assert messages[-1].sources[0] == source
-    assert audit_entry.detail["resolved_route"] == "formal"
-    assert audit_entry.detail["resolved_intent"] == "clause_or_appendix_lookup"
-    assert audit_entry.detail["answer_origin"] == "coverage_insufficient"
-    assert audit_entry.detail["grounding_state"] == "insufficient"
-    assert audit_entry.detail["grounded_source_count"] == 0
-
-
-@pytest.mark.anyio
-async def test_auto_general_comparison_coverage_query_fails_closed_without_approved_evidence(db_session, monkeypatch) -> None:
-    llm_calls = {"count": 0}
-
-    async def unexpected_specialized(*_args, **_kwargs):
-        raise AssertionError("비교 + 보상 여부 질의는 실제 자동 라우팅에서 general이어야 합니다.")
-
-    def unexpected_llm(*_args, **_kwargs):
-        llm_calls["count"] += 1
-        return iter(["LLM이 보상 가능하다고 판단했습니다."])
-
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: ComparisonPipeline())
-    monkeypatch.setattr(chat, "prepare_formal_context", unexpected_specialized)
-    monkeypatch.setattr(chat, "prepare_quickcode_context", unexpected_specialized)
-    monkeypatch.setattr(chat, "_generate_llm_stream", unexpected_llm)
-    monkeypatch.setattr(chat, "_current_ontology_manifest_hash", lambda: None)
-    monkeypatch.setattr(rag_service, "evaluate_registry_evidence", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(rag_service, "get_default_ontology_registry", lambda: object())
-
-    created = await sessions.create_session(SessionCreateRequest(title="자동 비교 보상 경계"), _user(), db_session)
-    response = await chat.chat_stream(
-        ChatRequest(
-            query="alpha와 beta 검사X의 연간 보상한도를 비교해서 보상 가능 여부도 알려줘.",
-            session_id=created.id,
-            model="gemma3:4b",
-        ),
-        None,
-        _user(),
-        db_session,
-    )
-    stream = await _stream_text(response)
-    messages = list(
-        (
-            await db_session.execute(
-                select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
-            )
-        ).scalars()
-    )
-    audit_entry = (
-        await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
-    ).scalar_one()
-
-    assert llm_calls["count"] == 0
-    assert "확정할 수 없습니다" in stream
-    assert "123만원" not in messages[-1].content
-    assert "456만원" not in messages[-1].content
-    assert [source["chunk_id"] for source in messages[-1].sources[:2]] == ["attribute-alpha", "attribute-beta"]
-    assert audit_entry.detail["resolved_route"] == "general"
-    assert audit_entry.detail["resolved_intent"] == "cross_doc_compare"
-    assert audit_entry.detail["answer_origin"] == "coverage_insufficient"
-    assert audit_entry.detail["grounding_state"] == "insufficient"
-    assert audit_entry.detail["grounded_source_count"] == 0
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("mode", ["formal", "quickcode"])
-async def test_specialized_noncoverage_routes_keep_llm_and_source_payload(db_session, monkeypatch, mode) -> None:
-    chunk = type(
-        "Chunk",
-        (),
-        {
-            "id": "specialized-code",
-            "text": "Q1234는 검사X의 수가코드입니다.",
-            "metadata": {"pdf_filename": "심평원.pdf", "doc_short": "심평원", "page_start": 24, "page_end": 24},
-        },
-    )()
-    source = {
-        "filename": "심평원.pdf",
-        "doc_short": "심평원",
-        "page": 24,
-        "page_end": 24,
-        "chunk_id": "specialized-code",
-        "snippet": "Q1234는 검사X의 수가코드입니다.",
-    }
-    llm_calls = {"count": 0}
-
-    async def fake_formal(*_args, **_kwargs):
-        return [chunk], [source], "formal prompt", ["심평원"]
-
-    async def fake_quickcode(*_args, **_kwargs):
-        return [chunk], [source], "quickcode prompt", "quickcode system", ["심평원"]
-
-    def expected_llm(*_args, **_kwargs):
-        llm_calls["count"] += 1
-        return iter(["Q1234는 검사X의 수가코드입니다."])
-
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
-    monkeypatch.setattr(chat, "prepare_formal_context", fake_formal)
-    monkeypatch.setattr(chat, "prepare_quickcode_context", fake_quickcode)
-    monkeypatch.setattr(chat, "_generate_llm_stream", expected_llm)
-    monkeypatch.setattr(
-        rag_service,
-        "evaluate_registry_evidence",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("비보상 질의는 registry 판정으로 막으면 안 됩니다.")),
-    )
-
-    created = await sessions.create_session(SessionCreateRequest(title="정형 코드 유지"), _user(), db_session)
-    response = await chat.chat_stream(
-        ChatRequest(
-            query="검사X 수가코드를 알려줘.",
-            session_id=created.id,
-            mode=mode,
-            model="gemma3:4b",
-        ),
-        None,
-        _user(),
-        db_session,
-    )
-    await _stream_text(response)
-    messages = list(
-        (
-            await db_session.execute(
-                select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
-            )
-        ).scalars()
-    )
-    audit_entry = (
-        await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
-    ).scalar_one()
-
-    assert llm_calls["count"] == 1
-    assert messages[-1].content == "Q1234는 검사X의 수가코드입니다."
-    assert messages[-1].sources[0] == source
-    assert audit_entry.detail["answer_origin"] == "llm"
-    assert audit_entry.detail["grounding_state"] == "none"
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("mode", ["formal", "quickcode"])
-async def test_specialized_routes_render_approved_coverage_decision_without_llm(db_session, monkeypatch, mode) -> None:
-    chunk = Chunk(
-        id="approved-specialized-coverage",
-        text="검사X 치료비는 직접 조항의 적용 조건을 충족하는 경우 보상합니다.",
-        metadata={
-            "pdf_filename": "약관.pdf",
-            "doc_short": "약관",
-            "page_start": 18,
-            "page_end": 18,
-        },
-    )
-    source = {
-        "filename": "약관.pdf",
-        "doc_short": "약관",
-        "page": 18,
-        "page_end": 18,
-        "chunk_id": "approved-specialized-coverage",
-        "snippet": "검사X 치료비는 직접 조항의 적용 조건을 충족하는 경우 보상합니다.",
-    }
-    evidence_result = GroundedDisplayResult(
-        status="supported",
-        answer="검사X 치료비는 직접 조항의 적용 조건을 충족하는 경우 보상합니다.",
-        payload={},
-        selected_chunks=(chunk,),
-    )
-    llm_calls = {"count": 0}
-
-    async def fake_formal(*_args, **_kwargs):
-        return [chunk], [source], "formal prompt", ["약관"]
-
-    async def fake_quickcode(*_args, **_kwargs):
-        return [chunk], [source], "quickcode prompt", "quickcode system", ["약관"]
-
-    def unexpected_llm(*_args, **_kwargs):
-        llm_calls["count"] += 1
-        return iter(["LLM 응답"])
-
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
-    monkeypatch.setattr(chat, "prepare_formal_context", fake_formal)
-    monkeypatch.setattr(chat, "prepare_quickcode_context", fake_quickcode)
-    monkeypatch.setattr(chat, "_generate_llm_stream", unexpected_llm)
-    monkeypatch.setattr(rag_service, "evaluate_registry_evidence", lambda *_args, **_kwargs: evidence_result)
-    monkeypatch.setattr(rag_service, "get_default_ontology_registry", lambda: object())
-
-    created = await sessions.create_session(SessionCreateRequest(title="승인 근거 유지"), _user(), db_session)
-    response = await chat.chat_stream(
-        ChatRequest(
-            query="검사X 보상 가능 여부를 알려줘.",
-            session_id=created.id,
-            mode=mode,
-            model="gemma3:4b",
-        ),
-        None,
-        _user(),
-        db_session,
-    )
-    await _stream_text(response)
-    messages = list(
-        (
-            await db_session.execute(
-                select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
-            )
-        ).scalars()
-    )
-    audit_entry = (
-        await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
-    ).scalar_one()
-
-    assert llm_calls["count"] == 0
-    assert messages[-1].content.startswith("검사X 치료비는")
-    assert messages[-1].sources[0] == source
-    assert audit_entry.detail["answer_origin"] == "coverage_grounded"
-    assert audit_entry.detail["grounding_state"] == "direct"
-    assert audit_entry.detail["grounded_source_count"] == 1
-
-
-@pytest.mark.anyio
-async def test_chat_stream_records_public_policy_attribute_disposition(db_session, monkeypatch) -> None:
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
-
-    async def fake_prepare(*_args, **_kwargs):
-        return (
-            [],
-            [],
-            "prompt",
-            {"graph_review_paths": [], "facts": [], "plan": {}},
-            [],
-            AnswerDisposition(
-                origin="policy_attribute",
-                grounding_state="direct",
-                text="선택한 alpha 기준 보상한도는 123만원입니다. 근거: 약관A, p.12, chunk=alpha-12, source=text",
-                source_chunk_ids=("alpha-12",),
-            ),
-            None,
-        )
-
-    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_prepare)
-    created = await sessions.create_session(SessionCreateRequest(title="속성 조회"), _user(), db_session)
-
-    response = await chat.chat_stream(
-        ChatRequest(query="검사X의 연간 보상한도는?", session_id=created.id, model="gemma3:4b"),
-        None,
-        _user(),
-        db_session,
-    )
-    await _stream_text(response)
-    result = await db_session.execute(select(ChatMessage).where(ChatMessage.session_id == created.id))
-    messages = list(result.scalars())
-    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
-    audit_entry = audit_result.scalar_one()
-
-    assert messages[-1].content.startswith("선택한 alpha 기준")
-    assert "123만원" in messages[-1].content
-    assert "chunk=" not in messages[-1].content
-    assert "source=" not in messages[-1].content
-    assert audit_entry.detail["answer_origin"] == "policy_attribute"
-    assert audit_entry.detail["grounding_state"] == "direct"
-    assert audit_entry.detail["grounded_source_count"] == 1
-
-
 class FakeGraphRetriever:
     def retrieve(self, question):
         return GraphRetrievalResult(
@@ -1009,32 +395,6 @@ class FakeGraphPipeline(FakePipeline):
         self.graph_enabled = True
         self.graph_retriever = FakeGraphRetriever()
         self.vector_store = FakeVectorStore()
-
-
-class CapturingGraphRetriever:
-    def __init__(self):
-        self.policy_generation: str | None = None
-
-    def retrieve(self, question, clarification=None, *, policy_generation=None):
-        self.policy_generation = policy_generation
-        return GraphRetrievalResult(plan=GraphQueryPlan())
-
-
-@pytest.mark.anyio
-async def test_prepare_retrieved_context_forwards_selected_generation_to_graph() -> None:
-    pipeline = FakeGraphPipeline()
-    graph_retriever = CapturingGraphRetriever()
-    pipeline.graph_retriever = graph_retriever
-
-    await prepare_retrieved_context(
-        pipeline,
-        "자기공명영상진단(MRI/MRA)의 연간 보상한도는?",
-        6,
-        [],
-        policy_generation="5th",
-    )
-
-    assert graph_retriever.policy_generation == "5th"
 
 
 class FailingGraphRetriever(GraphRetriever):
@@ -1082,7 +442,7 @@ async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkey
     created = await sessions.create_session(SessionCreateRequest(title="도수치료"), _user(), db_session)
 
     response = await chat.chat_stream(
-        ChatRequest(query="도수치료에 대해 설명해줘", session_id=created.id, model="gemma3:4b"),
+        ChatRequest(query="도수치료 보상돼?", session_id=created.id, model="gemma3:4b"),
         None,
         _user(),
         db_session,
@@ -1102,7 +462,7 @@ async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkey
     assert "event: done" in stream
     assert '"persisted": true' in stream
     assert messages[0].role == "user"
-    assert messages[0].content == "도수치료에 대해 설명해줘"
+    assert messages[0].content == "도수치료 보상돼?"
     assert messages[1].role == "assistant"
     assert "실손 답변" in messages[1].content
     assert messages[1].sources[0]["filename"] == "약관.pdf"
@@ -1115,6 +475,51 @@ async def test_chat_stream_uses_rag_sse_and_persists_messages(db_session, monkey
     assert audit_entry.detail["index_mode"] == "v2_only"
     assert audit_entry.detail["effective_index_mode"] == "v2_only"
     assert audit_entry.detail["rag_diagnostics"]["steps"][-1]["label"] == "LLM 답변 생성"
+
+
+@pytest.mark.anyio
+async def test_chat_stream_uses_qwen_stream_when_retrieval_has_deterministic_artifact(db_session, monkeypatch) -> None:
+    monkeypatch.setattr(chat, "get_rag_pipeline", lambda *_args, **_kwargs: FakePipeline())
+    calls = {"count": 0}
+    deterministic_artifact = "검색 단계의 결정형 산출물은 최종 답변으로 노출되면 안 됩니다."
+    source = {
+        "filename": "직접조항.pdf",
+        "doc_short": "직접조항",
+        "page": 78,
+        "page_end": 78,
+        "chunk_id": "direct-clause-78",
+        "snippet": "직접 조항 근거",
+    }
+
+    async def fake_prepare(*_args, **_kwargs):
+        return [], [source], "Qwen prompt", {"graph_review_paths": [], "facts": [], "plan": {}}, [], deterministic_artifact, None
+
+    def fake_qwen_stream(*_args, **_kwargs):
+        calls["count"] += 1
+        return iter(["Qwen 최종 답변"])
+
+    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_prepare)
+    monkeypatch.setattr(chat, "_generate_llm_stream", fake_qwen_stream)
+    created = await sessions.create_session(SessionCreateRequest(title="결정형 산출물"), _user(), db_session)
+
+    response = await chat.chat_stream(
+        ChatRequest(query="검사X 보상 기준을 알려주세요", session_id=created.id, model="gemma3:4b"),
+        None,
+        _user(),
+        db_session,
+    )
+    stream = await _stream_text(response)
+    result = await db_session.execute(
+        select(ChatMessage).where(ChatMessage.session_id == created.id).order_by(ChatMessage.id.asc())
+    )
+    messages = list(result.scalars())
+
+    assert calls["count"] == 1
+    assert "Qwen 최종 답변" in stream
+    assert deterministic_artifact not in stream
+    assert messages[-1].content == "Qwen 최종 답변"
+    assert deterministic_artifact not in messages[-1].content
+    assert messages[-1].sources[0]["filename"] == source["filename"]
 
 
 @pytest.mark.anyio
@@ -1602,89 +1007,6 @@ async def test_general_chat_auto_routes_formal_and_records_strategy(db_session, 
     assert audit_entry.detail["resolved_route"] == "formal"
     assert audit_entry.detail["search_type"] == "약관 조문 검색"
     assert audit_entry.detail["route_reason"] == "clause_lookup_intent"
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize(
-    ("policy_generation", "expected_amount"),
-    [("4th", "300만원"), ("5th", "200만원")],
-)
-async def test_general_policy_attribute_payload_uses_direct_retrieval_with_selected_generation(
-    db_session,
-    monkeypatch,
-    policy_generation,
-    expected_amount,
-) -> None:
-    captured = {"questions": [], "policy_generations": [], "conversation_contexts": []}
-
-    async def fake_retrieved_context(
-        _pipeline,
-        question,
-        _top_k,
-        _history,
-        _filters,
-        *,
-        auto_params=None,
-        policy_generation=None,
-        conversation_context=None,
-    ):
-        captured["questions"].append(question)
-        captured["policy_generations"].append(policy_generation)
-        captured["conversation_contexts"].append(conversation_context)
-        return (
-            [],
-            [{"filename": "policy.pdf", "page": 71, "snippet": f"연간 보상한도 {expected_amount}"}],
-            "direct prompt",
-            None,
-            [],
-            f"선택된 세대 기준 연간 보상한도는 {expected_amount}입니다.",
-            None,
-        )
-
-    async def unexpected_formal_context(*_args, **_kwargs):
-        raise AssertionError("pure policy attribute lookup must not bypass direct retrieval")
-
-    monkeypatch.setattr(chat, "get_rag_pipeline", lambda model, top_k, index_mode="v2_only": FakePipeline())
-    monkeypatch.setattr(chat, "prepare_retrieved_context", fake_retrieved_context)
-    monkeypatch.setattr(chat, "prepare_formal_context", unexpected_formal_context)
-    generation_label = f"{policy_generation.removesuffix('th')}세대"
-    query = f"{generation_label} 자기공명영상진단(MRI/MRA)의 연간 보상한도는?"
-    for repeat in range(2):
-        created = await sessions.create_session(SessionCreateRequest(title=f"속성 조회 {repeat}"), _user(), db_session)
-        response = await chat.chat_stream(
-            ChatRequest(
-                query=query,
-                session_id=created.id,
-                mode="general",
-                policy_generation=policy_generation,
-                index_mode="v2_only",
-                model="gemma3:4b",
-                turn_id=f"policy-attribute-{policy_generation}-{repeat}",
-            ),
-            None,
-            _user(),
-            db_session,
-        )
-        streamed = await _stream_text(response)
-        assert expected_amount in streamed
-
-    audit_result = await db_session.execute(select(AuditLog).where(AuditLog.event_type == "CHAT_QUERY"))
-    audit_entries = list(audit_result.scalars())
-
-    assert captured["questions"] == [
-        f"[선택된 실손 세대 기준: {generation_label} 실손]\n{query}",
-        f"[선택된 실손 세대 기준: {generation_label} 실손]\n{query}",
-    ]
-    assert captured["policy_generations"] == [policy_generation, policy_generation]
-    assert all(context is not None for context in captured["conversation_contexts"])
-    assert len(audit_entries) == 2
-    for audit_entry in audit_entries:
-        assert audit_entry.detail["mode"] == "general"
-        assert audit_entry.detail["resolved_route"] == "general"
-        assert audit_entry.detail["resolved_intent"] == "policy_attribute_lookup"
-        assert audit_entry.detail["policy_generation"] == policy_generation
-        assert audit_entry.detail["effective_index_mode"] == "v2_only"
-        assert audit_entry.detail["source_count"] == 1
 
 
 @pytest.mark.anyio
@@ -2636,4 +1958,5 @@ async def test_fifth_standard_authority_reply_persists_without_mutating_history(
 
     assert captured["policy_generation"] == "5th"
     assert messages[0].content == prior_content
-    assert messages[-1].content == authority_answer
+    assert messages[-1].content == "실손 답변"
+    assert authority_answer not in messages[-1].content

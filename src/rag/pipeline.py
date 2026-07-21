@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from src import config
 from src.llm.prompt import SYSTEM_PROMPT, append_retrieved_source_citations, build_user_prompt
@@ -32,7 +32,7 @@ from src.retrieval.hybrid import rrf_fuse
 from src.retrieval.reranker import RerankResult, build_reranker
 try:
     from src.graph.retriever import GraphRetriever
-    from src.graph.context import build_prompt_graph_context
+    from src.graph.context import build_graph_context
     _GRAPH_IMPORT_OK = True
 except ImportError:
     _GRAPH_IMPORT_OK = False
@@ -104,17 +104,6 @@ _CLAUSE_DETAIL_QUERY_CUES = (
     "구비서류",
     "자기부담금",
     "자기부담",
-    "공제금액",
-    "공제",
-    "보상비율",
-    "비율",
-    "보상한도",
-    "보장한도",
-    "지급한도",
-    "연간한도",
-    "횟수한도",
-    "보장기간",
-    "지급기간",
 )
 _FALLBACK_CLAUSE_DETAIL_CONTEXT_TERMS = {
     "diagnosis": ("진단확정", "정의 및 진단확정", "병력", "신경학적 검진", "CT", "MRI", "의사"),
@@ -129,17 +118,6 @@ _FALLBACK_CLAUSE_DETAIL_CONTEXT_TERMS = {
         "지급한도",
         "대물",
         "대인",
-    ),
-    "limit": (
-        "보험금 등의 지급한도",
-        "보상한도",
-        "보장한도",
-        "지급한도",
-        "연간",
-        "1년 단위",
-        "횟수",
-        "보장기간",
-        "지급기간",
     ),
 }
 _CLAUSE_DETAIL_NUMBER_PATTERN = re.compile(
@@ -440,27 +418,6 @@ class RagAnswer:
     debug: DebugInfo | None = None
 
 
-AnswerOrigin = Literal[
-    "policy_attribute",
-    "policy_comparison",
-    "coverage_grounded",
-    "coverage_insufficient",
-    "clause_detail",
-    "llm",
-]
-GroundingState = Literal["direct", "conditional", "insufficient", "none"]
-
-
-@dataclass(frozen=True)
-class AnswerDisposition:
-    """Select the answer authority allowed to reach a user-visible renderer."""
-
-    origin: AnswerOrigin
-    grounding_state: GroundingState
-    text: str | None = None
-    source_chunk_ids: tuple[str, ...] = ()
-
-
 @dataclass(frozen=True)
 class ClauseDetailEvidenceRow:
     """질문과 매칭된 조항·표 세부 근거 후보."""
@@ -480,7 +437,6 @@ class ClauseDetailEvidenceRow:
     value_text: str = ""
     source_kind: str = "text"
     source_metadata: dict[str, Any] = field(default_factory=dict)
-    policy_generation: str = ""
 
 
 def _hit_to_chunk(hit: Hit) -> Chunk:
@@ -767,17 +723,10 @@ def _is_low_value_wide_range(hit: Hit) -> bool:
     char_count = hit.metadata.get("char_count", len(hit.document))
     return (end - start) > 10 and char_count < 300
 
-_INTERNAL_PROVENANCE_FIELD_PATTERN = re.compile(
-    r"(?:\s*,?\s*(?:chunk|source|row_id|row)\s*=\s*[^\n,]+)+",
-    re.IGNORECASE,
-)
-_INTERNAL_GRAPH_TEMPLATE_PATTERN = re.compile(r"【[A-Za-z0-9_]+_review】\s*")
-
-
 def _normalize_answer_text(answer: str) -> str:
-    """모델 출력의 호환 문자와 내부 구현 식별자를 사용자 표시용으로 정리한다."""
+    """모델 출력의 호환 문자와 HTML 줄바꿈 토큰을 UI/채점 친화적으로 정리한다."""
 
-    normalized = (
+    return (
         answer.replace("\u2011", "-")
         .replace("\u2010", "-")
         .replace("\u2012", "-")
@@ -787,99 +736,10 @@ def _normalize_answer_text(answer: str) -> str:
         .replace("&lt;br&gt;", "\n")
         .replace("<br>", "\n")
     )
-    normalized = _INTERNAL_PROVENANCE_FIELD_PATTERN.sub("", normalized)
-    normalized = _INTERNAL_GRAPH_TEMPLATE_PATTERN.sub("", normalized)
-    return re.sub(r"[ \t]+(?=\n|$)", "", normalized)
 
 
 def _compact_text(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
-
-
-MAX_DISPLAY_EVIDENCE_CHARS = 180
-_DISPLAY_EVIDENCE_SEPARATOR = "\n...\n"
-_DISPLAY_ADJACENT_MEASURE_PATTERN = re.compile(r"\d+(?:만원|원|회|%)")
-
-
-def _compact_text_with_offsets(text: str) -> tuple[str, list[int]]:
-    compact: list[str] = []
-    offsets: list[int] = []
-    for offset, char in enumerate(text or ""):
-        if char.isspace():
-            continue
-        compact.append(char)
-        offsets.append(offset)
-    return "".join(compact), offsets
-
-
-def _trim_raw_prefix(text: str, limit: int) -> str:
-    text = text.strip()
-    if len(text) <= limit:
-        return text
-    boundary = max(text.rfind(marker, 0, limit) for marker in ("\n", ".", "。", " "))
-    if boundary <= 0:
-        return text[:limit].rstrip()
-    return text[:boundary].rstrip()
-
-
-def _trim_raw_suffix(text: str, limit: int) -> str:
-    text = text.strip()
-    if len(text) <= limit:
-        return text
-    start = len(text) - limit
-    boundaries = [text.find(marker, start) for marker in ("\n", ".", "。", " ")]
-    boundary = min((value for value in boundaries if value >= 0), default=-1)
-    if boundary < 0 or boundary + 1 >= len(text):
-        return text[-limit:].lstrip()
-    return text[boundary + 1:].lstrip()
-
-
-def _raw_selection_context(text: str, lower_bound: int, selection_start: int, selection_end: int) -> str:
-    context_start = selection_start
-    for _ in range(3):
-        boundary = max(text.rfind(marker, lower_bound, context_start - 1) for marker in ("\n", ".", "。"))
-        if boundary < lower_bound:
-            break
-        context_start = boundary + 1
-    context_end = text.find("\n", selection_end)
-    if context_end < 0:
-        context_end = min(len(text), selection_end + 48)
-    return text[context_start:context_end].strip()
-
-
-def _raw_display_window(
-    text: str,
-    offsets: list[int],
-    start: int,
-    selection_start: int,
-    selection_end: int,
-) -> str:
-    if (
-        not offsets
-        or start < 0
-        or selection_start < start
-        or selection_end <= selection_start
-        or selection_end > len(offsets)
-    ):
-        return ""
-    raw_anchor_start = offsets[start]
-    raw_selection_start = offsets[selection_start]
-    raw_selection_end = offsets[selection_end - 1] + 1
-    full_window = text[raw_anchor_start:raw_selection_end].strip()
-    preceding_measures = _DISPLAY_ADJACENT_MEASURE_PATTERN.search(text[raw_anchor_start:raw_selection_start])
-    if len(full_window) <= MAX_DISPLAY_EVIDENCE_CHARS and preceding_measures is None:
-        return full_window
-
-    anchor_end = min(
-        (value for value in (text.find(marker, raw_anchor_start, raw_selection_start) for marker in ("\n", ".", "。")) if value >= 0),
-        default=raw_selection_start,
-    )
-    anchor_context = text[raw_anchor_start:anchor_end].strip()
-    selection_context = _raw_selection_context(text, raw_anchor_start, raw_selection_start, raw_selection_end)
-    available = MAX_DISPLAY_EVIDENCE_CHARS - len(_DISPLAY_EVIDENCE_SEPARATOR)
-    anchor_budget = min(64, max(24, available // 3))
-    selection_budget = available - anchor_budget
-    return f"{_trim_raw_prefix(anchor_context, anchor_budget)}{_DISPLAY_EVIDENCE_SEPARATOR}{_trim_raw_suffix(selection_context, selection_budget)}"
 
 
 def _split_evidence_lines(text: str) -> list[str]:
@@ -1269,7 +1129,6 @@ def _extract_clause_detail_table_rows(
                         "table_confidence": table_json.get("avg_confidence"),
                         "source_file": chunk.metadata.get("source_file"),
                     },
-                    policy_generation=str(chunk.metadata.get("policy_generation") or ""),
                 )
             )
     rows.sort(key=lambda row: (-row.score, row.doc_short, row.page_start or 0, row.chunk_id))
@@ -1307,7 +1166,6 @@ def _extract_clause_detail_text_rows(
             or ""
         )
         source_label = _extract_clause_detail_source_label(chunk.text)
-        direct_policy_attribute = bool(chunk.metadata.get("direct_policy_attribute"))
         article, table_label = _clause_detail_source_parts(source_label)
         if source_label and source_label not in metadata_section:
             section = f"{source_label}, {metadata_section}" if metadata_section else source_label
@@ -1318,7 +1176,7 @@ def _extract_clause_detail_text_rows(
             numbers = _extract_clause_detail_numbers(row_text)
             if "deductible" in categories and not numbers:
                 continue
-            if not direct_policy_attribute and not _clause_detail_row_matches_required_groups(
+            if not _clause_detail_row_matches_required_groups(
                 compact_row,
                 question_facets,
                 required_facet_groups,
@@ -1335,11 +1193,9 @@ def _extract_clause_detail_text_rows(
             )
             if source_label:
                 score += _clause_detail_score_weight("source_label")
-            if direct_policy_attribute:
-                score = max(score, _clause_detail_score_weight("min_score"))
             if score < _clause_detail_score_weight("min_score"):
                 continue
-            if not direct_policy_attribute and question_facets and not any(
+            if question_facets and not any(
                 _clause_detail_contains_facet(compact_row, facet) for facet in question_facets
             ):
                 continue
@@ -1366,9 +1222,7 @@ def _extract_clause_detail_text_rows(
                     source_metadata={
                         "source": "chunk_text",
                         "source_file": chunk.metadata.get("source_file"),
-                        "display_evidence": chunk.metadata.get("display_evidence"),
                     },
-                    policy_generation=str(chunk.metadata.get("policy_generation") or ""),
                 )
             )
     rows.sort(key=lambda row: (-row.score, row.doc_short, row.page_start or 0, row.chunk_id))
@@ -1456,7 +1310,6 @@ def _extract_clause_detail_manifest_rows(
                     "source": "clause_detail_rows",
                     "row_id": record.row_id,
                 },
-                policy_generation=str(record.source_metadata.get("policy_generation") or ""),
             )
         )
     rows.sort(key=lambda row: (-row.score, row.doc_short, row.page_start or 0, row.chunk_id))
@@ -1528,59 +1381,28 @@ def _extract_clause_detail_evidence_rows(
 
 
 def _format_clause_detail_source(row: ClauseDetailEvidenceRow) -> str:
-    """Render a human-readable source reference, never an implementation handle."""
-
     page = "p.?"
     if row.page_start is not None and row.page_end is not None and row.page_end != row.page_start:
         page = f"p.{row.page_start}-{row.page_end}"
     elif row.page_start is not None:
         page = f"p.{row.page_start}"
-    return f"{row.doc_short}, {page}"
-
-
-def _public_policy_generation_label(policy_generation: str | None) -> str:
-    labels = {"4th": "4세대", "5th": "5세대"}
-    return labels.get(str(policy_generation or ""), str(policy_generation or "").strip())
-
-
-def _public_clause_detail_numbers(question: str, numbers: list[str]) -> list[str]:
-    """Select answer-shaped values without exposing the OCR row that contained them."""
-
-    unique = list(dict.fromkeys(number.strip() for number in numbers if number and number.strip()))
-    compact = _compact_text(question)
-    if not unique:
-        return []
-    if any(term in compact for term in ("보상한도", "보장한도", "지급한도", "연간", "금액")):
-        selected = [value for value in unique if value.endswith(("만원", "원"))]
-        if selected:
-            return selected[:2]
-    if any(term in compact for term in ("횟수", "회차", "몇회")):
-        selected = [value for value in unique if value.endswith("회")]
-        if selected:
-            return selected[:2]
-    if any(term in compact for term in ("기간", "연간", "매년", "계약해당일")):
-        selected = [value for value in unique if value.endswith(("년", "일", "개월"))]
-        if selected:
-            return selected[:2]
-    return unique[:2]
-
-
-def _public_clause_detail_value(question: str, row: ClauseDetailEvidenceRow) -> str:
-    values = _public_clause_detail_numbers(question, row.numbers)
-    if values:
-        return ", ".join(values)
-    label = re.sub(r"\s+", " ", row.row_label or "").strip()
-    if label:
-        return label[:120]
-    return "해당 조항 문구"
+    section = f", {row.section}" if row.section else ""
+    row_ref = ""
+    if row.source_kind == "table_json":
+        row_index = row.source_metadata.get("row_index")
+        row_ref = f", source=table_json row={row_index}" if row_index is not None else ", source=table_json"
+    elif row.source_kind == "clause_detail_rows":
+        row_id = row.source_metadata.get("row_id")
+        row_ref = f", source=clause_detail_rows row_id={row_id}" if row_id else ", source=clause_detail_rows"
+    elif row.source_kind:
+        row_ref = f", source={row.source_kind}"
+    return f"{row.doc_short}{section}, {page}, chunk={row.chunk_id}{row_ref}"
 
 
 def _build_clause_detail_evidence_answer(
     question: str,
     rows: list[ClauseDetailEvidenceRow],
     categories: list[str],
-    *,
-    policy_generation: str | None = None,
 ) -> str | None:
     if not rows:
         return None
@@ -1589,27 +1411,33 @@ def _build_clause_detail_evidence_answer(
         "diagnosis": "진단확정 기준",
         "documents": "청구 필요 서류",
         "deductible": "자기부담금/공제 기준",
-        "limit": "보상한도/횟수/기간 기준",
     }
     label = " / ".join(category_labels.get(category, "조항 세부 기준") for category in categories)
     displayed_rows = rows[:2]
-    selected_label = _public_policy_generation_label(policy_generation)
-    if len(displayed_rows) == 1:
-        row = displayed_rows[0]
-        basis = selected_label or _public_policy_generation_label(row.policy_generation) or "선택한 문서"
-        lines = [
-            f"{basis} 기준 {label}은 {_public_clause_detail_value(question, row)}입니다.",
-            f"근거: {_format_clause_detail_source(row)}",
+    all_numbers: list[str] = []
+    for row in displayed_rows:
+        for number in row.numbers:
+            if number not in all_numbers:
+                all_numbers.append(number)
+
+    lines = [
+        "제공된 문서 근거에서 확인되는 범위로 답변드립니다.",
+        "",
+        f"{label}: 아래 원문 근거 행을 우선 확인했습니다.",
+    ]
+    for index, row in enumerate(displayed_rows, start=1):
+        lines.append(f"- 근거 {index}: {row.text}")
+        if row.numbers:
+            lines.append(f"  - 확인된 수치: {', '.join(row.numbers)}")
+        lines.append(f"  - 출처: {_format_clause_detail_source(row)}")
+    if all_numbers:
+        lines.extend(["", f"확인된 수치 요약: {', '.join(all_numbers)}"])
+    lines.extend(
+        [
+            "",
+            "위 내용은 선택된 원문 근거 기준의 구조화 요약입니다. 실제 지급 여부는 가입 담보와 사고/진단 사실 관계를 함께 확인해야 합니다.",
         ]
-    else:
-        lines = [f"문서 근거상 {label} 비교 결과입니다."]
-        for row in displayed_rows:
-            basis = _public_policy_generation_label(row.policy_generation) or row.doc_short
-            lines.append(
-                f"- {basis}: {_public_clause_detail_value(question, row)} "
-                f"(근거: {_format_clause_detail_source(row)})"
-            )
-    lines.append("실제 보상·지급 여부는 가입 담보와 사고·진단 사실을 함께 확인해야 합니다.")
+    )
     return "\n".join(lines)
 
 
@@ -1632,32 +1460,10 @@ def _extract_clause_evidence_lines(text: str, keywords: tuple[str, ...], limit: 
     return selected
 
 
-def _public_clause_detail_excerpt(line: str) -> str:
-    """Keep a short source quotation when structured row values are unavailable."""
-
-    normalized = re.sub(r"\s+", " ", line or "").strip()
-    normalized = re.sub(r"^제\s*\d+\s*조(?:\([^)]*\))?\s*", "", normalized)
-    if len(normalized) > MAX_DISPLAY_EVIDENCE_CHARS:
-        normalized = normalized[:MAX_DISPLAY_EVIDENCE_CHARS].rstrip() + "…"
-    return normalized
-
-
-def _format_chunk_source(chunk: Chunk) -> str:
-    doc_short = str(chunk.metadata.get("doc_short") or "선택한 문서")
-    page_start = chunk.metadata.get("page_start")
-    page_end = chunk.metadata.get("page_end", page_start)
-    if isinstance(page_start, int) and isinstance(page_end, int) and page_end != page_start:
-        return f"{doc_short}, p.{page_start}-{page_end}"
-    if isinstance(page_start, int):
-        return f"{doc_short}, p.{page_start}"
-    return f"{doc_short}, p.?"
-
-
 def _deterministic_clause_detail_answer(
     question: str,
     chunks: list[Chunk],
     manifest_rows: list[ClauseDetailEvidenceRow] | None = None,
-    policy_generation: str | None = None,
 ) -> str | None:
     """조항 세부 근거가 검색된 경우 LLM의 '컨텍스트 없음' 오판을 방지한다."""
 
@@ -1671,12 +1477,7 @@ def _deterministic_clause_detail_answer(
         categories,
         manifest_rows=manifest_rows,
     )
-    source_grounded_answer = _build_clause_detail_evidence_answer(
-        question,
-        source_rows,
-        categories,
-        policy_generation=policy_generation,
-    )
+    source_grounded_answer = _build_clause_detail_evidence_answer(question, source_rows, categories)
     if source_grounded_answer:
         return source_grounded_answer
 
@@ -1684,12 +1485,9 @@ def _deterministic_clause_detail_answer(
         "diagnosis": "진단확정 기준",
         "documents": "청구 필요 서류",
         "deductible": "자기부담금 기준",
-        "limit": "보상한도/횟수/기간 기준",
     }
-    evidence_excerpts: list[str] = []
-    source_refs: list[str] = []
+    evidence_lines: list[str] = []
     seen_evidence_line_keys: set[str] = set()
-    seen_source_refs: set[str] = set()
     for category in categories:
         keywords = _clause_detail_context_terms(category)
         category_hits: list[tuple[int, Chunk, list[str]]] = []
@@ -1702,34 +1500,24 @@ def _deterministic_clause_detail_answer(
         if not category_hits:
             continue
         category_hits.sort(key=lambda item: item[0], reverse=True)
+        evidence_lines.append(f"{category_labels.get(category, '조항 세부 기준')}: 검색된 약관 근거에서 다음과 같이 확인됩니다.")
         for _score, _chunk, lines in category_hits[:2]:
-            source_ref = _format_chunk_source(_chunk)
-            if source_ref not in seen_source_refs:
-                source_refs.append(source_ref)
-                seen_source_refs.add(source_ref)
-            for line in lines[:2]:
+            for line in lines[:4]:
                 line_key = _compact_text(line)
                 if line_key in seen_evidence_line_keys:
                     continue
                 seen_evidence_line_keys.add(line_key)
-                excerpt = _public_clause_detail_excerpt(line)
-                if excerpt:
-                    evidence_excerpts.append(excerpt)
-                if len(evidence_excerpts) >= 2:
-                    break
-            if len(evidence_excerpts) >= 2:
-                break
-        if len(evidence_excerpts) >= 2:
-            break
+                evidence_lines.append(f"- {line}")
 
-    if not evidence_excerpts:
+    if not evidence_lines:
         return None
 
     return "\n".join(
         [
-            f"선택한 문서에서 {' / '.join(category_labels.get(category, '조항 세부 기준') for category in categories)} 관련 조항을 확인했습니다.",
-            *[f"- {excerpt}" for excerpt in evidence_excerpts],
-            f"근거: {' / '.join(source_refs[:2])}",
+            "제공된 문서 근거에서 확인되는 범위로 답변드립니다.",
+            "",
+            *evidence_lines,
+            "",
             "위 내용은 검색된 조항 문구 기준의 요약이며, 실제 지급 여부는 가입 담보와 사고/진단 사실 관계를 함께 확인해야 합니다.",
         ]
     )
@@ -1742,8 +1530,6 @@ def _deterministic_guard_answer(
     clause_detail_rows: list[ClauseDetailEvidenceRow] | None = None,
     graph_result: Any | None = None,
     table_store: TableStore | None = None,
-    search_intent: SearchIntentPlan | None = None,
-    policy_generation: str | None = None,
 ) -> str | None:
     procedure_grade = resolve_procedure_grade(
         question,
@@ -1757,16 +1543,13 @@ def _deterministic_guard_answer(
     if absent_code_answer:
         return absent_code_answer
 
-    effective_intent = search_intent or classify_search_intent(question)
-    if not effective_intent.requires_coverage_judgment:
-        clause_detail_answer = _deterministic_clause_detail_answer(
-            question,
-            chunks,
-            manifest_rows=clause_detail_rows,
-            policy_generation=policy_generation,
-        )
-        if clause_detail_answer:
-            return clause_detail_answer
+    clause_detail_answer = _deterministic_clause_detail_answer(
+        question,
+        chunks,
+        manifest_rows=clause_detail_rows,
+    )
+    if clause_detail_answer:
+        return clause_detail_answer
 
     comparison_answer = build_generation_deductible_comparison_answer(question)
     if comparison_answer:
@@ -1777,273 +1560,6 @@ def _deterministic_guard_answer(
     if hira_answer:
         return hira_answer
     return None
-
-
-def _chunk_ids(chunks: list[Chunk]) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(chunk.id for chunk in chunks if chunk.id))
-
-
-_COMPARISON_AXIS_PAIR_PATTERN = re.compile(
-    r"(?P<left>[A-Za-z0-9가-힣][A-Za-z0-9가-힣._-]{0,40}?)\s*"
-    r"(?:와|과|및|/|vs\.?|대비)\s*"
-    r"(?P<right>[A-Za-z0-9가-힣][A-Za-z0-9가-힣._-]{0,40})"
-    r"(?=\s|(?:의|은|는|이|가|을|를|도|만|까지)|[?.,]|$)",
-    re.IGNORECASE,
-)
-_COMPARISON_PROVENANCE_FIELDS = (
-    "policy_generation",
-    "doc_short",
-    "doc_name",
-    "pdf_filename",
-    "product_name",
-    "product_type",
-)
-
-
-def _comparison_axis_key(value: object) -> str | None:
-    compact = _compact_text(str(value or "")).casefold()
-    if not compact:
-        return None
-    generation = re.search(r"(\d+)(?:세대|th)", compact, flags=re.IGNORECASE)
-    if generation:
-        return f"generation:{int(generation.group(1))}"
-    return f"label:{compact}"
-
-
-def _requested_comparison_axes(question: str) -> tuple[str, ...]:
-    """Extract explicit comparison axes without assuming a fixed policy generation set."""
-
-    generations = [
-        f"generation:{int(value)}"
-        for value in re.findall(r"(?<!\d)(\d+)\s*(?:세대|th)", question, flags=re.IGNORECASE)
-    ]
-    unique_generations = tuple(dict.fromkeys(generations))
-    if len(unique_generations) >= 2:
-        return unique_generations
-
-    match = _COMPARISON_AXIS_PAIR_PATTERN.search(question)
-    if match is None:
-        return ()
-    axes = tuple(
-        dict.fromkeys(
-            key
-            for key in (
-                _comparison_axis_key(match.group("left")),
-                _comparison_axis_key(match.group("right")),
-            )
-            if key
-        )
-    )
-    return axes if len(axes) >= 2 else ()
-
-
-def _chunk_comparison_axis_keys(chunk: Chunk) -> set[str]:
-    metadata = chunk.metadata
-    keys = {
-        key
-        for field in _COMPARISON_PROVENANCE_FIELDS
-        if (key := _comparison_axis_key(metadata.get(field))) is not None
-    }
-    return keys
-
-
-def _chunk_mentions_comparison_axis(chunk: Chunk, axis: str) -> bool:
-    compact_text = _compact_text(chunk.text).casefold()
-    if axis.startswith("generation:"):
-        value = axis.split(":", 1)[1]
-        return bool(re.search(rf"(?<!\d){re.escape(value)}(?:세대|th)(?!\d)", compact_text, flags=re.IGNORECASE))
-    label = axis.split(":", 1)[1]
-    return bool(label and label in compact_text)
-
-
-def _is_direct_comparison_source(chunk: Chunk, approved_chunk_ids: set[str]) -> bool:
-    metadata = chunk.metadata
-    has_locatable_source = bool(
-        str(chunk.id or "").strip()
-        and any(str(metadata.get(field) or "").strip() for field in _COMPARISON_PROVENANCE_FIELDS)
-    )
-    if not has_locatable_source:
-        return False
-    return bool(metadata.get("direct_policy_attribute")) or chunk.id in approved_chunk_ids
-
-
-def _select_complete_comparison_sources(
-    question: str,
-    chunks: list[Chunk],
-    *,
-    evidence_result: Any | None = None,
-) -> tuple[list[Chunk], bool]:
-    """Return only direct sources that cover every axis explicitly requested by the user."""
-
-    requested_axes = _requested_comparison_axes(question)
-    if len(requested_axes) < 2:
-        return [], False
-
-    approved_chunk_ids = {
-        str(chunk.id)
-        for chunk in list(getattr(evidence_result, "selected_chunks", ()) or ())
-        if str(getattr(chunk, "id", "") or "").strip()
-    }
-    selected: list[Chunk] = []
-    covered_axes: set[str] = set()
-    for chunk in chunks:
-        if not _is_direct_comparison_source(chunk, approved_chunk_ids):
-            continue
-        chunk_axes = _chunk_comparison_axis_keys(chunk)
-        matched_axes = {
-            axis
-            for axis in requested_axes
-            if axis in chunk_axes or _chunk_mentions_comparison_axis(chunk, axis)
-        }
-        if not matched_axes:
-            continue
-        selected.append(chunk)
-        covered_axes.update(matched_axes)
-    return selected, set(requested_axes).issubset(covered_axes)
-
-
-def _comparison_insufficient_answer() -> str:
-    return "\n".join(
-        [
-            "요청한 비교 기준은 각 기준별 직접 조항 근거가 모두 확인되지 않아 비교할 수 없습니다.",
-            "확인할 사항: 비교 대상별 적용 조항과 적용 조건.",
-        ]
-    )
-
-
-def _coverage_insufficient_answer(question: str, policy_generation: str | None) -> str:
-    """Fail closed when a decision-shaped question lacks approved direct evidence."""
-
-    compact = _compact_text(question)
-    decision_label = "보상 또는 지급 여부" if any(term in compact for term in ("지급", "보험금", "청구")) else "보상 가능 여부"
-    generation_label = _public_policy_generation_label(policy_generation)
-    scope = f"선택한 {generation_label} 기준의 " if generation_label else "선택한 문서 기준의 "
-    return "\n".join(
-        [
-            f"{scope}{decision_label}는 현재 확인된 직접 보장·면책 조항만으로 확정할 수 없습니다.",
-            "확인할 사항: 진단명 또는 진단코드, 치료 목적, 급여/비급여 구분, 실제 청구·방문 조건.",
-        ]
-    )
-
-
-def resolve_answer_disposition(
-    question: str,
-    chunks: list[Chunk],
-    *,
-    search_intent: SearchIntentPlan | None = None,
-    policy_generation: str | None = None,
-    evidence_result: Any | None = None,
-    graph_context: str | None = None,
-    clause_detail_rows: list[ClauseDetailEvidenceRow] | None = None,
-    graph_result: Any | None = None,
-    table_store: TableStore | None = None,
-) -> AnswerDisposition:
-    """Resolve a provenance-gated answer authority for the user-visible response.
-
-    A numeric ceiling or period is useful for an attribute lookup but is never
-    sufficient to decide a coverage or payout question.  Approved direct
-    evidence profiles are the only non-fallback authority for that latter class.
-    """
-
-    intent = search_intent or classify_search_intent(question)
-    if intent.requires_cross_document:
-        comparison_candidates = list(getattr(evidence_result, "selected_chunks", ()) or ()) if evidence_result else chunks
-        comparison_chunks, comparison_complete = _select_complete_comparison_sources(
-            question,
-            comparison_candidates,
-            evidence_result=evidence_result,
-        )
-        if not comparison_complete:
-            return AnswerDisposition(
-                origin="policy_comparison",
-                grounding_state="insufficient",
-                text=_comparison_insufficient_answer(),
-            )
-
-        if evidence_result is not None:
-            status = str(getattr(evidence_result, "status", "") or "")
-            state: GroundingState = "direct" if status == "supported" else "conditional"
-            origin: AnswerOrigin = "coverage_grounded" if intent.requires_coverage_judgment else "policy_comparison"
-            return AnswerDisposition(
-                origin=origin,
-                grounding_state=state,
-                text=str(getattr(evidence_result, "answer", "") or "").strip() or None,
-                source_chunk_ids=_chunk_ids(comparison_chunks),
-            )
-
-        if intent.requires_coverage_judgment:
-            return AnswerDisposition(
-                origin="coverage_insufficient",
-                grounding_state="insufficient",
-                text=_coverage_insufficient_answer(question, policy_generation),
-            )
-
-        answer = _deterministic_guard_answer(
-            question,
-            comparison_chunks,
-            search_intent=intent,
-            policy_generation=policy_generation,
-        )
-        if not answer:
-            return AnswerDisposition(
-                origin="policy_comparison",
-                grounding_state="insufficient",
-                text=_comparison_insufficient_answer(),
-            )
-        return AnswerDisposition(
-            origin="policy_comparison",
-            grounding_state="direct",
-            text=answer,
-            source_chunk_ids=_chunk_ids(comparison_chunks),
-        )
-
-    if evidence_result is not None:
-        status = str(getattr(evidence_result, "status", "") or "")
-        state: GroundingState = "direct" if status == "supported" else "conditional"
-        origin: AnswerOrigin
-        if intent.requires_coverage_judgment:
-            origin = "coverage_grounded"
-        elif intent.intent == "policy_attribute_lookup":
-            origin = "policy_attribute"
-        else:
-            origin = "clause_detail"
-        selected_chunks = list(getattr(evidence_result, "selected_chunks", ()) or ())
-        return AnswerDisposition(
-            origin=origin,
-            grounding_state=state,
-            text=str(getattr(evidence_result, "answer", "") or "").strip() or None,
-            source_chunk_ids=_chunk_ids(selected_chunks),
-        )
-
-    if intent.requires_coverage_judgment:
-        return AnswerDisposition(
-            origin="coverage_insufficient",
-            grounding_state="insufficient",
-            text=_coverage_insufficient_answer(question, policy_generation),
-        )
-
-    answer = _deterministic_guard_answer(
-        question,
-        chunks,
-        graph_context=graph_context,
-        clause_detail_rows=clause_detail_rows,
-        graph_result=graph_result,
-        table_store=table_store,
-        search_intent=intent,
-        policy_generation=policy_generation,
-    )
-    if not answer:
-        return AnswerDisposition(origin="llm", grounding_state="none")
-    if intent.intent == "policy_attribute_lookup":
-        origin = "policy_attribute"
-    else:
-        origin = "clause_detail"
-    return AnswerDisposition(
-        origin=origin,
-        grounding_state="direct",
-        text=answer,
-        source_chunk_ids=_chunk_ids(chunks),
-    )
 
 
 def _exclude_irrelevant_travel_insurance(hits: list[Hit], question: str) -> list[Hit]:
@@ -2074,13 +1590,8 @@ def _clause_detail_categories(question: str) -> list[str]:
         categories.append("diagnosis")
     if any(term in compact for term in ("필요서류", "필요한서류", "청구서류", "제출서류", "구비서류")):
         categories.append("documents")
-    if any(term in compact for term in ("자기부담금", "자기부담", "공제금액", "공제", "보상비율", "비율")):
+    if any(term in compact for term in ("자기부담금", "자기부담")):
         categories.append("deductible")
-    if any(
-        term in compact
-        for term in ("보상한도", "보장한도", "지급한도", "연간한도", "횟수한도", "보장기간", "지급기간")
-    ):
-        categories.append("limit")
     return categories
 
 
@@ -2148,214 +1659,6 @@ def _filter_hits_by_policy_generation(hits: list[Hit], policy_generation: str | 
         for hit in hits
         if not hit.metadata.get("policy_generation")
         or str(hit.metadata.get("policy_generation")) == policy_generation
-    ]
-
-
-def _requested_policy_generations(question: str, policy_generation: str | None) -> list[str]:
-    if policy_generation:
-        return [policy_generation]
-    values: list[str] = []
-    for value in re.findall(r"(?<!\d)(\d+)\s*(?:세대|th)", question, flags=re.IGNORECASE):
-        generation = f"{int(value)}th"
-        if generation not in values:
-            values.append(generation)
-    return values
-
-
-def _policy_attribute_anchor_terms(question: str, retrieval_query: str) -> list[str]:
-    generic_terms = (
-        "세대",
-        "보상한도",
-        "보장한도",
-        "지급한도",
-        "연간한도",
-        "횟수한도",
-        "보장기간",
-        "지급기간",
-        "연간",
-        "매년",
-        "계약해당일",
-        "자기부담금",
-        "자기부담",
-        "공제금액",
-        "공제",
-        "보상비율",
-        "비율",
-    )
-    terms: list[str] = []
-    for term in _question_anchor_terms(f"{question} {retrieval_query}"):
-        compact = _compact_text(term)
-        if (
-            not compact
-            or compact.isdigit()
-            or re.fullmatch(r"\d+(?:세대|th)", compact, flags=re.IGNORECASE)
-            or any(generic in compact for generic in generic_terms)
-        ):
-            continue
-        if compact not in terms:
-            terms.append(compact)
-    return terms
-
-
-def _policy_attribute_anchor_positions(text: str, anchor: str) -> list[int]:
-    """Return exact or bounded OCR-fragmented anchor positions."""
-
-    positions: list[int] = []
-    start = text.find(anchor)
-    while start >= 0:
-        positions.append(start)
-        start = text.find(anchor, start + len(anchor))
-    if positions or len(anchor) < 6:
-        return positions
-
-    segment_size = max(2, len(anchor) // 3)
-    segments = [anchor[index:index + segment_size] for index in range(0, len(anchor), segment_size)]
-    first = segments[0]
-    start = text.find(first)
-    while start >= 0:
-        cursor = start + len(first)
-        for segment in segments[1:]:
-            next_start = text.find(segment, cursor)
-            if next_start < 0 or next_start - cursor > 96:
-                break
-            cursor = next_start + len(segment)
-        else:
-            positions.append(start)
-        start = text.find(first, start + 1)
-    return positions
-
-
-def _policy_attribute_number_matches(question: str, categories: list[str], text: str) -> list[re.Match[str]]:
-    matches = list(_CLAUSE_DETAIL_NUMBER_PATTERN.finditer(text))
-    compact_question = _compact_text(question)
-    if "limit" not in categories:
-        return matches
-    if any(term in compact_question for term in ("횟수", "회차")):
-        return [match for match in matches if "회" in match.group(0)]
-    if any(term in compact_question for term in ("보장기간", "지급기간")):
-        return [match for match in matches if any(unit in match.group(0) for unit in ("년", "일"))]
-    if any(term in compact_question for term in ("보상한도", "보장한도", "지급한도", "연간한도", "금액")):
-        return [match for match in matches if any(unit in match.group(0) for unit in ("만원", "원"))]
-    return matches
-
-
-def _select_policy_attribute_number(
-    question: str,
-    evidence_text: str,
-    anchor_start: int,
-    matches: list[re.Match[str]],
-) -> re.Match[str] | None:
-    if not matches:
-        return None
-    compact_question = _compact_text(question)
-    candidates = [match for match in matches if match.start() >= anchor_start]
-    if not candidates:
-        return None
-    if any(term in compact_question for term in ("연간", "매년", "계약해당일")):
-        annual_terms = ("연간", "매년", "1년", "계약해당일")
-        annual_matches = [
-            match
-            for match in candidates
-            if any(term in evidence_text[max(anchor_start, match.start() - 96):match.start()] for term in annual_terms)
-        ]
-        if annual_matches:
-            candidates = annual_matches
-    return min(candidates, key=lambda match: abs(match.start() - anchor_start))
-
-
-def _policy_attribute_context_score(text: str, categories: list[str]) -> int:
-    compact = _compact_text(text)
-    score = 0
-    for category in categories:
-        terms = _clause_detail_context_terms(category)
-        if category == "limit":
-            terms = (*terms, "한도", "1년", "매년", "계약해당일")
-        if any(_compact_text(term) in compact for term in terms):
-            score += 1
-    return score
-
-
-def _direct_policy_attribute_hits(
-    source_chunk_lookup: dict[str, dict],
-    question: str,
-    retrieval_query: str,
-    policy_generation: str | None,
-    doc_filter: list[str] | None,
-) -> list[Hit]:
-    """Recall selected-generation direct clauses without depending on index rank."""
-
-    targets = _requested_policy_generations(question, policy_generation)
-    categories = _clause_detail_categories(question)
-    anchors = _policy_attribute_anchor_terms(question, retrieval_query)
-    if not targets or not categories or not anchors:
-        return []
-
-    allowed_docs = set(doc_filter or [])
-    best_by_generation: dict[str, tuple[int, Hit]] = {}
-    seen_source_ids: set[str] = set()
-    for source_row in source_chunk_lookup.values():
-        if not isinstance(source_row, dict):
-            continue
-        source_id = str(source_row.get("id") or "")
-        if not source_id or source_id in seen_source_ids:
-            continue
-        seen_source_ids.add(source_id)
-        metadata = source_row.get("metadata")
-        if not isinstance(metadata, dict):
-            continue
-        generation = str(metadata.get("policy_generation") or "")
-        if generation not in targets:
-            continue
-        if allowed_docs and metadata.get("doc_short") not in allowed_docs:
-            continue
-        raw_text = str(source_row.get("text") or "")
-        compact_text, compact_offsets = _compact_text_with_offsets(raw_text)
-        for term in anchors:
-            for start in _policy_attribute_anchor_positions(compact_text, term):
-                evidence_start = max(0, start - 240)
-                evidence_end = start + len(term) + 480
-                evidence_text = compact_text[evidence_start:evidence_end]
-                context_score = _policy_attribute_context_score(evidence_text, categories)
-                number_matches = _policy_attribute_number_matches(question, categories, evidence_text)
-                anchor_start = start - evidence_start
-                selected_number = _select_policy_attribute_number(question, evidence_text, anchor_start, number_matches)
-                if context_score and selected_number is not None:
-                    nearest_number = abs(selected_number.start() - anchor_start)
-                    direct_metadata = dict(metadata)
-                    direct_metadata["direct_policy_attribute"] = True
-                    direct_metadata["display_evidence"] = _raw_display_window(
-                        raw_text,
-                        compact_offsets,
-                        start,
-                        evidence_start + selected_number.start(),
-                        evidence_start + selected_number.end(),
-                    )
-                    hit = Hit(
-                        id=source_id,
-                        score=float(len(term) * 1000 + context_score * 100 + max(0, 480 - nearest_number)),
-                        document=evidence_text,
-                        metadata=direct_metadata,
-                    )
-                    current = best_by_generation.get(generation)
-                    rank = int(hit.score)
-                    if current is None or rank > current[0] or (rank == current[0] and hit.id < current[1].id):
-                        best_by_generation[generation] = (rank, hit)
-    return [best_by_generation[target][1] for target in targets if target in best_by_generation]
-
-
-def _filter_generation_scoped_clause_detail_hits(
-    hits: list[Hit],
-    question: str,
-    policy_generation: str | None,
-) -> list[Hit]:
-    """Fail closed for direct clause attributes without verified selected-generation evidence."""
-
-    if policy_generation not in {"4th", "5th"} or not _clause_detail_categories(question):
-        return hits
-    return [
-        hit
-        for hit in hits
-        if str((hit.metadata or {}).get("policy_generation") or "") == policy_generation
     ]
 
 
@@ -2823,16 +2126,6 @@ class RagPipeline:
 
         dense_hits = _exclude_irrelevant_travel_insurance(dense_hits, question)
         bm25_hits = _exclude_irrelevant_travel_insurance(bm25_hits, question)
-        direct_policy_attribute_hits: list[Hit] = []
-        if search_intent.intent == "policy_attribute_lookup":
-            direct_policy_attribute_hits = _direct_policy_attribute_hits(
-                self._source_chunk_lookup,
-                question,
-                retrieval_query,
-                policy_generation,
-                doc_filter,
-            )
-
         clause_detail_hits: list[Hit] = []
         if _is_clause_detail_query(question):
             focus_docs = _ordered_unique(doc_filter or _focus_docs_from_clause_hits(question, dense_hits + bm25_hits))
@@ -2889,12 +2182,6 @@ class RagPipeline:
                 fused_hits,
                 _filter_hits_by_policy_generation(graph_hits, policy_generation),
             )
-        if direct_policy_attribute_hits:
-            fused_hits = _merge_hits_preserving_order(
-                direct_policy_attribute_hits,
-                fused_hits,
-                limit=max(rrf_top_k, final_top_k),
-            )
         if clause_detail_hits:
             fused_hits = _merge_hits_preserving_order(
                 clause_detail_hits,
@@ -2918,12 +2205,6 @@ class RagPipeline:
 
         if clause_detail_hits:
             final_hits = _merge_hits_preserving_order(clause_detail_hits, final_hits, limit=final_top_k)
-        if direct_policy_attribute_hits:
-            final_hits = _merge_hits_preserving_order(
-                direct_policy_attribute_hits,
-                final_hits,
-                limit=final_top_k,
-            )
         if graph_hits:
             final_hits = _merge_hits_preserving_order(
                 final_hits,
@@ -2934,11 +2215,6 @@ class RagPipeline:
             final_hits = self._restore_doc_coverage(final_hits, coverage_hits, final_top_k)
         final_hits = self._hydrate_source_metadata(final_hits)
         final_hits = _filter_hits_by_policy_generation(final_hits, policy_generation)
-        final_hits = _filter_generation_scoped_clause_detail_hits(
-            final_hits,
-            question,
-            policy_generation,
-        )
         final_hits = _prefer_exact_text_hits(final_hits, named_code_terms)
         debug = (
             DebugInfo(
@@ -2976,7 +2252,7 @@ class RagPipeline:
         if self.graph_enabled and self.graph_retriever:
             try:
                 graph_result = self.graph_retriever.retrieve(question)
-                graph_context = build_prompt_graph_context(graph_result)
+                graph_context = build_graph_context(graph_result)
                 if graph_result.source_chunk_refs:
                     graph_hits = self.vector_store.get_by_refs(graph_result.source_chunk_refs)
                 elif graph_result.source_chunk_ids:
@@ -3068,20 +2344,20 @@ class RagPipeline:
         )
 
         retrieve_ms = (time.perf_counter() - retrieve_started) * 1000
-        search_intent = getattr(debug, "search_intent", None) if debug is not None else None
-        answer_disposition = resolve_answer_disposition(
-            question,
-            chunks,
-            search_intent=search_intent,
-            policy_generation=policy_generation,
-            evidence_result=evidence_result,
-            graph_context=graph_context,
-            clause_detail_rows=clause_detail_rows,
-            graph_result=graph_result,
-            table_store=self._table_store,
+        deterministic_answer = (
+            evidence_result.answer
+            if evidence_result is not None
+            else _deterministic_guard_answer(
+                question,
+                chunks,
+                graph_context=graph_context,
+                clause_detail_rows=clause_detail_rows,
+                graph_result=graph_result,
+                table_store=self._table_store,
+            )
         )
-        if answer_disposition.text:
-            answer_text = append_retrieved_source_citations(answer_disposition.text, chunks)
+        if deterministic_answer:
+            answer_text = append_retrieved_source_citations(deterministic_answer, chunks)
             answer_text = append_evidence_validation_warning(answer_text, question, chunks)
             total_ms = (time.perf_counter() - total_started) * 1000
             return RagAnswer(

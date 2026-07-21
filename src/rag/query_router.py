@@ -113,24 +113,6 @@ def resolve_query_route(question: str, filters: dict | None = None) -> QueryRout
             matched_cues=matched,
         )
 
-    if plan.intent == "policy_attribute_lookup":
-        routed_filters = dict(base_filters)
-        routed_filters.update(
-            {
-                "_auto_routed": True,
-                "_resolved_route": "general",
-                "_route_reason": "policy_attribute_direct_lookup",
-                "_matched_cues": ["policy_attribute_lookup"],
-            }
-        )
-        return QueryRoute(
-            route="general",
-            intent=plan.intent,
-            filters=routed_filters,
-            route_reason="policy_attribute_direct_lookup",
-            matched_cues=["policy_attribute_lookup"],
-        )
-
     if plan.requires_clause_lookup or structured_coverage_requested or formal_keyword_lookup:
         if plan.requires_clause_lookup:
             search_type = "약관 조문 검색"

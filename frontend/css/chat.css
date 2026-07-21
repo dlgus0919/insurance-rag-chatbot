@@ -512,10 +512,7 @@
     padding:2px 7px;border-radius:4px;font-size:10px;font-weight:700;margin:2px 2px 0 0;
     cursor:help;
   }
-  .src-badge--link{cursor:pointer;text-decoration:none;}
-  .src-badge--link:focus-visible{outline:2px solid var(--primary);outline-offset:2px;}
-  .src-badge[data-source-preview]:hover::after,
-  .src-badge[data-source-preview]:focus-visible::after{
+  .src-badge[data-source-preview]:hover::after{
     content:attr(data-source-preview);
     position:absolute;
     left:0;

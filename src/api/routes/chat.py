@@ -10,11 +10,10 @@ import inspect
 import json
 import logging
 import time
-import unicodedata
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi import APIRouter, Depends, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,8 +32,6 @@ from src.api.public_payloads import (
 from src.api.rate_limit import limiter
 from src.api.rag_service import (
     SYSTEM_PROMPT,
-    coerce_answer_disposition,
-    chunks_to_sources,
     finalize_answer_for_question,
     graph_payload_has_renderable_evidence,
     get_rag_pipeline,
@@ -42,7 +39,6 @@ from src.api.rag_service import (
     prepare_quickcode_context,
     prepare_retrieved_context,
     resolve_effective_index_mode,
-    resolve_specialized_coverage_disposition,
 )
 from src.api.routes.claim import _claim_response_text, _claim_snapshot_source
 from src.api.schemas.chat import ChatRequest
@@ -106,55 +102,6 @@ async def chat_documents(
     """Return document filters available to the chat UI."""
 
     return {"documents": _document_filter_options()}
-
-
-def _normalized_source_identifier(value: str | None) -> str:
-    return unicodedata.normalize("NFC", str(value or "")).strip()
-
-
-def _registered_pdf_source(*, doc_short: str | None, filename: str | None) -> config.PdfSource | None:
-    """Resolve a configured PDF source without accepting a user-supplied path."""
-
-    requested_doc_short = _normalized_source_identifier(doc_short)
-    requested_filename = _normalized_source_identifier(filename)
-    if not requested_doc_short and not requested_filename:
-        return None
-    if requested_filename and ("/" in requested_filename or "\\" in requested_filename):
-        return None
-
-    matches: list[config.PdfSource] = []
-    for source in config.PDF_SOURCES:
-        if requested_doc_short and requested_doc_short != _normalized_source_identifier(source.doc_short):
-            continue
-        if requested_filename and requested_filename != _normalized_source_identifier(source.path.name):
-            continue
-        matches.append(source)
-
-    if len(matches) != 1:
-        return None
-    source = matches[0]
-    if source.path.suffix.casefold() != ".pdf" or not source.path.is_file():
-        return None
-    return source
-
-
-@router.get("/sources/pdf")
-async def chat_source_pdf(
-    doc_short: str | None = Query(default=None, max_length=240),
-    filename: str | None = Query(default=None, max_length=512),
-    user: User = Depends(require_permission("chat.stream")),
-) -> FileResponse:
-    """Return an allowlisted registered source PDF for an authenticated chat user."""
-
-    source = _registered_pdf_source(doc_short=doc_short, filename=filename)
-    if source is None:
-        raise HTTPException(status_code=404, detail="등록된 원문 PDF를 찾을 수 없습니다.")
-    return FileResponse(
-        source.path,
-        media_type="application/pdf",
-        filename=source.path.name,
-        content_disposition_type="inline",
-    )
 
 
 def _document_filter_options() -> list[dict[str, str]]:
@@ -548,7 +495,7 @@ async def chat_stream(
         sources: list[dict] = []
         graph_payload = None
         warnings: list[dict] = []
-        answer_disposition = coerce_answer_disposition(None)
+        _deterministic_answer: str | None = None
         debug_info: DebugInfo | None = None
         tokens: list[str] = []
         selected_model = _select_model(chat_request)
@@ -559,12 +506,8 @@ async def chat_stream(
             current_manifest_hash=manifest_hash,
             clarification=chat_request.clarification or None,
         )
-        requested_policy_generation = (
+        selected_policy_generation = (
             chat_request.policy_generation or conversation_context.query_scope.policy_generation
-        )
-        selected_policy_generation = _effective_policy_generation(
-            conversation_context.route_query,
-            requested_policy_generation,
         )
         requested_index_mode, effective_index_mode = _resolve_chat_index_modes(
             _query_with_policy_generation(conversation_context.route_query, selected_policy_generation),
@@ -736,7 +679,7 @@ async def chat_stream(
                 if selected_policy_generation:
                     retrieval_kwargs["policy_generation"] = selected_policy_generation
                 retrieval_kwargs["conversation_context"] = conversation_context
-                chunks, sources, prompt, graph_payload, warnings, answer_disposition, debug_info = await prepare_retrieved_context(
+                chunks, sources, prompt, graph_payload, warnings, _deterministic_answer, debug_info = await prepare_retrieved_context(
                     pipeline,
                     context_query,
                     retrieval_top_k,
@@ -744,16 +687,6 @@ async def chat_stream(
                     effective_filters,
                     **retrieval_kwargs,
                 )
-            if resolved_mode in {"formal", "quickcode"}:
-                specialized_chunks, answer_disposition = resolve_specialized_coverage_disposition(
-                    conversation_context.route_query,
-                    chunks,
-                    policy_generation=selected_policy_generation,
-                    conversation_context=conversation_context,
-                )
-                if specialized_chunks is not chunks:
-                    sources = chunks_to_sources(specialized_chunks)
-                chunks = specialized_chunks
             conversation_scope = ConversationQueryScope(
                 route=resolved_mode,
                 intent=resolved_intent,
@@ -781,33 +714,26 @@ async def chat_stream(
             for warning in public_warnings(warnings):
                 yield _sse("warning", warning)
 
-            answer_disposition = coerce_answer_disposition(answer_disposition, chunks)
-            if answer_disposition.text is not None:
-                for token in _chunk_text(answer_disposition.text):
-                    tokens.append(token)
+            # Retrieved-document answers always pass through the selected LLM. The
+            # deterministic artifact remains retrieval metadata and is not a final reply.
+            suppress_live_tokens = graph_payload_has_renderable_evidence(graph_payload)
+            llm_stream = _generate_llm_stream(
+                pipeline.llm,
+                prompt,
+                system_prompt,
+                effective_temperature,
+                chat_request.reasoning_mode,
+            )
+            for token in llm_stream:
+                tokens.append(token)
+                if not suppress_live_tokens:
                     yield _sse("token", {"t": token})
-                    await asyncio.sleep(0)
-            else:
-                # A renderable Graph/canonical panel can replace model templates. Buffer it so
-                # no streamed text disappears when the final normalized answer is emitted.
-                suppress_live_tokens = graph_payload_has_renderable_evidence(graph_payload)
-                llm_stream = _generate_llm_stream(
-                    pipeline.llm,
-                    prompt,
-                    system_prompt,
-                    effective_temperature,
-                    chat_request.reasoning_mode,
-                )
-                for token in llm_stream:
-                    tokens.append(token)
-                    if not suppress_live_tokens:
-                        yield _sse("token", {"t": token})
-                    await asyncio.sleep(0)
-                for warning in _llm_safety_warnings(pipeline.llm):
-                    warnings.append(warning)
-                    public_warning = public_warnings([warning])
-                    if public_warning:
-                        yield _sse("warning", public_warning[0])
+                await asyncio.sleep(0)
+            for warning in _llm_safety_warnings(pipeline.llm):
+                warnings.append(warning)
+                public_warning = public_warnings([warning])
+                if public_warning:
+                    yield _sse("warning", public_warning[0])
 
             raw_answer = "".join(tokens).strip()
             if not raw_answer:
@@ -886,9 +812,6 @@ async def chat_stream(
                     "turn_id": turn_id,
                     "conversation_kind": conversation_context.kind,
                     "source_count": len(sources),
-                    "answer_origin": answer_disposition.origin,
-                    "grounding_state": answer_disposition.grounding_state,
-                    "grounded_source_count": len(answer_disposition.source_chunk_ids),
                     "query_preview": chat_request.query.strip()[:200],
                     "doc_filter": doc_filter,
                     "rag_diagnostics": _build_rag_diagnostics(
@@ -973,33 +896,6 @@ def _policy_generation_label(policy_generation: str | None) -> str | None:
     if policy_generation == "4th":
         return "4세대"
     return None
-
-
-def _has_explicit_policy_generation_comparison(query: str) -> bool:
-    lowered_query = query.casefold()
-    has_fourth = "4세대" in query or "4th" in lowered_query
-    has_fifth = "5세대" in query or "5th" in lowered_query
-    comparison_tokens = ("비교", "차이", "각각", "대비", "vs")
-    paired_forms = (
-        "4세대와 5세대",
-        "5세대와 4세대",
-        "4세대 및 5세대",
-        "5세대 및 4세대",
-        "4세대/5세대",
-        "5세대/4세대",
-    )
-    return has_fourth and has_fifth and (
-        any(token in lowered_query for token in comparison_tokens)
-        or any(form in query for form in paired_forms)
-    )
-
-
-def _effective_policy_generation(query: str, selected_policy_generation: str | None) -> str | None:
-    """Use the UI selection unless the user explicitly asks for a generation comparison."""
-
-    if _has_explicit_policy_generation_comparison(query):
-        return None
-    return selected_policy_generation
 
 
 def _query_with_policy_generation(query: str, policy_generation: str | None) -> str:

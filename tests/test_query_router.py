@@ -32,21 +32,6 @@ def test_simple_coverage_question_keeps_general_graph_strategy() -> None:
     assert route.route == "general"
 
 
-def test_pure_policy_attribute_uses_general_direct_retrieval_strategy() -> None:
-    route = resolve_query_route("검사X의 연간 보상한도는?")
-
-    assert route.route == "general"
-    assert route.intent == "policy_attribute_lookup"
-    assert route.route_reason == "policy_attribute_direct_lookup"
-
-
-def test_policy_attribute_coverage_question_keeps_coverage_route() -> None:
-    route = resolve_query_route("5세대 MRI 연간 보장되나요?")
-
-    assert route.route == "general"
-    assert route.intent != "policy_attribute_lookup"
-
-
 def test_coverage_question_reuses_formal_strategy_without_forcing_product_scope() -> None:
     route = resolve_query_route("N39.3 진단코드는 4세대 실손 질병급여에서 보상 가능한가요?")
 

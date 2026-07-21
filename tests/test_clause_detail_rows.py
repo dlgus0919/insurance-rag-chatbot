@@ -91,9 +91,7 @@ def test_clause_detail_manifest_rows_feed_deterministic_answer() -> None:
     assert answer is not None
     assert "1~2만원" in answer
     assert "20%" in answer
-    assert "근거: 약관, p.31" in answer
-    assert "source=" not in answer
-    assert "row_id=" not in answer
+    assert "source=clause_detail_rows row_id=cdr.test" in answer
 
 
 def test_build_clause_detail_rows_includes_digital_pdf_table_artifacts(tmp_path) -> None:

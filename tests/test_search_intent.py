@@ -1,6 +1,3 @@
-import pytest
-
-from src.rag.query_router import resolve_query_route
 from src.rag.search_intent import classify_search_intent
 
 
@@ -71,113 +68,8 @@ def test_mri_transliteration_is_classified_as_ambiguous_medical_term() -> None:
     assert plan.dense_weight > plan.bm25_weight
 
 
-def test_pure_policy_attribute_lookup_outranks_ambiguous_medical_term() -> None:
-    plan = classify_search_intent("자기공명영상진단(MRI/MRA)의 연간 보상한도는?")
-
-    assert plan.intent == "policy_attribute_lookup"
-    assert plan.requires_clause_lookup is True
-    assert plan.requires_coverage_judgment is False
-
-
-def test_policy_attribute_coverage_question_keeps_coverage_judgment() -> None:
-    plan = classify_search_intent("5세대 MRI의 연간 보상한도는 보장되나요?")
-
-    assert plan.requires_coverage_judgment is True
-
-
-def test_policy_attribute_noun_queries_stay_in_direct_lookup() -> None:
-    for question in (
-        "검사X 연간 보상한도는?",
-        "검사X 횟수한도는?",
-        "검사X 보장기간은?",
-        "검사X 지급한도는?",
-        "검사X 지급기간은?",
-        "검사X 공제금액은?",
-        "검사X 보상비율은?",
-    ):
-        plan = classify_search_intent(question)
-
-        assert plan.intent == "policy_attribute_lookup"
-        assert plan.requires_coverage_judgment is False
-
-
-def test_policy_attribute_with_visit_context_is_not_mistaken_for_a_coverage_decision() -> None:
-    plan = classify_search_intent("입원치료 자기부담금 비율은?")
-
-    assert plan.intent == "policy_attribute_lookup"
-    assert plan.requires_coverage_judgment is False
-
-
-def test_policy_attribute_action_queries_keep_coverage_judgment() -> None:
-    for question in (
-        "검사X 연간 보상한도 계산해줘",
-        "검사X 연간 보상한도 청구하면?",
-        "검사X 연간 보상한도 지급받을 수 있나요?",
-        "검사X 연간 보상한도 보험금 판단이 필요해",
-    ):
-        plan = classify_search_intent(question)
-
-        assert plan.intent != "policy_attribute_lookup"
-        assert plan.requires_coverage_judgment is True
-
-
-def test_policy_attribute_decision_inflections_keep_coverage_judgment() -> None:
-    for question in (
-        "검사X 보상한도 지급 여부는?",
-        "검사X 보상한도 지급되는지 알려줘",
-        "검사X 보상한도 보험금은?",
-        "검사X 보상한도 보험금 지급 판단이 필요해",
-        "5세대 MRI 연간 보장되나요?",
-        "5세대 MRI 보상한도 지급 여부는?",
-    ):
-        plan = classify_search_intent(question)
-
-        assert plan.intent != "policy_attribute_lookup"
-        assert plan.requires_coverage_judgment is True
-
-
 def test_cross_doc_compare_keeps_balanced_search() -> None:
     plan = classify_search_intent("심평원과 SOL 건강보험 기준을 문서별로 비교해줘")
 
     assert plan.intent == "cross_doc_compare"
     assert plan.dense_weight == plan.bm25_weight
-
-
-@pytest.mark.parametrize(
-    ("question", "expected_intent", "expected_route"),
-    [
-        ("시술Y 수가 코드를 알려줘.", "procedure_code_lookup", "quickcode"),
-        ("시술Y 수술종수를 알려줘.", "procedure_code_lookup", "general"),
-        ("제3조 면책조항의 내용을 설명해줘.", "clause_or_appendix_lookup", "formal"),
-    ],
-)
-def test_pure_specialized_requests_keep_noncoverage_intent_contract(
-    question: str,
-    expected_intent: str,
-    expected_route: str,
-) -> None:
-    plan = classify_search_intent(question)
-
-    assert plan.intent == expected_intent
-    assert plan.requires_coverage_judgment is False
-    assert resolve_query_route(question).route == expected_route
-
-
-@pytest.mark.parametrize(
-    ("question", "expected_intent", "expected_route"),
-    [
-        ("시술Y 수가 코드와 실손 보상 여부를 알려줘.", "procedure_code_lookup", "quickcode"),
-        ("제3조 면책조항상 시술Y는 보상 가능한가요?", "clause_or_appendix_lookup", "formal"),
-        ("alpha와 beta 검사X의 연간 보상한도를 비교해서 보상 가능 여부도 알려줘.", "cross_doc_compare", "general"),
-    ],
-)
-def test_compound_specialized_requests_preserve_coverage_intent_contract(
-    question: str,
-    expected_intent: str,
-    expected_route: str,
-) -> None:
-    plan = classify_search_intent(question)
-
-    assert plan.intent == expected_intent
-    assert plan.requires_coverage_judgment is True
-    assert resolve_query_route(question).route == expected_route

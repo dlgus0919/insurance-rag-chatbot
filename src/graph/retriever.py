@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, List, Literal, Optional, Set
 
-from src.config import resolve_safe_baseline_runtime_root
 from src.graph.query_planner import GraphQueryPlan, GraphQueryPlanner
 from src.graph.schema import EdgeType, NodeType
 from src.graph.store import GraphStore
@@ -192,13 +191,6 @@ class GraphRetriever:
         self.db_path = Path(db_path)
         self.planner = GraphQueryPlanner()
         self.complication_keywords = ["합병증", "합병증 치료", "수술 후 합병증", "부작용", "후유증", "미용 목적 시술 후 합병증"]
-
-    def _uses_safe_baseline_runtime_graph(self) -> bool:
-        runtime_root = resolve_safe_baseline_runtime_root()
-        if runtime_root is None:
-            return False
-        expected_graph_path = runtime_root / "graph" / "insurance_graph.sqlite"
-        return self.db_path.resolve() == expected_graph_path.resolve()
 
     @staticmethod
     def _unique_nonempty(values: list[str]) -> list[str]:
@@ -1175,14 +1167,8 @@ class GraphRetriever:
         self,
         question: str,
         clarification: dict[str, list[dict[str, str]]] | None = None,
-        *,
-        policy_generation: str | None = None,
     ) -> GraphRetrievalResult:
-        plan = self.planner.plan(
-            question,
-            clarification=clarification,
-            policy_generation=policy_generation,
-        )
+        plan = self.planner.plan(question, clarification=clarification)
         result = GraphRetrievalResult(plan=plan)
 
         # fallback 대비: db_path가 없으면 경고만 남기고 리턴
@@ -1192,12 +1178,8 @@ class GraphRetriever:
             return result
 
         try:
-            # Published safe-baseline snapshots must remain sidecar-free while queried.
-            store = GraphStore(
-                self.db_path,
-                readonly=True,
-                immutable=self._uses_safe_baseline_runtime_graph(),
-            )
+            # 116번 라인의 read-only 연결 사용
+            store = GraphStore(self.db_path, readonly=True, immutable=True)
         except Exception as e:
             result.warnings.append(f"Failed to connect to Graph DB: {e}. Running with empty graph fallback.")
             self._apply_session_fallback_review_paths(result, "GraphDB 연결 실패로 직접 연결된 조항 경로를 확인하지 못했습니다.")
