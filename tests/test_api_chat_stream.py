@@ -16,6 +16,7 @@ from src.api.schemas.sessions import SessionCreateRequest
 from src.auth.users import User
 from src.graph.query_planner import GraphQueryPlan
 from src.graph.retriever import GraphEvidence, GraphFact, GraphRetrievalResult, GraphRetriever
+from src.ontology.registry import get_default_ontology_registry
 
 
 @pytest.fixture
@@ -1234,11 +1235,13 @@ async def test_prepare_retrieved_context_hides_missing_graph_chunk_warning() -> 
 
 
 @pytest.mark.anyio
-async def test_prepare_retrieved_context_uses_renderable_graph_fallback_on_graph_exception(monkeypatch) -> None:
+async def test_prepare_retrieved_context_uses_renderable_graph_fallback_on_graph_exception(monkeypatch, request) -> None:
     monkeypatch.setenv(
         "INSURANCE_ONTOLOGY_MANIFEST",
         str(Path(__file__).resolve().parents[1] / "data" / "ontology" / "concepts.json"),
     )
+    get_default_ontology_registry.cache_clear()
+    request.addfinalizer(get_default_ontology_registry.cache_clear)
     _chunks, _sources, _prompt, graph_payload, warnings, _deterministic_answer, debug = await prepare_retrieved_context(
         FailingGraphPipeline(),
         (
