@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -1232,7 +1234,11 @@ async def test_prepare_retrieved_context_hides_missing_graph_chunk_warning() -> 
 
 
 @pytest.mark.anyio
-async def test_prepare_retrieved_context_uses_renderable_graph_fallback_on_graph_exception() -> None:
+async def test_prepare_retrieved_context_uses_renderable_graph_fallback_on_graph_exception(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "INSURANCE_ONTOLOGY_MANIFEST",
+        str(Path(__file__).resolve().parents[1] / "data" / "ontology" / "concepts.json"),
+    )
     _chunks, _sources, _prompt, graph_payload, warnings, _deterministic_answer, debug = await prepare_retrieved_context(
         FailingGraphPipeline(),
         (

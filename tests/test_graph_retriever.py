@@ -344,7 +344,11 @@ def test_retriever_missing_db() -> None:
     assert "not found" in result.warnings[0]
 
 
-def test_retriever_missing_db_returns_renderable_condition_review_path() -> None:
+def test_retriever_missing_db_returns_renderable_condition_review_path(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "INSURANCE_ONTOLOGY_MANIFEST",
+        str(Path(__file__).resolve().parents[1] / "data" / "ontology" / "concepts.json"),
+    )
     retriever = GraphRetriever("non_existent_db_12345.sqlite")
     result = retriever.retrieve(
         "이륜자동차를 타다 사고가 났습니다. 원래 이륜자동차를 타지 않는 사람인데, "
