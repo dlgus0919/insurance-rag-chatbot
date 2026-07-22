@@ -1,0 +1,14 @@
+﻿1. VS Code에서 Remote SSH로 DGX Spark에 자기 계정으로 접속합니다.
+
+2. /srv/shared/workspaces/<본인계정>/insurance-rag-chatbot 을 엽니다.
+
+3. VS Code Extensions에서 Codex / Claude Code Extension을 Remote SSH 환경에 설치합니다.
+   로컬 Mac이 아니라 “SSH: aitopatom-255d” 쪽에 설치되어야 합니다.
+
+4. Extension에서 각자 개인 ChatGPT Plus / Claude Pro 계정으로 로그인합니다.
+
+5. 작업은 반드시 개인 workspace와 개인 branch에서만 합니다.
+
+6. /srv/shared/projects/insurance-rag-chatbot 공용 운영 repo는 직접 수정하지 않습니다.
+
+7. /srv/ai-ops/secrets, users.json, raw PDF, data/index, data/extracted 등은 열거나 수정하지 않습니다.
