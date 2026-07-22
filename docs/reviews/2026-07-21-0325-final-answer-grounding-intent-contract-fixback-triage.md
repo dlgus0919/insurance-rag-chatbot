@@ -63,4 +63,3 @@ Run focused and full pytest, compile/import checks as appropriate, and
 `git diff --check`; update the Developer implementation report with exact
 results.  This correction needs a fresh, read-only Review Team verdict before
 any promotion decision.
-

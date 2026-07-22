@@ -43,4 +43,3 @@ Save an immutable report under candidate `docs/reviews/` with a severity
 ordered outcome and `PASS` or `CHANGES_REQUESTED`.  If changes are required,
 include a focused Developer prompt.  A `PASS` is a candidate-review decision
 only; it is not authorization to commit, merge, push, deploy, or restart.
-
