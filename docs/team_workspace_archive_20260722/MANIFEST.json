@@ -1,9 +1,9 @@
 {
-  "generated_at": "2026-07-22T02:30:12.480606+00:00",
+  "generated_at": "2026-07-22T04:05:53.191847+00:00",
   "main_docs_hashes": 514,
   "workspace_docs_directories": 26,
-  "unique_missing_content_copied": 55,
-  "duplicate_occurrences_indexed": 96,
+  "unique_missing_content_copied": 45,
+  "duplicate_occurrences_indexed": 48,
   "blocked_files_not_copied": [
     {
       "docs_dir": "/srv/shared/workspaces/eundeo/insurance-rag-chatbot/docs",
@@ -92,116 +92,6 @@
   ],
   "entries": [
     {
-      "sha256": "788d42f887469089ea181269fbb37f181d584bfce702f6a966e9ff4321a4aa95",
-      "size": 8842,
-      "title": "Codex Sidebar Recovery Report - 2026-06-10",
-      "canonical_source": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs/209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md",
-      "copied_to": "sources/dani__insurance-rag-chatbot__docs/209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md",
-      "occurrence_count": 25,
-      "occurrences": [
-        {
-          "docs_dir": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/eundeo/insurance-rag-chatbot-latest/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/eundeo/insurance-rag-chatbot/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-approval-integrity-20260718/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-chrome-uat-mri-p0-fixback-20260720/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-cold-test/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-conversational-evidence-resolution-20260719/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-fifth-policy-authority/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-final-answer-grounding-20260721/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-general-ontology-v1.2.0-preparation/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-graph-viz-20260715/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-hair-fixback-20260716/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-launcher-active-model/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-release-20260716/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-safe-baseline-immutable-graph-20260720/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-source-citation-click-20260720/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-uat-mri-generation-regression-20260720/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-uat-mri-limit-20260720/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-uat-mri-operational-fixback-20260720/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-uat-mri-operational-retrieval-fixback-20260720/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-uat-mri-runtime-grounding-20260720/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-grounded-attribute-composite-20260721/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-qwen-always-v120b-20260721/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-qwen-direct-comparison-demo/docs",
-          "path": "209_CODEX_SIDEBAR_RECOVERY_2026_06_10.md"
-        }
-      ]
-    },
-    {
       "sha256": "795eb75ecc7b3f9043093c7059181674ce1f01d14bc1fb28074382d0c3bea605",
       "size": 18646,
       "title": "257 DGX Spark 신규 장비 통합 설치 프로그램 기술 검토",
@@ -212,158 +102,6 @@
         {
           "docs_dir": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs",
           "path": "257_DGX_FRESH_INSTALLER_FEASIBILITY_PLAN.md"
-        }
-      ]
-    },
-    {
-      "sha256": "fa826cee650313133dd589cc26c56d44cb21b3af40669fd8fe31864006cb4dfc",
-      "size": 4139,
-      "title": "Symphony 적용 검토 및 프로젝트 워크플로우 제안",
-      "canonical_source": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs/44_SYMPHONY_ADOPTION.md",
-      "copied_to": "sources/dani__insurance-rag-chatbot__docs/44_SYMPHONY_ADOPTION.md",
-      "occurrence_count": 25,
-      "occurrences": [
-        {
-          "docs_dir": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/eundeo/insurance-rag-chatbot-latest/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/eundeo/insurance-rag-chatbot/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-approval-integrity-20260718/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-chrome-uat-mri-p0-fixback-20260720/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-cold-test/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-conversational-evidence-resolution-20260719/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-fifth-policy-authority/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-final-answer-grounding-20260721/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-general-ontology-v1.2.0-preparation/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-graph-viz-20260715/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-hair-fixback-20260716/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-launcher-active-model/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-release-20260716/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-safe-baseline-immutable-graph-20260720/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-source-citation-click-20260720/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-uat-mri-generation-regression-20260720/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-uat-mri-limit-20260720/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-uat-mri-operational-fixback-20260720/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-uat-mri-operational-retrieval-fixback-20260720/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-chatbot-uat-mri-runtime-grounding-20260720/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-grounded-attribute-composite-20260721/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-qwen-always-v120b-20260721/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        },
-        {
-          "docs_dir": "/srv/shared/workspaces/muldae/insurance-rag-qwen-direct-comparison-demo/docs",
-          "path": "44_SYMPHONY_ADOPTION.md"
-        }
-      ]
-    },
-    {
-      "sha256": "c9213d219a32e4b01c9c85994e29b9bd6feeb0ac3e1f8b40d040d7c6127ddf93",
-      "size": 7760,
-      "title": "보험 약관 챗봇 아키텍처 설명서 (Mermaid 포함)",
-      "canonical_source": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs/archive/mac-local-202607/architecture/ARCHITECTURE_MERMAID_EXPLANATION.md",
-      "copied_to": "sources/dani__insurance-rag-chatbot__docs/archive/mac-local-202607/architecture/ARCHITECTURE_MERMAID_EXPLANATION.md",
-      "occurrence_count": 1,
-      "occurrences": [
-        {
-          "docs_dir": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs",
-          "path": "archive/mac-local-202607/architecture/ARCHITECTURE_MERMAID_EXPLANATION.md"
-        }
-      ]
-    },
-    {
-      "sha256": "bc5529e3bdfc4d3a468b9a488d374c38028057aa84addb20ebc76637571bf7e0",
-      "size": 15907,
-      "title": "발표용 아키텍처 명세 - Streamlit + Local LLM 기준",
-      "canonical_source": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs/archive/mac-local-202607/architecture/ARCHITECTURE_STREAMLIT_LOCAL_LLM_BEFORE_CLAIM_GRAPH.md",
-      "copied_to": "sources/dani__insurance-rag-chatbot__docs/archive/mac-local-202607/architecture/ARCHITECTURE_STREAMLIT_LOCAL_LLM_BEFORE_CLAIM_GRAPH.md",
-      "occurrence_count": 1,
-      "occurrences": [
-        {
-          "docs_dir": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs",
-          "path": "archive/mac-local-202607/architecture/ARCHITECTURE_STREAMLIT_LOCAL_LLM_BEFORE_CLAIM_GRAPH.md"
-        }
-      ]
-    },
-    {
-      "sha256": "96819abb86c6f5eddf2aaa0b76dbe8f950595c0985fca88ee8542b965df536af",
-      "size": 8326,
-      "title": "최종 발표용 아키텍처 - Streamlit + Local LLM RAG",
-      "canonical_source": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs/archive/mac-local-202607/architecture/FINAL_ARCHITECTURE_STREAMLIT_LOCAL_LLM.md",
-      "copied_to": "sources/dani__insurance-rag-chatbot__docs/archive/mac-local-202607/architecture/FINAL_ARCHITECTURE_STREAMLIT_LOCAL_LLM.md",
-      "occurrence_count": 1,
-      "occurrences": [
-        {
-          "docs_dir": "/srv/shared/workspaces/dani/insurance-rag-chatbot/docs",
-          "path": "archive/mac-local-202607/architecture/FINAL_ARCHITECTURE_STREAMLIT_LOCAL_LLM.md"
         }
       ]
     },
@@ -694,20 +432,6 @@
       ]
     },
     {
-      "sha256": "97c26a83e22b85ded44ca1f3bd559384789d7daec407d07c5e150c3b9d0aad70",
-      "size": 21077,
-      "title": "모바일 OCR 문서 스캔 앱 - 개발 가이드라인",
-      "canonical_source": "/srv/shared/workspaces/eundeo/insurance-rag-chatbot/docs/MOBILE_OCR_DEVELOPMENT_GUIDE.md",
-      "copied_to": "sources/eundeo__insurance-rag-chatbot__docs/MOBILE_OCR_DEVELOPMENT_GUIDE.md",
-      "occurrence_count": 1,
-      "occurrences": [
-        {
-          "docs_dir": "/srv/shared/workspaces/eundeo/insurance-rag-chatbot/docs",
-          "path": "MOBILE_OCR_DEVELOPMENT_GUIDE.md"
-        }
-      ]
-    },
-    {
       "sha256": "3090c8240f6d66ef43e3462361affb4b48dc4258da49fd9a52adf9b50a8bb027",
       "size": 19194,
       "title": "OCR 이중 버전 통합 전략 (Original + V2_Manual)",
@@ -764,62 +488,6 @@
         {
           "docs_dir": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs",
           "path": "264_FSS_REALTIME_CASEBOT_FEASIBILITY.md"
-        }
-      ]
-    },
-    {
-      "sha256": "831b8d94e7e08e625f343ac8f14c1c1d6aae6cca77e8076e81b6bdd9d739c6db",
-      "size": 8096,
-      "title": "**1\\. 핵심 메시지**",
-      "canonical_source": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs/2차 발표 준비.md",
-      "copied_to": "sources/ihyun__insurance-rag-chatbot__docs/2차 발표 준비.md",
-      "occurrence_count": 1,
-      "occurrences": [
-        {
-          "docs_dir": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs",
-          "path": "2차 발표 준비.md"
-        }
-      ]
-    },
-    {
-      "sha256": "ec1ae16dcb95267e465dcb00c5749361ed3f8ea9bcd6fb044f523382eac24f02",
-      "size": 22197,
-      "title": "신한EZ손해보험 보험 RAG 챗봇",
-      "canonical_source": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs/2차_발표_준비_상세본.md",
-      "copied_to": "sources/ihyun__insurance-rag-chatbot__docs/2차_발표_준비_상세본.md",
-      "occurrence_count": 1,
-      "occurrences": [
-        {
-          "docs_dir": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs",
-          "path": "2차_발표_준비_상세본.md"
-        }
-      ]
-    },
-    {
-      "sha256": "1fbbb497498a5b0d617884503284c738bd7d293ee24eb933c337d91e32f1d0b4",
-      "size": 9945,
-      "title": "Qwen 80B Claim Exclusion Question Comparison",
-      "canonical_source": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs/qwen80b_claim_exclusion_question_comparison.md",
-      "copied_to": "sources/ihyun__insurance-rag-chatbot__docs/qwen80b_claim_exclusion_question_comparison.md",
-      "occurrence_count": 1,
-      "occurrences": [
-        {
-          "docs_dir": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs",
-          "path": "qwen80b_claim_exclusion_question_comparison.md"
-        }
-      ]
-    },
-    {
-      "sha256": "38c8c02ba33aa5d4e7a835fd970df9cb4ae86bac65c01c29273be32220b053e9",
-      "size": 2412723,
-      "title": "",
-      "canonical_source": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs/신한ez손해보험_중간발표.pdf",
-      "copied_to": "sources/ihyun__insurance-rag-chatbot__docs/신한ez손해보험_중간발표.pdf",
-      "occurrence_count": 1,
-      "occurrences": [
-        {
-          "docs_dir": "/srv/shared/workspaces/ihyun/insurance-rag-chatbot/docs",
-          "path": "신한ez손해보험_중간발표.pdf"
         }
       ]
     },
