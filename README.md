@@ -148,30 +148,34 @@ flowchart LR
 
 ## 시스템 아키텍처
 
-```text
-┌──────────────────────────────────────────────────────────────┐
-│ FastAPI + Static SPA                                         │
-│ 로그인 · 대화 · 보험금 계산 · 관리자 · GraphDB 탐색          │
-└───────────────────────────┬──────────────────────────────────┘
-                            │
-        ┌───────────────────┼────────────────────┐
-        │                   │                    │
-        ▼                   ▼                    ▼
-  세션·질의 분류       Hybrid RAG          보험금 계산 API
-  후속 맥락 해석       BM25 + Chroma       코드 정규화
-                       RRF + reranker       RuleRegistry
-        │                   │               결정적 계산 엔진
-        │                   ▼                    │
-        │             GraphDB·온톨로지             │
-        │             조항·표준코드 근거             │
-        │                   │                    │
-        └───────────────────┼────────────────────┘
-                            ▼
-                 SGLang OpenAI-compatible API
-                 Qwen3 Next 80B Instruct FP8
-                            │
-                            ▼
-                 최종 답변 · 출처 · 검토 사유
+```mermaid
+flowchart TB
+    UI["FastAPI + 정적 SPA<br/>로그인 · 대화 · 계산 · 관리자 · GraphDB 탐색"]
+    API["공통 API 계층<br/>인증 · 세션 · 스트리밍"]
+    UI --> API
+
+    API --> CHAT["일반 질의 경로<br/>세션 맥락 · 질의 분류"]
+    API --> CLAIM["보험금 계산 경로<br/>항목 · 금액 · 계약 조건"]
+    API --> ADMIN["관리자 지식 운영<br/>후보 검토 · 승인 · 감사"]
+
+    CHAT --> RAG["Hybrid RAG<br/>BM25 · Chroma · RRF · reranker"]
+    RAG --> EVIDENCE["구조화 근거<br/>GraphDB · 온톨로지 · 조항 · 표준코드"]
+    EVIDENCE --> LLM["SGLang · Qwen3 Next 80B"]
+    LLM --> ANSWER["최종 답변 · 출처 · 확인 질문"]
+
+    CLAIM --> NORMALIZE["표준코드 정규화"]
+    STANDARD["표준코드 DB"] --> NORMALIZE
+    NORMALIZE --> RULES["RuleRegistry<br/>승인된 활성 룰"]
+    RULES --> CALC["결정적 계산 엔진"]
+    CALC --> RESULT["예상 지급액 · 공제 · 보류 사유"]
+
+    ADMIN --> CANDIDATE["온톨로지 · 룰 후보"]
+    CANDIDATE --> APPROVAL{"실무자 승인"}
+    APPROVAL -- "개념·관계 승인" --> KNOWLEDGE["활성 온톨로지 · GraphDB"]
+    APPROVAL -- "계산 규칙 승인" --> RULES
+    APPROVAL -- "보류·거절" --> HISTORY["후보 이력"]
+    ADMIN -- "읽기 전용 탐색" --> KNOWLEDGE
+    EVIDENCE -. "활성 지식 조회" .-> KNOWLEDGE
 ```
 
 ### 주요 계층
