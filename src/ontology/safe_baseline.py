@@ -348,9 +348,15 @@ def _finalize_candidate_graph_database(path: Path) -> None:
     try:
         with sqlite3.connect(f"file:{path.resolve()}?mode=rw", uri=True) as connection:
             checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            journal_mode = connection.execute("PRAGMA journal_mode=DELETE").fetchone()
     except sqlite3.Error as exc:
         raise SafeBaselineError("prepared graph database could not be checkpointed") from exc
-    if checkpoint is None or int(checkpoint[0]) != 0:
+    if (
+        checkpoint is None
+        or int(checkpoint[0]) != 0
+        or journal_mode is None
+        or str(journal_mode[0]).lower() != "delete"
+    ):
         raise SafeBaselineError("prepared graph database could not be checkpointed")
     for suffix in _GRAPH_DATABASE_SIDECARS:
         sidecar = Path(f"{path}{suffix}")

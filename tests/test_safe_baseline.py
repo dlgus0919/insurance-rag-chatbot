@@ -338,6 +338,25 @@ def test_prepare_finalizes_candidate_graph_without_sidecars_and_uses_immutable_r
     assert release.graph_db_path.stat().st_mode & 0o777 == 0o640
 
 
+def test_prepared_graph_stays_sidecar_free_after_standard_readonly_open(
+    tmp_path: Path,
+) -> None:
+    release, _runtime_root, _before = _prepare_release_with_references(tmp_path)
+    wal_path = release.graph_db_path.with_name(f"{release.graph_db_path.name}-wal")
+    shm_path = release.graph_db_path.with_name(f"{release.graph_db_path.name}-shm")
+
+    with sqlite3.connect(
+        f"file:{release.graph_db_path.resolve()}?mode=ro",
+        uri=True,
+    ) as connection:
+        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert connection.execute("SELECT COUNT(*) FROM graph_nodes").fetchone()[0] == 3
+
+    assert not wal_path.exists()
+    assert not shm_path.exists()
+    assert safe_baseline.verify_safe_baseline_release(release).integrity_report.state == "valid"
+
+
 def test_prepare_normalizes_outer_release_root_artifact_permissions(tmp_path: Path) -> None:
     reviewed_base = _manifest(include_untrusted=False)
     lock = BaseManifestLock.from_manifest(
