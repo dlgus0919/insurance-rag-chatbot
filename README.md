@@ -342,7 +342,7 @@ insurance-rag-chatbot/
 ├── scripts/                 인덱싱, 평가, 사용자·지식 관리 도구
 ├── ops/                     DGX 기동·상태 점검·모델 전환 래퍼
 ├── tests/                   단위, API, RAG, Graph, LLM, DGX 회귀 테스트
-├── docs/                    설계, 구현, 검증과 운영 문서
+├── docs/                    공개 개발 원칙과 프로젝트 개발 일지
 ├── data/                    로컬 데이터·인덱스 경로(대용량 운영본 별도 관리)
 └── reports/                 평가와 실험 산출물
 ```
@@ -367,31 +367,13 @@ insurance-rag-chatbot/
 - 신규 DGX를 이용한 최종 오프라인 설치 인수시험은 별도 실기 환경이 있어야 수행할 수 있습니다.
 - 계산 결과는 예상 검토값이며 계약별 최종 지급 결론이 아닙니다.
 
-## 주요 문서
+## 공개 문서
 
-수백 개의 개발 기록 중 현재 구조와 운영 원칙을 이해하는 데 필요한 문서를 선별했습니다.
-
-### 프로젝트 원칙과 구조
+공개 저장소에는 프로젝트 원칙과 전체 개발 과정을 설명하는 다음 두 문서만 유지합니다.
+세부 설계, 구현, 검증과 운영 기록은 승인된 내부 보관소에서 관리합니다.
 
 - [000. 프로젝트 개발 원칙](docs/000_PROJECT_DEVELOPMENT_GUARDRAILS.md)
-- [현재 앱 아키텍처 보고서](docs/154_PROJECT_ARCHITECTURE_CURRENT_STATUS_REPORT.md)
-- [프로젝트 DB 빌드 설명](docs/204_PROJECT_DB_BUILD_EXPLANATION.md)
-- [전체 DB 구조 다이어그램](docs/205_FULL_DB_STRUCTURE_DIAGRAMS.md)
-
-### 사용자·운영 기능
-
-- [실무자 전체 운영 오류 대응 매뉴얼](docs/266_PRACTITIONER_OPERATIONS_TROUBLESHOOTING_MANUAL.md)
-- [관리자 GraphDB 3D 시각화 구현 보고서](docs/268_ADMIN_GRAPHDB_3D_VISUALIZATION_REPORT.md)
-- [DGX 데모 시나리오 가이드](docs/264_DGX_DEMO_SCENARIO_GUIDE.md)
-
-### 최신 안정화와 지식 운영
-
-- [일반 질의 온톨로지 후보 준비 보고서](docs/280_V1_2_0_GENERAL_QUERY_ONTOLOGY_CANDIDATE_PREPARATION_REPORT.md)
-- [온톨로지 재빌드 구현 보고서](docs/281_V1_2_0_ONTOLOGY_REBUILD_IMPLEMENTATION_REPORT.md)
-- [v1.2.0.b Qwen 우선 응답 핫픽스](docs/282_V1_2_0_B_QWEN_ALWAYS_HOTFIX_REPORT.md)
-- [v1.2.0.b GraphDB 읽기 핫픽스](docs/283_V1_2_0_B_GRAPH_READ_HOTFIX_REPORT.md)
-
-일부 과거 문서는 Streamlit, 외부 LLM 또는 이전 모델 운영을 기준으로 작성되었습니다. 현재 구현을 판단할 때는 코드, `000` 원칙과 최신 번호의 검증 보고서를 우선합니다.
+- [프로젝트 개발 일지 및 회고](docs/INSURANCE_PROJECT_RETROSPECTIVE.md)
 
 ## 보안과 데이터 원칙
 

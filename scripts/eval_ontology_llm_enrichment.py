@@ -254,7 +254,7 @@ def write_markdown(rows: list[dict[str, Any]], path: Path, *, dry_run: bool) -> 
             "",
             "## Decision Matrix Seed",
             "",
-            "이 표는 실제 LLM 비교 결과가 누적된 뒤 `docs/221`의 통합 decision matrix에 병합하기 위한 seed입니다.",
+            "이 표는 실제 LLM 비교 결과가 누적된 뒤 승인된 내부 decision matrix에 병합하기 위한 seed입니다.",
             "",
             "| model | ontology_role | delete_blocker | note |",
             "|---|---|---|---|",

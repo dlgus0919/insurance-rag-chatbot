@@ -11,12 +11,7 @@ from src.ontology.registry import OntologyRegistry
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "data" / "ontology" / "concepts.json"
 LOCK_PATH = ROOT / "data" / "ontology" / "policies" / "base_manifest.lock.json"
-AUDIT_PATH = (
-    ROOT
-    / "docs"
-    / "review_artifacts"
-    / "2026-07-19-v1.2.0-practitioner-decision-audit.json"
-)
+REVIEW_RECORD_ID = "internal-review:ontology:v1.2.0:2026-07-19-2336"
 
 APPROVED_IDS = {
     "evidence.claim_document_requirements",
@@ -94,9 +89,11 @@ def _hash(path: Path) -> str:
 
 def test_v120_practitioner_projection_contains_only_approved_general_concepts():
     manifest = _load_json(MANIFEST_PATH)
+    lock = _load_json(LOCK_PATH)
     concepts = {row["concept_id"]: row for row in manifest["concepts"]}
 
     assert manifest["version"] == "v1.2.0"
+    assert lock["review_record_id"] == REVIEW_RECORD_ID
     assert len(concepts) == 55
     assert sum(len(aliases) for aliases in APPROVED_ACTIVE_ALIASES.values()) == 17
     assert APPROVED_IDS <= concepts.keys()
@@ -160,29 +157,6 @@ def test_v120_default_runtime_registry_excludes_unapproved_hair_payloads():
     assert plan.conditions == []
     assert plan.clarification_questions == []
     assert plan.required_evidence == []
-
-
-def test_v120_practitioner_decision_audit_preserves_rejections_without_runtime_payload():
-    audit = _load_json(AUDIT_PATH)
-    decisions = {row["concept_id"]: row for row in audit["decisions"]}
-    decisions_by_candidate = {
-        row["candidate_id"]: row
-        for row in audit["decisions"]
-        if row.get("candidate_id")
-    }
-
-    assert audit["status"] == "implemented_in_isolated_candidate"
-    assert {row["concept_id"] for row in audit["runtime_projection"]} == APPROVED_IDS
-    assert decisions["cond.policy_source_authority"]["decision"] == "rejected"
-    for concept_id in REJECTED_IDS - {
-        "cond.policy_source_authority",
-        *LEGACY_HELD_CANDIDATE_IDS,
-    }:
-        assert decisions[concept_id]["decision"] == "rejected"
-        assert decisions[concept_id]["runtime_included"] is False
-    for candidate_id in LEGACY_HELD_CANDIDATE_IDS:
-        assert decisions_by_candidate[candidate_id]["decision"] == "rejected"
-        assert decisions_by_candidate[candidate_id]["runtime_included"] is False
 
 
 def test_v120_keeps_active_claim_calculation_boundary_frozen():

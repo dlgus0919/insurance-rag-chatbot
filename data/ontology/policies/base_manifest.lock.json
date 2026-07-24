@@ -57,7 +57,7 @@
     "evidence.test_result": "c7cd511e1af81a1d0469fd1d32ed981c013f54f3cf667039b21706c493117334"
   },
   "manifest_content_hash": "ffad858ea1339bf5196a5445395aed5003a6344990f7ae32c0ef3a039e33861b",
-  "review_record_id": "docs/reviews/2026-07-19-2336-v1.2.0-ontology-practitioner-decisions.md",
+  "review_record_id": "internal-review:ontology:v1.2.0:2026-07-19-2336",
   "schema_version": 1,
   "source_commit": "3cd661778059ca0901c32c3147b789de81518c0f"
 }

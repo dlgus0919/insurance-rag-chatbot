@@ -20,7 +20,6 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_SOURCE = ROOT / "docs/266_PRACTITIONER_OPERATIONS_TROUBLESHOOTING_MANUAL.md"
 DEFAULT_OUTPUT = ROOT / "output/pdf/practitioner_operations_troubleshooting_manual.pdf"
 FONT_CANDIDATES = (
     ROOT / "assets/fonts/NotoSansKR-Regular.ttf",
@@ -236,7 +235,7 @@ def build_pdf(source: str | Path, output: str | Path, font_path: str | Path | No
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate the practitioner troubleshooting manual PDF.")
-    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--font", type=Path)
     args = parser.parse_args()
